@@ -6,7 +6,7 @@
     "description": "Live Channels lets administrators build looping virtual TV channels from genres and official ratings or from a hand-picked list of items. Each channel is exposed through an M3U tuner at /livechannels/tuner.m3u8 and an XMLTV guide at /livechannels/guide.xmltv, which Jellyfin's own Live TV can consume as an M3U Tuner and XMLTV guide source.",
     "imageUrl": "https://raw.githubusercontent.com/JPKribs/jellyfin-plugin-livechannels/master/Jellyfin.Plugin.LiveChannels/Assets/Logo.png",
     "owner": "JPKribs",
-    "category": "Live TV",
+    "category": "LiveTV",
     "versions": [
       {
         "version": "10.11.1.0",

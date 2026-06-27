@@ -72,6 +72,25 @@
                                     </div>
                                     <div class="fieldDescription">Upload a custom square logo for this channel.</div>
                                 </div>
+                                <div class="selectContainer">
+                                    <label class="selectLabel" for="logoStyle">Generated logo style</label>
+                                    <select is="emby-select" id="logoStyle" class="jpk-selector-dropdown">
+                                        <option value="Number">Number</option>
+                                        <option value="Symbol">Symbol</option>
+                                    </select>
+                                    <div class="fieldDescription">Used when no image is uploaded.</div>
+                                </div>
+                                <div class="inputContainer" id="logoSymbolRow">
+                                    <label for="logoSymbol">Symbol</label>
+                                    <input is="emby-input" type="text" id="logoSymbol" autocomplete="off" placeholder="e.g. arrow_back" />
+                                    <div class="fieldDescription">Any Material Icons name, drawn in the centre. Browse names at fonts.google.com/icons.</div>
+                                </div>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input type="checkbox" is="emby-checkbox" id="logoShowName" />
+                                        <span class="checkboxLabel">Show channel name on the generated logo</span>
+                                    </label>
+                                </div>
                             </div>
                         </div>
 
@@ -100,11 +119,6 @@
                             </button>
                             <div id="sectionSettings" class="jpk-collapsible-content collapsed">
                                 <div class="selectContainer">
-                                    <label class="selectLabel">Guide categories</label>
-                                    <div id="channelCategoriesMount"></div>
-                                    <div class="fieldDescription">Tag this channel so it appears under those filters in the Live TV guide. None by default.</div>
-                                </div>
-                                <div class="selectContainer">
                                     <label class="selectLabel" for="subtitleBurnIn">Subtitle burn in</label>
                                     <select is="emby-select" id="subtitleBurnIn" class="jpk-selector-dropdown">
                                         <option value="Never">Never</option>
@@ -114,9 +128,26 @@
                                     <div class="fieldDescription">Burns a subtitle into the video for everyone. <strong>Always</strong> falls back to the default track when none is forced.</div>
                                 </div>
                                 <div class="selectContainer">
+                                    <label class="selectLabel" for="minRating">Minimum age rating</label>
+                                    <select id="minRating" class="jpk-selector-dropdown"></select>
+                                    <div class="fieldDescription">Content at or above this rating. Use this with a maximum to make an adults-only or a single-band channel.</div>
+                                </div>
+                                <div class="selectContainer">
                                     <label class="selectLabel" for="maxRating">Maximum age rating</label>
                                     <select id="maxRating" class="jpk-selector-dropdown"></select>
-                                    <div class="fieldDescription">Content at or below this rating. Unrated is always allowed.</div>
+                                    <div class="fieldDescription">Content at or below this rating.</div>
+                                </div>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input type="checkbox" is="emby-checkbox" id="includeUnrated" />
+                                        <span class="checkboxLabel">Include unrated</span>
+                                    </label>
+                                    <div class="fieldDescription">On by default. When off, items with no rating are dropped. When on, unrated content is always allowed regardless of the bounds above.</div>
+                                </div>
+                                <div class="selectContainer">
+                                    <label class="selectLabel" for="kidsRating">Kids rating</label>
+                                    <select id="kidsRating" class="jpk-selector-dropdown"></select>
+                                    <div class="fieldDescription">Programs that carry a rating at or below this are flagged as Kids in the guide. Movies are flagged as movies automatically.</div>
                                 </div>
                                 <div class="inputContainer">
                                     <label for="episodesPerBlock">Episodes per block</label>

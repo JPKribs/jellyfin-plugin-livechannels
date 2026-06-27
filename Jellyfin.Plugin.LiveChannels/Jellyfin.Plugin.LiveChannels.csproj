@@ -35,4 +35,10 @@
     <EmbeddedResource Include="Configuration\livechannels_settings.js" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Material Icons font + name-to-codepoint map, used to render symbol channel logos -->
+    <EmbeddedResource Include="Assets\MaterialIcons-Regular.ttf" />
+    <EmbeddedResource Include="Assets\MaterialIcons-Regular.codepoints" />
+  </ItemGroup>
+
 </Project>

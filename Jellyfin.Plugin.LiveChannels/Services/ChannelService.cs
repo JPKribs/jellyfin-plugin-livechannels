@@ -23,7 +23,7 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// </summary>
 public class ChannelService
 {
-    private static readonly BaseItemKind[] PlayableKinds = { BaseItemKind.Movie, BaseItemKind.Episode };
+    private static readonly BaseItemKind[] PlayableKinds = { BaseItemKind.Movie, BaseItemKind.Episode, BaseItemKind.MusicVideo };
 
     private readonly ILibraryManager _libraryManager;
     private readonly IMediaSourceManager _mediaSourceManager;
@@ -255,7 +255,11 @@ public class ChannelService
     {
         ArgumentNullException.ThrowIfNull(channel);
 
-        var maxRating = ResolveMaxRating(channel.MaxOfficialRating);
+        var ratings = new RatingFilter(
+            ResolveRatingScore(channel.MinOfficialRating),
+            ResolveRatingScore(channel.MaxOfficialRating),
+            channel.IncludeUnrated);
+        var kidsScore = ResolveRatingScore(channel.KidsRatingThreshold);
         var kinds = PlayableKinds;
 
         var byId = new Dictionary<Guid, BaseItem>();
@@ -266,7 +270,7 @@ public class ChannelService
                 continue;
             }
 
-            foreach (var item in ResolveSource(source, libraryId, maxRating, kinds))
+            foreach (var item in ResolveSource(source, libraryId, ratings, kinds))
             {
                 byId[item.Id] = item;
             }
@@ -280,7 +284,7 @@ public class ChannelService
                 continue;
             }
 
-            var entry = ToEntry(item);
+            var entry = ToEntry(item, kidsScore);
             if (entry is not null)
             {
                 entries.Add(entry);
@@ -299,20 +303,20 @@ public class ChannelService
 
     // Resolves one library source to its matching items (before specials/ordering are applied). The
     // selection mode picks exactly one narrowing: all content, a genre filter, a whitelist, or a blacklist.
-    private IEnumerable<BaseItem> ResolveSource(LibrarySource source, Guid libraryId, int? maxRating, BaseItemKind[] kinds)
+    private IEnumerable<BaseItem> ResolveSource(LibrarySource source, Guid libraryId, RatingFilter ratings, BaseItemKind[] kinds)
         => source.Selection switch
         {
-            SelectionMode.Genre => GenreItems(libraryId, source, maxRating, kinds),
-            SelectionMode.Whitelist => WhitelistItems(source, maxRating, kinds),
-            SelectionMode.Blacklist => BlacklistItems(libraryId, source, maxRating, kinds),
-            _ => QueryLibrary(libraryId, Array.Empty<string>(), maxRating, kinds)
+            SelectionMode.Genre => GenreItems(libraryId, source, ratings, kinds),
+            SelectionMode.Whitelist => WhitelistItems(source, ratings, kinds),
+            SelectionMode.Blacklist => BlacklistItems(libraryId, source, ratings, kinds),
+            _ => QueryLibrary(libraryId, Array.Empty<string>(), ratings, kinds)
         };
 
     // The library filtered to the configured genres. With no genres this is the whole library.
-    private IEnumerable<BaseItem> GenreItems(Guid libraryId, LibrarySource source, int? maxRating, BaseItemKind[] kinds)
+    private IEnumerable<BaseItem> GenreItems(Guid libraryId, LibrarySource source, RatingFilter ratings, BaseItemKind[] kinds)
     {
         var genres = source.Genres.Where(g => !string.IsNullOrWhiteSpace(g)).ToArray();
-        return MatchGenres(QueryLibrary(libraryId, genres, maxRating, kinds), genres, source.MatchAllGenres);
+        return MatchGenres(QueryLibrary(libraryId, genres, ratings, kinds), genres, source.MatchAllGenres);
     }
 
     // Narrows items to those matching the genres: any genre (OR) by default, or every genre (AND) when
@@ -331,7 +335,7 @@ public class ChannelService
 
     // The explicitly chosen shows and movies (series expand to their episodes), kept to playable kinds
     // within the rating cap.
-    private IEnumerable<BaseItem> WhitelistItems(LibrarySource source, int? maxRating, BaseItemKind[] kinds)
+    private IEnumerable<BaseItem> WhitelistItems(LibrarySource source, RatingFilter ratings, BaseItemKind[] kinds)
     {
         var result = new List<BaseItem>();
         foreach (var id in new HashSet<Guid>(source.ItemIds))
@@ -352,23 +356,20 @@ public class ChannelService
             }
         }
 
-        return result.Where(i => KindAllowed(i, kinds) && RatingAllowed(i, maxRating));
+        return result.Where(i => KindAllowed(i, kinds) && ratings.Allows(i));
     }
 
     // Everything in the library except the chosen shows/movies and their episodes.
-    private IEnumerable<BaseItem> BlacklistItems(Guid libraryId, LibrarySource source, int? maxRating, BaseItemKind[] kinds)
+    private IEnumerable<BaseItem> BlacklistItems(Guid libraryId, LibrarySource source, RatingFilter ratings, BaseItemKind[] kinds)
     {
         var chosen = new HashSet<Guid>(source.ItemIds);
-        return QueryLibrary(libraryId, Array.Empty<string>(), maxRating, kinds).Where(i =>
+        return QueryLibrary(libraryId, Array.Empty<string>(), ratings, kinds).Where(i =>
             !chosen.Contains(i.Id) &&
             !(i is Episode ep && ep.SeriesId != Guid.Empty && chosen.Contains(ep.SeriesId)));
     }
 
     private static bool KindAllowed(BaseItem item, BaseItemKind[] kinds)
-    {
-        var kind = item is Episode ? BaseItemKind.Episode : BaseItemKind.Movie;
-        return Array.IndexOf(kinds, kind) >= 0;
-    }
+        => Array.IndexOf(kinds, item.GetBaseItemKind()) >= 0;
 
     private IReadOnlyList<BaseItem> EpisodesOf(Guid seriesId)
         => _libraryManager.GetItemList(new InternalItemsQuery
@@ -379,7 +380,7 @@ public class ChannelService
             IsVirtualItem = false
         });
 
-    private IReadOnlyList<BaseItem> QueryLibrary(Guid libraryId, string[] genres, int? maxRating, BaseItemKind[] kinds)
+    private List<BaseItem> QueryLibrary(Guid libraryId, string[] genres, RatingFilter ratings, BaseItemKind[] kinds)
     {
         var items = _libraryManager.GetItemList(new InternalItemsQuery
         {
@@ -390,11 +391,11 @@ public class ChannelService
             IsVirtualItem = false
         });
 
-        return maxRating is null ? items : items.Where(i => RatingAllowed(i, maxRating)).ToList();
+        return items.Where(ratings.Allows).ToList();
     }
 
-    // The configured cap as a numeric rating score, or null when there is no cap.
-    private int? ResolveMaxRating(string name)
+    // A rating name as a numeric score, or null when the name is empty or unknown.
+    private int? ResolveRatingScore(string name)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -412,20 +413,28 @@ public class ChannelService
         }
     }
 
-    // An item passes when there is no cap, its rating is unknown (unrated content is allowed), or its rating
-    // ranks at or below the cap.
-    private static bool RatingAllowed(BaseItem item, int? maxRating)
+    // The channel's rating bounds. An item passes when it is rated within [Min, Max], or when it is unrated and
+    // unrated content is included. An absent bound is open on that side.
+    private readonly record struct RatingFilter(int? Min, int? Max, bool IncludeUnrated)
     {
-        if (maxRating is null)
+        public bool Allows(BaseItem item)
         {
-            return true;
-        }
+            var value = item.InheritedParentalRatingValue;
+            if (value is null)
+            {
+                return IncludeUnrated;
+            }
 
-        var value = item.InheritedParentalRatingValue;
-        return value is null || value.Value <= maxRating.Value;
+            if (Min is not null && value.Value < Min.Value)
+            {
+                return false;
+            }
+
+            return Max is null || value.Value <= Max.Value;
+        }
     }
 
-    private static ProgramEntry? ToEntry(BaseItem? item)
+    private static ProgramEntry? ToEntry(BaseItem? item, int? kidsScore)
     {
         if (item is null)
         {
@@ -444,6 +453,11 @@ public class ChannelService
         var title = !string.IsNullOrWhiteSpace(seriesName) ? seriesName + " - " + rawName : rawName;
         var seriesId = asEpisode is not null && asEpisode.SeriesId != Guid.Empty ? asEpisode.SeriesId : (Guid?)null;
 
+        // Kids when the item carries a rating that ranks at or below the channel's threshold. Movie straight
+        // from the item kind, so a movie library tags its programs as movies in the guide.
+        var ratingValue = item.InheritedParentalRatingValue;
+        var isKids = kidsScore is not null && ratingValue is not null && ratingValue.Value <= kidsScore.Value;
+
         return new ProgramEntry(item.Id, title, item.Overview, ticks, item.Path)
         {
             Year = item.ProductionYear,
@@ -451,6 +465,8 @@ public class ChannelService
             Genres = item.Genres ?? Array.Empty<string>(),
             SeasonNumber = asEpisode?.ParentIndexNumber,
             EpisodeNumber = asEpisode?.IndexNumber,
+            IsMovie = item.GetBaseItemKind() == BaseItemKind.Movie,
+            IsKids = isKids,
             SeriesId = seriesId,
             SeriesName = seriesName,
             RawName = rawName,

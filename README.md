@@ -14,21 +14,24 @@ A channel pulls from one or more **library cards**. Add a card per library and t
 * **Genre** offers a genre list with a **match all** toggle for AND (for example Comedy and Animation) instead of the default OR (any).
 * **Whitelist** and **Blacklist** are explicit include or exclude lists of shows and movies you pick from the library. Picking a show pulls in all of its episodes.
 
-A channel always includes whatever its libraries and filters yield, both movies and episodes. Only items with a real media file and a known runtime can be scheduled. Anything else is skipped.
+A channel always includes whatever its libraries and filters yield: movies, episodes, and music videos. Only items with a real media file and a known runtime can be scheduled. Anything else is skipped.
 
 ### Channel settings
 
 Per channel you can also set:
 
-* **Logo** uploads an image cropped to a square. With no upload the plugin generates a 1080×1080 square from the channel name, number, and title.
-* **Maximum age rating** sets a ceiling. Unrated content is always allowed.
+* **Logo** uploads an image cropped to a square. With no upload the plugin generates a square in a colour from the channel name, showing either the channel number or a Material Icons symbol you name (such as `movie`), with the channel name along the bottom when you want it.
+* **Minimum and maximum age rating** keep content within a rating band. Set both to make an adults only or a single band channel.
+* **Include unrated** is on by default. Turn it off to drop items that carry no rating.
+* **Kids rating** flags programs rated at or below it as Kids in the guide. Movies are flagged as movies automatically.
 * **Episodes per block** plays a set number of consecutive episodes of a series before moving on.
 * **Keep multipart episodes together** never splits a two part episode across a block boundary.
 * **Include specials** opts season 0 in. Off by default.
 * **Shuffle** is on by default and is fixed and repeatable, so the guide and the live stream always agree. Disable it to play everything alphabetically.
 * **Episode order** plays a series in air order or at random.
 * **Subtitle burn in** bakes a subtitle track into the video for everyone. Choose **Never**, **Forced only**, or **Always**.
-* **Guide categories** tag the channel as any of **Movies**, **Sports**, **Kids**, or **News** so it appears under those filters in the Live TV guide. None by default.
+
+Programs are tagged in the guide automatically: movies as movies, and anything rated at or below the channel's **Kids rating** as Kids, so Live TV's category filters surface the channel.
 
 ### Output
 

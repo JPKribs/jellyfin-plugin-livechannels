@@ -1,0 +1,3 @@
+Material Icons font (MaterialIcons-Regular.ttf) and its codepoints are from
+Google's material-design-icons project, licensed under the Apache License 2.0.
+https://github.com/google/material-design-icons

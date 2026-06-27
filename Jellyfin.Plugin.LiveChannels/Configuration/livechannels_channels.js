@@ -183,7 +183,7 @@ export default function (view) {
 
     // A 1:1 pastel square (number centred, title on one or two bottom rows), drawn client-side so the box
     // updates live as the name/number change. Mirrors the server-generated logo.
-    function defaultLogoDataUrl(number, name) {
+    function defaultLogoDataUrl(number, name, style, symbol, showName) {
         var hue = logoHue(name);
         var size = 256;
         var fam = ' -apple-system, Segoe UI, Roboto, sans-serif';
@@ -195,19 +195,27 @@ export default function (view) {
         ctx.fillRect(0, 0, size, size);
         ctx.fillStyle = 'hsl(' + hue + ', 50%, 32%)';
         ctx.textAlign = 'center';
-
         ctx.textBaseline = 'middle';
-        ctx.font = '700 ' + Math.round(size * 0.4) + 'px' + fam;
-        ctx.fillText(String(number || 0), size / 2, size / 2);
 
-        var lines = fitTitleLines(name);
-        if (lines.length) {
-            ctx.textBaseline = 'alphabetic';
-            ctx.font = '600 ' + Math.round(size / 13) + 'px' + fam;
-            var bottom = size / 11;
-            var lineH = size * 7 / 90;
-            for (var k = 0; k < lines.length; k++) {
-                ctx.fillText(lines[k], size / 2, size - (bottom + (lines.length - 1 - k) * lineH));
+        if (style === 'Symbol' && symbol) {
+            // The Material Icons font (loaded by Jellyfin) renders the ligature name as its glyph.
+            ctx.font = Math.round(size * 0.4) + 'px "Material Icons"';
+            ctx.fillText(symbol, size / 2, size / 2);
+        } else {
+            ctx.font = '700 ' + Math.round(size * 0.4) + 'px' + fam;
+            ctx.fillText(String(number || 0), size / 2, size / 2);
+        }
+
+        if (showName) {
+            var lines = fitTitleLines(name);
+            if (lines.length) {
+                ctx.textBaseline = 'alphabetic';
+                ctx.font = '600 ' + Math.round(size / 13) + 'px' + fam;
+                var bottom = size / 11;
+                var lineH = size * 7 / 90;
+                for (var k = 0; k < lines.length; k++) {
+                    ctx.fillText(lines[k], size / 2, size - (bottom + (lines.length - 1 - k) * lineH));
+                }
             }
         }
         return canvas.toDataURL('image/png');
@@ -215,12 +223,19 @@ export default function (view) {
 
     function renderLogoPreview() {
         var img = el('logoPreview');
+        // The symbol field only applies to the generated 'Symbol' style.
+        Shared.setVisible('logoSymbolRow', el('logoStyle').value === 'Symbol');
         if (logoData) {
             img.src = 'data:' + (logoContentType || 'image/png') + ';base64,' + logoData;
             Shared.setVisible('btnClearLogo', true);
         } else {
-            // No upload: show the generated pastel placeholder so the box is never empty.
-            img.src = defaultLogoDataUrl(parseInt(el('channelNumber').value, 10) || 0, el('channelName').value || '');
+            // No upload: show the generated placeholder so the box is never empty.
+            img.src = defaultLogoDataUrl(
+                parseInt(el('channelNumber').value, 10) || 0,
+                el('channelName').value || '',
+                el('logoStyle').value,
+                el('logoSymbol').value,
+                el('logoShowName').checked);
             Shared.setVisible('btnClearLogo', false);
         }
         Shared.setVisible('logoPreview', true);
@@ -544,27 +559,20 @@ export default function (view) {
                 if (r && r.Name && !seen[r.Name]) { seen[r.Name] = true; ratings.push({ Name: r.Name, Value: score || 0 }); }
             });
             ratings.sort(function (a, b) { return a.Value - b.Value; });
-            el('maxRating').innerHTML = '<option value="">No limit</option>' + ratings.map(function (r) {
+            var opts = ratings.map(function (r) {
                 return '<option value="' + Shared.escapeHtml(r.Name) + '">' + Shared.escapeHtml(r.Name) + '</option>';
             }).join('');
-        }).catch(function () { el('maxRating').innerHTML = '<option value="">No limit</option>'; });
+            el('minRating').innerHTML = '<option value="">No minimum</option>' + opts;
+            el('maxRating').innerHTML = '<option value="">No limit</option>' + opts;
+            el('kidsRating').innerHTML = '<option value="">None</option>' + opts;
+        }).catch(function () {
+            el('minRating').innerHTML = '<option value="">No minimum</option>';
+            el('maxRating').innerHTML = '<option value="">No limit</option>';
+            el('kidsRating').innerHTML = '<option value="">None</option>';
+        });
     }
 
     // MARK: Editor load / save
-
-    var categoriesChip = null;
-    var CATEGORY_OPTIONS = ['Movies', 'Sports', 'Kids', 'News'];
-
-    // Channel-level Live TV guide categories, shown as a pick-one-or-more chip select over the fixed set.
-    function ensureCategoriesChip() {
-        if (categoriesChip) return;
-        categoriesChip = createChipSelect({
-            placeholder: 'Add a category…',
-            onChange: function (vals) { var ch = channels[currentIndex]; if (ch) ch.Categories = vals; }
-        });
-        categoriesChip.setAvailable(CATEGORY_OPTIONS);
-        el('channelCategoriesMount').appendChild(categoriesChip.element);
-    }
 
     function loadEditor() {
         var ch = channels[currentIndex];
@@ -573,20 +581,23 @@ export default function (view) {
         el('channelNumber').value = ch.Number || '';
         logoData = ch.LogoData || '';
         logoContentType = ch.LogoContentType || '';
+        el('logoStyle').value = ch.LogoStyle || 'Number';
+        el('logoSymbol').value = ch.LogoSymbol || '';
+        el('logoShowName').checked = ch.LogoShowName !== false;
         renderLogoPreview();
 
         renderSources();
 
+        el('minRating').value = ch.MinOfficialRating || '';
         el('maxRating').value = ch.MaxOfficialRating || '';
+        el('includeUnrated').checked = ch.IncludeUnrated !== false;
+        el('kidsRating').value = ch.KidsRatingThreshold || '';
         el('episodesPerBlock').value = ch.EpisodesPerBlock || 1;
         el('keepMultiPart').checked = ch.KeepMultiPartTogether !== false;
         el('includeSpecials').checked = !!ch.IncludeSpecials;
         el('shuffle').checked = ch.Shuffle !== false;
         el('episodeOrder').value = ch.ShuffleEpisodes ? 'random' : 'air';
         el('subtitleBurnIn').value = ch.SubtitleBurnIn || 'Never';
-
-        ensureCategoriesChip();
-        categoriesChip.setValue(ch.Categories || []);
 
         currentEnabled = ch.Enabled !== false;
         setEnableVisual(currentEnabled);
@@ -597,14 +608,19 @@ export default function (view) {
         ch.Number = parseInt(el('channelNumber').value, 10) || 0;
         ch.LogoData = logoData;
         ch.LogoContentType = logoContentType;
+        ch.LogoStyle = el('logoStyle').value;
+        ch.LogoSymbol = el('logoSymbol').value.trim();
+        ch.LogoShowName = el('logoShowName').checked;
+        ch.MinOfficialRating = el('minRating').value;
         ch.MaxOfficialRating = el('maxRating').value;
+        ch.IncludeUnrated = el('includeUnrated').checked;
+        ch.KidsRatingThreshold = el('kidsRating').value;
         ch.EpisodesPerBlock = Math.max(1, parseInt(el('episodesPerBlock').value, 10) || 1);
         ch.KeepMultiPartTogether = el('keepMultiPart').checked;
         ch.IncludeSpecials = el('includeSpecials').checked;
         ch.Shuffle = el('shuffle').checked;
         ch.ShuffleEpisodes = el('episodeOrder').value === 'random';
         ch.SubtitleBurnIn = el('subtitleBurnIn').value;
-        ch.Categories = categoriesChip ? categoriesChip.getValue() : (ch.Categories || []);
         ch.Enabled = currentEnabled;
         // Sources are mutated live by the cards; keep LibraryName in sync.
         ch.Sources.forEach(function (s) { s.LibraryName = libraryName(s.LibraryId); });
@@ -667,8 +683,10 @@ export default function (view) {
     function addChannel() {
         channels.push({
             Id: newId(), Name: '', Number: nextNumber(), LogoData: '', LogoContentType: '',
-            Sources: [], MaxOfficialRating: '', EpisodesPerBlock: 1, KeepMultiPartTogether: true,
-            IncludeSpecials: false, Shuffle: true, ShuffleEpisodes: false, SubtitleBurnIn: 'Never', Categories: [], Enabled: true
+            LogoStyle: 'Number', LogoSymbol: '', LogoShowName: true,
+            Sources: [], MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, KidsRatingThreshold: 'G',
+            EpisodesPerBlock: 1, KeepMultiPartTogether: true,
+            IncludeSpecials: false, Shuffle: true, ShuffleEpisodes: false, SubtitleBurnIn: 'Never', Enabled: true
         });
         currentIndex = channels.length - 1;
         renderSelect();
@@ -727,6 +745,9 @@ export default function (view) {
         // Keep the placeholder in step with the name (colour) and number (label) while there's no upload.
         el('channelNumber').addEventListener('input', function () { if (!logoData) renderLogoPreview(); });
         el('channelName').addEventListener('input', function () { if (!logoData) renderLogoPreview(); });
+        el('logoStyle').addEventListener('change', renderLogoPreview);
+        el('logoSymbol').addEventListener('input', function () { if (!logoData) renderLogoPreview(); });
+        el('logoShowName').addEventListener('change', function () { if (!logoData) renderLogoPreview(); });
         el('btnNewChannel').addEventListener('click', addChannel);
         el('btnDeleteChannel').addEventListener('click', deleteChannel);
         el('btnSaveChannel').addEventListener('click', saveChannel);

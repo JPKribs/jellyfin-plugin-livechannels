@@ -54,6 +54,12 @@ public sealed class ProgramEntry
     /// <summary>Gets the episode number for episodes, used for the guide's <c>episode-num</c>.</summary>
     public int? EpisodeNumber { get; init; }
 
+    /// <summary>Gets a value indicating whether the item is a movie, used to flag the program as a movie in the guide.</summary>
+    public bool IsMovie { get; init; }
+
+    /// <summary>Gets a value indicating whether the item rates at or below the channel's kids threshold, used to flag the program as kids content in the guide.</summary>
+    public bool IsKids { get; init; }
+
     /// <summary>Gets the parent series id for episodes, used to group a series into blocks. <c>null</c> for standalone items.</summary>
     public Guid? SeriesId { get; init; }
 

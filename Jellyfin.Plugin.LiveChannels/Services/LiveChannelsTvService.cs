@@ -116,14 +116,6 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         var schedule = ScheduleCalculator.BuildSchedule(programs, startDateUtc, endDateUtc, ScheduleCalculator.Epoch);
         var newSince = DateTime.UtcNow.AddDays(-NewWindowDays);
 
-        // The channel's chosen guide categories tag every one of its programs, so Live TV's category filters
-        // (Movies / Sports / Kids / News) surface the channel. Empty by default, so programs stay uncategorised.
-        var categories = new HashSet<string>(channel.Categories ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
-        var isMovie = categories.Contains("Movies");
-        var isSports = categories.Contains("Sports");
-        var isKids = categories.Contains("Kids");
-        var isNews = categories.Contains("News");
-
         var list = new List<ProgramInfo>(schedule.Count);
         foreach (var slot in schedule)
         {
@@ -142,10 +134,8 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
                 SeasonNumber = p.SeasonNumber,
                 EpisodeNumber = p.EpisodeNumber,
                 IsSeries = p.SeriesId.HasValue,
-                IsMovie = isMovie,
-                IsSports = isSports,
-                IsKids = isKids,
-                IsNews = isNews,
+                IsMovie = p.IsMovie,
+                IsKids = p.IsKids,
                 IsRepeat = p.DateAdded < newSince,
                 ImagePath = p.PrimaryImagePath,
                 HasImage = !string.IsNullOrEmpty(p.PrimaryImagePath)
@@ -620,10 +610,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
                 return file;
             }
 
-            var generated = Path.Combine(_logoRoot, number + "-g5-" + Hash(channel.Name) + ".png");
+            var token = string.Join('|', channel.Name, ((int)channel.LogoStyle).ToString(CultureInfo.InvariantCulture), channel.LogoSymbol, channel.LogoShowName ? "1" : "0");
+            var generated = Path.Combine(_logoRoot, number + "-g6-" + Hash(token) + ".png");
             if (!File.Exists(generated))
             {
-                var bytes = await _defaultLogo.GetAsync(channel.Number, channel.Name, cancellationToken).ConfigureAwait(false);
+                var bytes = await _defaultLogo.GetAsync(channel.Number, channel.Name, channel.LogoStyle, channel.LogoSymbol, channel.LogoShowName, cancellationToken).ConfigureAwait(false);
                 if (bytes is null)
                 {
                     return null;
