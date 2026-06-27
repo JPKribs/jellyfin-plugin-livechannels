@@ -527,6 +527,10 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             Protocol = MediaProtocol.File,
             Container = "ts",
             IsInfiniteStream = true,
+            // Read the stream at native frame rate so Jellyfin's transcoder paces itself to realtime instead of
+            // racing through our file to EOF and ending the stream after a few seconds (the per-item path writes
+            // a regular file, which, unlike a pipe, returns EOF the moment the reader catches the write head).
+            ReadAtNativeFramerate = true,
             RequiresOpening = path is null,
             RequiresClosing = true,
             SupportsDirectPlay = false,
