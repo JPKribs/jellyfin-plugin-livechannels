@@ -54,26 +54,28 @@ public class EncoderResolver
 
         switch (accel)
         {
+            // Hardware ENCODE follows the server's configured accelerator for every vendor. Hardware DECODE is
+            // enabled only for VideoToolbox: `-hwaccel videotoolbox` auto-downloads frames to system memory so
+            // the software scale can consume them. CUDA/QSV/VAAPI decoders output GPU surfaces that a software
+            // scale cannot read ("Impossible to convert between formats"), so those keep software decode (frames
+            // are uploaded for the hardware encoder via the pixel stage). AMF is encode-only.
             case "videotoolbox":
-                // `-hwaccel <type>` without an output format decodes to system memory so the software scale can
-                // consume the frames, so each acceleration follows the server's configured type for decode as
-                // well as encode. (AMF is encode-only; AMD decode is platform-specific, so it stays software.)
                 return new VideoEncoderProfile(family + "_videotoolbox", label + " (VideoToolbox)", true,
                     Empty, VideotoolboxExtra, "format=yuv420p", false, DecodeHwaccel: "videotoolbox");
             case "nvenc":
                 return new VideoEncoderProfile(family + "_nvenc", label + " (NVENC)", true,
-                    Empty, Empty, "format=yuv420p", false, DecodeHwaccel: "cuda");
+                    Empty, Empty, "format=yuv420p", false);
             case "amf":
                 return new VideoEncoderProfile(family + "_amf", label + " (AMF)", true,
                     Empty, Empty, "format=yuv420p", false);
             case "qsv":
                 return new VideoEncoderProfile(family + "_qsv", label + " (QSV)", true,
-                    QsvInit, Empty, "format=nv12,hwupload=extra_hw_frames=64", false, DecodeHwaccel: "qsv");
+                    QsvInit, Empty, "format=nv12,hwupload=extra_hw_frames=64", false);
             case "vaapi":
                 var device = string.IsNullOrEmpty(options?.VaapiDevice) ? "/dev/dri/renderD128" : options.VaapiDevice;
                 return new VideoEncoderProfile(family + "_vaapi", label + " (VAAPI)", true,
                     new[] { "-init_hw_device", "vaapi=va:" + device, "-filter_hw_device", "va" }, Empty,
-                    "format=nv12,hwupload", false, DecodeHwaccel: "vaapi");
+                    "format=nv12,hwupload", false);
             default:
                 return Software(codec);
         }

@@ -35,7 +35,7 @@ Programs are tagged in the guide automatically: movies as movies, and anything r
 
 ### Output
 
-Resolution, video codec, audio codec, and bitrate are set on the **Settings** tab and apply to every channel. Encoding and decoding follow Jellyfin's own hardware acceleration, with a switch to force software if a channel will not play. 1080p is the practical sweet spot for a round the clock channel.
+Resolution, video codec, audio codec, and bitrate are set on the **Settings** tab and apply to every channel. Encoding follows Jellyfin's own hardware acceleration, with a switch to force software if a channel will not play. 1080p is the practical sweet spot for a round the clock channel.
 
 ## Security
 

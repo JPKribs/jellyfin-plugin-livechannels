@@ -75,12 +75,16 @@ public class EncoderResolverTests
         => Assert.Equal("videotoolbox", Resolver("videotoolbox").ResolveVideo(VideoCodec.H264, true).DecodeHwaccel);
 
     [Fact]
-    public void ResolveVideo_Nvenc_UsesCudaDecode()
-        => Assert.Equal("cuda", Resolver("nvenc").ResolveVideo(VideoCodec.H264, true).DecodeHwaccel);
+    public void ResolveVideo_Nvenc_KeepsSoftwareDecode()
+        => Assert.Null(Resolver("nvenc").ResolveVideo(VideoCodec.H264, true).DecodeHwaccel);
 
     [Fact]
-    public void ResolveVideo_Qsv_UsesQsvDecode()
-        => Assert.Equal("qsv", Resolver("qsv").ResolveVideo(VideoCodec.H264, true).DecodeHwaccel);
+    public void ResolveVideo_Qsv_KeepsSoftwareDecode()
+        => Assert.Null(Resolver("qsv").ResolveVideo(VideoCodec.H264, true).DecodeHwaccel);
+
+    [Fact]
+    public void ResolveVideo_Qsv_StillUsesHardwareEncoder()
+        => Assert.Equal("h264_qsv", Resolver("qsv").ResolveVideo(VideoCodec.H264, true).Name);
 
     [Fact]
     public void ResolveVideo_Software_HasNoHardwareDecode()
