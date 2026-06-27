@@ -41,12 +41,6 @@ Programs are tagged in the guide automatically: movies as movies, and anything r
 
 Resolution, video codec, audio codec, and bitrate are set on the **Settings** tab and apply to every channel. Encoding follows Jellyfin's own hardware acceleration, with a switch to force software if a channel will not play. 1080p is the practical sweet spot for a round the clock channel.
 
-## Security
-
-* **No exposed endpoints.** Channels, guide, and streams are served entirely inside Jellyfin's own Live TV. The plugin opens no public HTTP endpoint, so clients reach the streams only through Jellyfin's normal authenticated Live TV playback.
-* **Administrators only.** Channels are authored only by administrators through the plugin configuration.
-* **Idle costs nothing.** A channel transcodes on demand only while someone is watching. An unused channel uses no CPU.
-
 ## Versioning
 
 Releases use a four part version, `JJ.JJ.F.B`, that matches the supported Jellyfin version with the plugin's own feature and bug count:
