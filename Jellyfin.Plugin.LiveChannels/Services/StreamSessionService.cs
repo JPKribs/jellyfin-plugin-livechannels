@@ -104,6 +104,15 @@ public class StreamSessionService
     public bool ShouldUsePipe(Channel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
+
+        // Default to the buffered file. A non-seekable pipe makes some servers (notably Intel QSV) probe the live
+        // stream as interlaced and add a deinterlace pass that fails (exit 187), where the file is probed
+        // correctly and remuxed. The pipe stays available behind an opt-in flag for setups that want zero disk.
+        if (!(Plugin.Instance?.ReadConfiguration(c => c.EnableConcatPipe) ?? false))
+        {
+            return false;
+        }
+
         if (channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never)
         {
             return false;

@@ -27,4 +27,10 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>Gets or sets a value indicating whether to force software encoding and decoding for channel streams, ignoring Jellyfin's hardware acceleration. Slower, but universally compatible across systems, codecs, and media types.</summary>
     public bool DisableHardwareAcceleration { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether the continuous (concat) pipeline may stream into a zero-disk
+    /// named pipe instead of a buffered file. Off by default: a non-seekable pipe makes some servers (notably
+    /// Intel QSV) probe the live stream as interlaced and insert a deinterlace pass that fails, whereas the
+    /// buffered file is probed correctly. Enabling it trades that reliability for no temp-file growth.</summary>
+    public bool EnableConcatPipe { get; set; }
 }
