@@ -96,10 +96,9 @@ public static class StreamArguments
         var w = width.ToString(CultureInfo.InvariantCulture);
         var h = height.ToString(CultureInfo.InvariantCulture);
         // Deinterlace interlaced sources (e.g. broadcast/DVD music videos) before scaling: it produces clean
-        // progressive frames and, crucially, clears the interlaced flag so the output is progressive. Otherwise
-        // the flag propagates through scale to the encoder, Jellyfin's re-transcode then probes the stream as
-        // interlaced and adds its own deinterlace_vaapi, which fails on QSV. deint=1 only touches flagged frames,
-        // so progressive content passes through untouched.
+        // progressive frames and clears the interlaced frame flag. deint=1 only touches flagged frames, so
+        // progressive content passes through untouched. The encoder is also told the output is progressive via
+        // -field_order below; the frame flag alone is not enough on every encoder (see that line).
         var scale = "yadif=deint=1,scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
             + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30,setparams=field_mode=prog," + video.PixelStage;
 
@@ -115,6 +114,14 @@ public static class StreamArguments
 
         var br = bitrate.ToString(CultureInfo.InvariantCulture);
         Add(args, "-c:v", video.Name);
+
+        // Force the encoder to signal progressive in the sequence header. yadif + setparams clear the per-frame
+        // interlaced flag, but hardware encoders (notably h264_qsv) write the field order into the SPS from the
+        // codec context at init and ignore the frame flag, so the output is tagged 1080i. Jellyfin then re-probes
+        // our stream as interlaced and inserts a deinterlace_vaapi pass that fails on QSV. Setting the field order
+        // at the encoder makes the output genuinely progressive, so Jellyfin remuxes it instead of re-transcoding.
+        Add(args, "-field_order", "progressive");
+
         if (video.UsePreset)
         {
             Add(args, "-preset", "veryfast", "-sc_threshold", "0");
@@ -228,6 +235,10 @@ public static class StreamArguments
 
         var br = bitrate.ToString(CultureInfo.InvariantCulture);
         Add(args, "-c:v", video.Name);
+
+        // Signal progressive in the sequence header so Jellyfin remuxes instead of re-transcoding (see Build).
+        Add(args, "-field_order", "progressive");
+
         if (video.UsePreset)
         {
             Add(args, "-preset", "veryfast", "-sc_threshold", "0");

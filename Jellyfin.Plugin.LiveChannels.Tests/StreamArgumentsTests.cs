@@ -36,6 +36,16 @@ public class StreamArgumentsTests
     }
 
     [Fact]
+    public void SignalsProgressiveFieldOrder_OnBothPaths()
+    {
+        // The encoder must tag the output progressive so Jellyfin remuxes instead of adding a deinterlace pass
+        // that fails on QSV. The per-frame setparams flag is not honored by every hardware encoder, so the
+        // field order is also set on the encoder itself.
+        Assert.True(Pair(Build(), "-field_order", "progressive"));
+        Assert.True(Pair(StreamArguments.BuildConcat("/tmp/list.txt", default, 1280, 4000, SoftwareH264, "aac", 192), "-field_order", "progressive"));
+    }
+
+    [Fact]
     public void AlwaysTranscodes_Libx264_8bit_ConstantScale_NeverCopies()
     {
         var a = Build();
