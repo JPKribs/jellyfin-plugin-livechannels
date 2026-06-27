@@ -7,6 +7,15 @@
     "imageUrl": "https://raw.githubusercontent.com/JPKribs/jellyfin-plugin-livechannels/master/Jellyfin.Plugin.LiveChannels/Assets/Logo.png",
     "owner": "JPKribs",
     "category": "Live TV",
-    "versions": []
+    "versions": [
+      {
+        "version": "10.11.1.0",
+        "changelog": "## Initial Release!\r\n\r\nThis plugin exists because I need to test Live TV for Swiftfin and I wanted a simple(r) tuner configuration as I found a lot of the alternatives to be a little too involved for what I wanted.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.0/jellyfin-plugin-livechannels-10.11.1.0.zip",
+        "checksum": "0bd8dc812998dd0ae0b292133f2cf33a",
+        "timestamp": "2026-06-27T08:51:03Z"
+      }
+    ]
   }
 ]
