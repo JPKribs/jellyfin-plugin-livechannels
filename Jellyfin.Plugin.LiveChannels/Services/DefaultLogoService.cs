@@ -99,12 +99,13 @@ public class DefaultLogoService
 
         var filters = new List<string>();
 
-        // Centre: a Material Icons symbol when chosen and resolvable, otherwise the channel number.
-        var (centreFont, centreText) = ResolveCentre(number, style, symbol, textFont);
+        // Centre: a Material Symbols glyph when chosen and resolvable, otherwise the channel number. Symbols
+        // read a touch small at the number's size, so draw them about 10% larger.
+        var (centreFont, centreText, isSymbol) = ResolveCentre(number, style, symbol, textFont);
         if (centreFont is not null && centreText.Length > 0)
         {
             var safeCentreFont = centreFont.Replace("\\", "/", StringComparison.Ordinal);
-            var centreSize = (Size * 2 / 5).ToString(CultureInfo.InvariantCulture);
+            var centreSize = (isSymbol ? Size * 11 / 25 : Size * 2 / 5).ToString(CultureInfo.InvariantCulture);
             filters.Add("drawtext=fontfile='" + safeCentreFont + "':text='" + SanitizeForDrawtext(centreText)
                 + "':fontcolor=" + fc + ":fontsize=" + centreSize + ":x=(w-tw)/2:y=(h-th)/2");
         }
@@ -218,7 +219,7 @@ public class DefaultLogoService
 
     // The font and text drawn in the centre: the Material Icons glyph for a known symbol name, otherwise the
     // channel number in the regular font (also the fallback for an unknown symbol or a missing icon font).
-    private (string? Font, string Text) ResolveCentre(int number, LogoStyle style, string symbol, string? textFont)
+    private (string? Font, string Text, bool IsSymbol) ResolveCentre(int number, LogoStyle style, string symbol, string? textFont)
     {
         if (style == LogoStyle.Symbol && !string.IsNullOrWhiteSpace(symbol)
             && GetIconCodepoints(_logger).TryGetValue(symbol.Trim(), out var codepoint))
@@ -226,11 +227,11 @@ public class DefaultLogoService
             var iconFont = GetMaterialIconFontPath(_logger);
             if (iconFont is not null)
             {
-                return (iconFont, char.ConvertFromUtf32(codepoint));
+                return (iconFont, char.ConvertFromUtf32(codepoint), true);
             }
         }
 
-        return (textFont, number.ToString(CultureInfo.InvariantCulture));
+        return (textFont, number.ToString(CultureInfo.InvariantCulture), false);
     }
 
     // Extracts the embedded Material Icons font to a temp file (once) so ffmpeg's drawtext can read it by path.

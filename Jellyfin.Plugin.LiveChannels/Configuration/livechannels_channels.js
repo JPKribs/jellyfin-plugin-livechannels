@@ -220,8 +220,9 @@ export default function (view) {
         ctx.textBaseline = 'middle';
 
         if (style === 'Symbol' && symbol && symbolRenders(symbol)) {
-            // The Material Symbols font renders the ligature name as its glyph.
-            ctx.font = Math.round(size * 0.4) + 'px "LiveChannelsSymbols"';
+            // The Material Symbols font renders the ligature name as its glyph. Symbols read a touch small at the
+            // number's size, so draw them about 10% larger.
+            ctx.font = Math.round(size * 0.44) + 'px "LiveChannelsSymbols"';
             ctx.fillText(symbol, size / 2, size / 2);
         } else {
             // Number style, or a symbol the font has no glyph for: show the number, matching the server.
