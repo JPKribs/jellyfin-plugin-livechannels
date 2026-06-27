@@ -183,8 +183,8 @@ export default function (view) {
 
     // A 1:1 pastel square (number centred, title on one or two bottom rows), drawn client-side so the box
     // updates live as the name/number change. Mirrors the server-generated logo.
-    // Whether the Material Icons font actually has a glyph for this ligature name. Draws it on a scratch canvas
-    // and checks for any ink, so an unknown name falls back to the number in the preview just like the server.
+    // Whether the Material Symbols font actually has a glyph for this ligature name. Draws it on a scratch
+    // canvas and checks for any ink, so an unknown name falls back to the number in the preview like the server.
     function symbolRenders(symbol) {
         try {
             var px = 48;
@@ -192,7 +192,7 @@ export default function (view) {
             c.width = px;
             c.height = px;
             var x = c.getContext('2d');
-            x.font = Math.round(px * 0.7) + 'px "Material Icons"';
+            x.font = Math.round(px * 0.7) + 'px "LiveChannelsSymbols"';
             x.textAlign = 'center';
             x.textBaseline = 'middle';
             x.fillStyle = '#000';
@@ -220,8 +220,8 @@ export default function (view) {
         ctx.textBaseline = 'middle';
 
         if (style === 'Symbol' && symbol && symbolRenders(symbol)) {
-            // The Material Icons font (loaded by Jellyfin) renders the ligature name as its glyph.
-            ctx.font = Math.round(size * 0.4) + 'px "Material Icons"';
+            // The Material Symbols font renders the ligature name as its glyph.
+            ctx.font = Math.round(size * 0.4) + 'px "LiveChannelsSymbols"';
             ctx.fillText(symbol, size / 2, size / 2);
         } else {
             // Number style, or a symbol the font has no glyph for: show the number, matching the server.
@@ -776,6 +776,12 @@ export default function (view) {
         el('btnSaveChannel').addEventListener('click', saveChannel);
         el('btnAddLibrary').addEventListener('click', addLibrary);
         el('btnEnable').addEventListener('click', function () { currentEnabled = !currentEnabled; setEnableVisual(currentEnabled); });
+
+        // Warm the Material Symbols web font (the same glyphs the server draws), then refresh the preview so a
+        // symbol logo renders once it has loaded rather than briefly falling back to the number.
+        if (document.fonts && document.fonts.load) {
+            document.fonts.load('40px "LiveChannelsSymbols"').then(function () { if (!logoData) renderLogoPreview(); }).catch(function () {});
+        }
     }
 
     function load() {

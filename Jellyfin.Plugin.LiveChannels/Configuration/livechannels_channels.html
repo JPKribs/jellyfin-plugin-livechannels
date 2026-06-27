@@ -2,6 +2,13 @@
      class="page type-interior pluginConfigurationPage withTabs"
      data-require="emby-input,emby-button,emby-checkbox,emby-select"
      data-controller="__plugin/livechannels_channels.js">
+    <style>
+        @font-face {
+            font-family: 'LiveChannelsSymbols';
+            src: url('configurationpage?name=livechannels_symbols.ttf') format('truetype');
+            font-display: swap;
+        }
+    </style>
     <div data-role="content">
         <div class="content-primary">
             <form id="LiveChannelsForm">
@@ -83,7 +90,7 @@
                                 <div class="inputContainer" id="logoSymbolRow">
                                     <label for="logoSymbol">Symbol</label>
                                     <input is="emby-input" type="text" id="logoSymbol" autocomplete="off" placeholder="e.g. arrow_back" />
-                                    <div class="fieldDescription">Any Material Icons name, drawn in the centre. Browse names at fonts.google.com/icons.</div>
+                                    <div class="fieldDescription">Any Material Symbols name, drawn in the centre. Browse names at fonts.google.com/icons.</div>
                                 </div>
                                 <div class="checkboxContainer checkboxContainer-withDescription">
                                     <label class="emby-checkbox-label">

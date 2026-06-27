@@ -36,9 +36,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Material Icons font + name-to-codepoint map, used to render symbol channel logos -->
-    <EmbeddedResource Include="Assets\MaterialIcons-Regular.ttf" />
-    <EmbeddedResource Include="Assets\MaterialIcons-Regular.codepoints" />
+    <!-- Material Symbols font + name-to-codepoint map, used to render symbol channel logos -->
+    <EmbeddedResource Include="Assets\MaterialSymbolsOutlined.ttf" />
+    <EmbeddedResource Include="Assets\MaterialSymbolsOutlined.codepoints" />
   </ItemGroup>
 
 </Project>

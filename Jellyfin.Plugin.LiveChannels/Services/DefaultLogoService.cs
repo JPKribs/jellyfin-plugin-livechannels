@@ -246,7 +246,7 @@ public class DefaultLogoService
             try
             {
                 var assembly = typeof(DefaultLogoService).Assembly;
-                var resource = assembly.GetManifestResourceNames().FirstOrDefault(n => n.EndsWith("MaterialIcons-Regular.ttf", StringComparison.Ordinal));
+                var resource = assembly.GetManifestResourceNames().FirstOrDefault(n => n.EndsWith("MaterialSymbolsOutlined.ttf", StringComparison.Ordinal));
                 if (resource is null)
                 {
                     return null;
@@ -258,7 +258,7 @@ public class DefaultLogoService
                     return null;
                 }
 
-                var path = Path.Combine(Path.GetTempPath(), "livechannels-MaterialIcons-Regular.ttf");
+                var path = Path.Combine(Path.GetTempPath(), "livechannels-MaterialSymbolsOutlined.ttf");
                 using (var file = new FileStream(path, FileMode.Create, FileAccess.Write))
                 {
                     stream.CopyTo(file);
@@ -289,7 +289,7 @@ public class DefaultLogoService
             try
             {
                 var assembly = typeof(DefaultLogoService).Assembly;
-                var resource = assembly.GetManifestResourceNames().FirstOrDefault(n => n.EndsWith("MaterialIcons-Regular.codepoints", StringComparison.Ordinal));
+                var resource = assembly.GetManifestResourceNames().FirstOrDefault(n => n.EndsWith("MaterialSymbolsOutlined.codepoints", StringComparison.Ordinal));
                 if (resource is not null)
                 {
                     using var stream = assembly.GetManifestResourceStream(resource);

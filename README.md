@@ -20,7 +20,7 @@ A channel always includes whatever its libraries and filters yield: movies, epis
 
 Per channel you can also set:
 
-* **Logo** uploads an image cropped to a square. With no upload the plugin generates a square in a colour from the channel name, showing either the channel number or a Material Icons symbol you name (such as `movie`), with the channel name along the bottom when you want it.
+* **Logo** uploads an image cropped to a square. With no upload the plugin generates a square in a colour from the channel name, showing either the channel number or a Material Symbols icon you name (such as `movie`), with the channel name along the bottom when you want it.
 * **Minimum and maximum age rating** keep content within a rating band. Set both to make an adults only or a single band channel.
 * **Include unrated** is on by default. Turn it off to drop items that carry no rating.
 * **Kids rating** flags programs rated at or below it as Kids in the guide. Movies are flagged as movies automatically.
