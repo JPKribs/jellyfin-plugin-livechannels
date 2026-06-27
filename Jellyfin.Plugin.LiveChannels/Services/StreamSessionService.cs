@@ -376,7 +376,8 @@ public class StreamSessionService
             }
         }
 
-        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false);
+        var isHdr = _channels.IsHdrSource(program.ItemId);
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, isHdr);
         var total = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
@@ -384,7 +385,7 @@ public class StreamSessionService
         if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
-            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true);
+            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, isHdr);
             total = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken).ConfigureAwait(false);
         }
 
@@ -578,7 +579,7 @@ public class StreamSessionService
         return total;
     }
 
-    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode)
+    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr)
     {
         // Read just the scalars we need inside the config lock, rather than holding a reference to the live
         // (mutable, shared) configuration object after the lock releases.
@@ -594,10 +595,11 @@ public class StreamSessionService
         // Burning a subtitle composites on software frames. VideoToolbox auto-downloads so it can still
         // hardware-decode, but a decoder that keeps frames on the GPU (QSV/VAAPI) would need its hwdownload to sit
         // before the overlay; rather than thread that ordering through the filter graph, decode burn-in in
-        // software for those. The caller can also force software decode for the per-item hardware-decode fallback.
-        var forceSoftware = softwareDecode || (forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeDownload));
+        // software for those. HDR is also decoded in software: a hardware download to nv12 would clip the 10-bit
+        // HDR range before the tone-map can map it to SDR. The caller can also force software for the fallback.
+        var forceSoftware = softwareDecode || isHdr || (forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeDownload));
         var hardwareDecode = !forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel);
-        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware);
+        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr);
         return (args, hardwareDecode);
     }
 

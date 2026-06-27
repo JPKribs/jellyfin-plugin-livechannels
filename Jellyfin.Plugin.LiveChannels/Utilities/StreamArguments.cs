@@ -37,7 +37,8 @@ public static class StreamArguments
         int audioBitrate,
         (int RelativeIndex, bool IsText)? forcedSubtitle,
         string? externalSubtitlePath = null,
-        bool softwareDecode = false)
+        bool softwareDecode = false,
+        bool isHdr = false)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(video);
@@ -90,6 +91,11 @@ public static class StreamArguments
             }
         }
 
+        // Pace the read to realtime so the producer doesn't race ahead of the player (wasting CPU encoding far
+        // in advance and bloating the temp file). The initial burst lets it fill the head-start buffer fast on
+        // tune-in before settling to 1x, the same pacing ErsatzTV/Tunarr use.
+        Add(args, "-readrate", "1.0", "-readrate_initial_burst", "15");
+
         args.Add("-i");
         args.Add(path);
 
@@ -110,8 +116,15 @@ public static class StreamArguments
         // -field_order below; the frame flag alone is not enough on every encoder (see that line).
         // When the decoder kept frames on the GPU, bring them back to system memory before the software scale.
         var download = hwDecode ? video.DecodeDownload : string.Empty;
-        var scale = download + "yadif=deint=1,scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
-            + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30,setparams=field_mode=prog," + video.PixelStage;
+        // Tone-map HDR (PQ/HLG) down to SDR bt709 before scaling, otherwise HDR plays washed-out/grey once the
+        // pixel format is forced to 8-bit. The zscale->tonemap(hable)->zscale chain is the proven software path
+        // (ErsatzTV/Tunarr). Only inserted for HDR items (decoded in software so the 10-bit range survives).
+        var tonemap = isHdr
+            ? "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
+            : string.Empty;
+        // setsar=1 normalises non-square (anamorphic) pixels so mixed sources share one aspect ratio.
+        var scale = download + "yadif=deint=1," + tonemap + "scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
+            + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,setparams=field_mode=prog," + video.PixelStage;
 
         if (burnIn)
         {
@@ -132,6 +145,10 @@ public static class StreamArguments
         // our stream as interlaced and inserts a deinterlace_vaapi pass that fails on QSV. Setting the field order
         // at the encoder makes the output genuinely progressive, so Jellyfin remuxes it instead of re-transcoding.
         Add(args, "-field_order", "progressive");
+
+        // Closed GOP gives the downstream segmenter predictable GOP boundaries, so Jellyfin can remux into HLS
+        // instead of re-transcoding to realign keyframes.
+        Add(args, "-flags", "+cgop");
 
         if (video.UsePreset)
         {
@@ -233,7 +250,10 @@ public static class StreamArguments
             args.Add(offset.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture));
         }
 
-        // Loop the whole playlist forever and read it as one continuous input.
+        // Pace the read to realtime (with an initial burst to fill the tune-in buffer) so the one long-lived
+        // ffmpeg doesn't race ahead of the player, the same as ErsatzTV/Tunarr. Loop the whole playlist forever
+        // and read it as one continuous input.
+        Add(args, "-readrate", "1.0", "-readrate_initial_burst", "15");
         Add(args, "-stream_loop", "-1", "-safe", "0", "-f", "concat", "-i", listFilePath);
 
         var height = (int)Math.Round(width * 9.0 / 16.0);
@@ -249,14 +269,18 @@ public static class StreamArguments
         // and does not add a deinterlace_vaapi pass that fails on QSV. The leading download (when present) brings
         // hardware-decoded frames back to system memory for the software scale.
         var download = hwDecode ? video.DecodeDownload : string.Empty;
+        // setsar=1 normalises non-square (anamorphic) pixels so mixed sources share one aspect ratio.
         args.Add(download + "yadif=deint=1,scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
-            + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30,setparams=field_mode=prog," + video.PixelStage);
+            + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,setparams=field_mode=prog," + video.PixelStage);
 
         var br = bitrate.ToString(CultureInfo.InvariantCulture);
         Add(args, "-c:v", video.Name);
 
         // Signal progressive in the sequence header so Jellyfin remuxes instead of re-transcoding (see Build).
         Add(args, "-field_order", "progressive");
+
+        // Closed GOP for clean segment boundaries (see Build).
+        Add(args, "-flags", "+cgop");
 
         if (video.UsePreset)
         {

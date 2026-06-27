@@ -53,6 +53,29 @@ public class ChannelService
     }
 
     /// <summary>
+    /// Whether the item's video is HDR (PQ or HLG), so the stream pipeline can tone-map it to SDR. Keyed off the
+    /// colour transfer like every mature pseudo-TV pipeline does (ErsatzTV/Tunarr): <c>smpte2084</c> = HDR10/PQ,
+    /// <c>arib-std-b67</c> = HLG.
+    /// </summary>
+    /// <param name="itemId">The item id.</param>
+    /// <returns><c>true</c> when the item's video stream carries an HDR transfer function.</returns>
+    public bool IsHdrSource(Guid itemId)
+    {
+        try
+        {
+            var transfer = _mediaSourceManager.GetMediaStreams(itemId)
+                .FirstOrDefault(s => s.Type == MediaStreamType.Video)?.ColorTransfer;
+            return string.Equals(transfer, "smpte2084", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(transfer, "arib-std-b67", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read media streams for HDR check on {ItemId}", itemId);
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Picks the subtitle track to burn into an item for the given mode: the forced track for
     /// <see cref="SubtitleBurnInMode.Forced"/>, or the forced/default/first track for
     /// <see cref="SubtitleBurnInMode.Always"/>.
