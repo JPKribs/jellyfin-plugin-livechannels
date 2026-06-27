@@ -596,6 +596,21 @@ export default function (view) {
         });
     }
 
+    // Keep the rating band coherent: the minimum can never exceed the maximum. When the user picks one end past
+    // the other, drag the other end to meet it so an impossible (empty) band can't be created.
+    function ratingValue(name) {
+        if (!name) return null;
+        for (var i = 0; i < ratings.length; i++) { if (ratings[i].Name === name) return ratings[i].Value; }
+        return null;
+    }
+
+    function enforceRatingBand(changed) {
+        var min = el('minRating').value, max = el('maxRating').value;
+        var mn = ratingValue(min), mx = ratingValue(max);
+        if (mn === null || mx === null || mn <= mx) return;
+        if (changed === 'min') { el('maxRating').value = min; } else { el('minRating').value = max; }
+    }
+
     // MARK: Editor load / save
 
     function loadEditor() {
@@ -772,6 +787,8 @@ export default function (view) {
         el('logoStyle').addEventListener('change', renderLogoPreview);
         el('logoSymbol').addEventListener('input', function () { if (!logoData) renderLogoPreview(); });
         el('logoShowName').addEventListener('change', function () { if (!logoData) renderLogoPreview(); });
+        el('minRating').addEventListener('change', function () { enforceRatingBand('min'); });
+        el('maxRating').addEventListener('change', function () { enforceRatingBand('max'); });
         el('btnNewChannel').addEventListener('click', addChannel);
         el('btnDeleteChannel').addEventListener('click', deleteChannel);
         el('btnSaveChannel').addEventListener('click', saveChannel);
