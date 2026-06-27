@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.1.8",
+        "changelog": "## Fixes\r\n- Codec fixes",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.8/jellyfin-plugin-livechannels-10.11.1.8.zip",
+        "checksum": "65f63a2f0f2e66de60b46703632b8d27",
+        "timestamp": "2026-06-27T22:09:19Z"
+      },
+      {
         "version": "10.11.1.7",
         "changelog": "## Fixes\r\n- Smaller file work to make music videos actually work\r\n- HDR nonsense",
         "targetAbi": "10.11.9.0",
