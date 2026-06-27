@@ -95,15 +95,36 @@ public static class ProgramLoopBuilder
             }
         }
 
-        var orderedBlocks = options.Shuffle
-            ? blocks
-                .OrderBy(b => ShuffleKey(options.ChannelId, b.GroupKey + "#" + b.Seq.ToString(System.Globalization.CultureInfo.InvariantCulture)))
-                .ThenBy(b => b.GroupKey, StringComparer.Ordinal)
-            : blocks
+        if (!options.Shuffle)
+        {
+            return blocks
                 .OrderBy(b => b.SortName, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(b => b.Seq);
+                .ThenBy(b => b.Seq)
+                .SelectMany(b => b.Items)
+                .ToList();
+        }
 
-        return orderedBlocks.SelectMany(b => b.Items).ToList();
+        // Spread each series' blocks evenly across the loop rather than shuffling every block independently:
+        // a flat shuffle lets a series with many blocks clump into back-to-back runs. Each block is placed at a
+        // fractional position (index + phase) / blockCount within its series, where phase is a stable per-series
+        // hash so equal-sized series do not line up. Sorting by that position deals each series out at even
+        // intervals and interleaves the series in proportion to their size, while keeping a series in order.
+        // Standalone items are one-block groups, so each lands at its own random phase and scatters too.
+        var spread = blocks
+            .GroupBy(b => b.GroupKey, StringComparer.Ordinal)
+            .SelectMany(g =>
+            {
+                var ordered = g.OrderBy(b => b.Seq).ToList();
+                var phase = (uint)ShuffleKey(options.ChannelId, "phase:" + g.Key) / (double)uint.MaxValue;
+                return ordered.Select((b, i) => (Block: b, Position: (i + phase) / ordered.Count));
+            })
+            .OrderBy(x => x.Position)
+            .ThenBy(x => x.Block.GroupKey, StringComparer.Ordinal)
+            .Select(x => x.Block)
+            .ToList();
+
+        SpaceOutNeighbours(spread);
+        return spread.SelectMany(b => b.Items).ToList();
     }
 
     // Groups consecutive episodes that share a base title and a part marker into one unit (so a two-parter
@@ -177,6 +198,57 @@ public static class ProgramLoopBuilder
         var baseTitle = match.Groups["base"].Value.Trim();
         return baseTitle.Length >= 2 ? baseTitle : null;
     }
+
+    // Pulls apart any same-series blocks the even spread still left adjacent (a series large enough to dominate
+    // the channel). For each clash, swaps the second block forward with the nearest later block when that strictly
+    // reduces the local number of same-series adjacencies, so it never makes the order worse and leaves a pair in
+    // place only when the series genuinely fills the rest of the loop. Deterministic, so guide and stream agree.
+    private static void SpaceOutNeighbours(List<Block> order)
+    {
+        for (var i = 1; i < order.Count; i++)
+        {
+            if (!SameSeries(order[i], order[i - 1]))
+            {
+                continue;
+            }
+
+            for (var j = i + 1; j < order.Count; j++)
+            {
+                if (SameSeries(order[j], order[i]))
+                {
+                    continue;
+                }
+
+                var before = LocalAdjacencies(order, i, j);
+                (order[i], order[j]) = (order[j], order[i]);
+                if (LocalAdjacencies(order, i, j) < before)
+                {
+                    break;
+                }
+
+                (order[i], order[j]) = (order[j], order[i]);
+            }
+        }
+    }
+
+    private static bool SameSeries(Block a, Block b) => string.Equals(a.GroupKey, b.GroupKey, StringComparison.Ordinal);
+
+    // Counts the same-series adjacent pairs touching positions a and b (the only pairs a swap of a and b changes).
+    // a < b always, so the only overlapping right-index is a+1 == b.
+    private static int LocalAdjacencies(List<Block> order, int a, int b)
+    {
+        var count = Pair(order, a) + Pair(order, b) + Pair(order, b + 1);
+        if (a + 1 != b)
+        {
+            count += Pair(order, a + 1);
+        }
+
+        return count;
+    }
+
+    // 1 when the block at `right` shares a series with the block before it, else 0.
+    private static int Pair(List<Block> order, int right)
+        => right >= 1 && right < order.Count && SameSeries(order[right], order[right - 1]) ? 1 : 0;
 
     // FNV-1a hash of channel id + key, giving a stable per-channel ordering that survives restarts.
     private static int ShuffleKey(string channelId, string key)

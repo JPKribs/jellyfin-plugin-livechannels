@@ -135,6 +135,34 @@ public class LoopBuilderTests
     }
 
     [Fact]
+    public void Shuffle_SpreadsSeries_NoBackToBackBlocks()
+    {
+        // A dominant series plus several smaller ones, 4-episode blocks. The even spread must keep the same
+        // series from playing two blocks back to back (the old flat shuffle clustered them, e.g. "Futurama
+        // Futurama Simpsons Futurama"). A run of one series should never exceed a single block.
+        var items = new List<ProgramEntry>();
+        var big = new Guid("11111111-1111-1111-1111-111111111111");
+        items.AddRange(Enumerable.Range(1, 40).Select(i => Ep(big, "Futurama", 1, i, "e" + i)));
+        for (var s = 0; s < 4; s++)
+        {
+            var id = new Guid("2222222" + s + "-2222-2222-2222-222222222222");
+            items.AddRange(Enumerable.Range(1, 20).Select(i => Ep(id, "Show" + s, 1, i, "e" + i)));
+        }
+
+        var loop = ProgramLoopBuilder.Build(items, Opts(block: 4, shuffle: true));
+
+        var maxRun = 1;
+        var run = 1;
+        for (var i = 1; i < loop.Count; i++)
+        {
+            run = loop[i].SeriesId == loop[i - 1].SeriesId ? run + 1 : 1;
+            maxRun = Math.Max(maxRun, run);
+        }
+
+        Assert.True(maxRun <= 4, "a series ran for " + maxRun + " consecutive items (more than one 4-episode block)");
+    }
+
+    [Fact]
     public void AllItems_ArePreserved()
     {
         var s = Guid.NewGuid();
