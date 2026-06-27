@@ -299,11 +299,12 @@ public static class StreamArguments
         Add(args, "-c:a", audioEncoder, "-b:a", abr + "k", "-ac", "2", "-ar", "48000", "-af", "aresample=async=1:min_hard_comp=0.100");
         Add(args, "-max_muxing_queue_size", "1024");
 
-        // One continuous encoder, so no per-item timeline offset and no discontinuity flag are needed. The
-        // target is stdout (pipe:1) when our process pumps the output to a file, or a named-pipe path when
-        // ffmpeg writes the pipe directly (so killing ffmpeg, not our process, cleanly ends a stuck write).
-        // -y overwrites the path target without prompting (the named pipe already exists from mkfifo).
-        Add(args, "-y", "-f", "mpegts", "-muxpreload", "0", "-muxdelay", "0", outputTarget);
+        // One continuous encoder, so no per-item timeline offset is needed. But mark the first packets as a
+        // discontinuity: on the file path the self-heal loop restarts ffmpeg and appends to the same file Jellyfin
+        // keeps reading, so the fresh stream's reset continuity counters/PCR must be flagged or the reader sees a
+        // broken seam. The target is stdout (pipe:1) when our process pumps the output to a file, or a named-pipe
+        // path when ffmpeg writes the pipe directly. -y overwrites the path target without prompting.
+        Add(args, "-y", "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-muxpreload", "0", "-muxdelay", "0", outputTarget);
 
         return args;
     }

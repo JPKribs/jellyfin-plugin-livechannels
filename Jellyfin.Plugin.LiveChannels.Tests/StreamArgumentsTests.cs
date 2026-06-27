@@ -128,8 +128,22 @@ public class StreamArgumentsTests
         Assert.True(Pair(a, "-c:v", "libx264"));
         Assert.DoesNotContain("-hwaccel", a);            // software decode for the concat pipeline
         Assert.DoesNotContain("-output_ts_offset", a);   // one continuous encoder, no per-item offset
-        Assert.DoesNotContain("+initial_discontinuity", a); // no seams to signal
+        Assert.Contains("+initial_discontinuity", a);    // flags the self-heal restart seam on the file path
         Assert.Equal("pipe:1", a[^1]);
+    }
+
+    [Fact]
+    public void Hdr_InsertsTonemapChain_OnlyWhenHdr()
+    {
+        // SDR: no tone-map. HDR: the zscale->tonemap->zscale chain is inserted after deinterlace, before scale.
+        var sdr = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, false);
+        Assert.DoesNotContain(sdr, x => x.Contains("tonemap", StringComparison.Ordinal));
+
+        var hdr = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, isHdr: true);
+        Assert.Contains(hdr, x => x.Contains("yadif=deint=1,zscale=t=linear", StringComparison.Ordinal)
+            && x.Contains("tonemap=tonemap=hable", StringComparison.Ordinal)
+            && x.Contains("zscale=t=bt709", StringComparison.Ordinal)
+            && x.IndexOf("tonemap", StringComparison.Ordinal) < x.IndexOf("scale=1280:720", StringComparison.Ordinal));
     }
 
     [Fact]

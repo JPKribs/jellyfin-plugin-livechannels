@@ -79,10 +79,13 @@ public class StreamSessionService
         // changes a playlist produces), and software decoding can't keep up with >1080p sources (e.g. 4K HEVC).
         // So a channel containing any high-resolution item, or one using subtitle burn-in (which needs a
         // per-item filter graph), streams item by item; that path hardware-decodes each item at its own size.
+        // HDR also forces the per-item path: only it tone-maps each item to SDR, so a channel with any HDR item
+        // (even <=1080p) plays with correct colour instead of washed-out grey.
         var highRes = programs.Any(p => p.SourceHeight > 1080);
-        var perItem = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never || highRes;
+        var hasHdr = programs.Any(p => _channels.IsHdrSource(p.ItemId));
+        var perItem = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never || highRes || hasHdr;
         var uniform = programs.Count > 0 && programs[0].SourceHeight > 0 && programs.All(p => p.SourceHeight == programs[0].SourceHeight);
-        LogEncodePlan(channel, programs.Count, index, perItem, uniform);
+        LogEncodePlan(channel, programs.Count, index, perItem, uniform, hasHdr);
 
         if (perItem)
         {
@@ -118,8 +121,12 @@ public class StreamSessionService
             return false;
         }
 
+        // High-resolution and HDR channels take the per-item path (HDR needs per-item tone-mapping), so they
+        // never use the continuous pipe.
         var programs = _channels.ResolvePrograms(channel);
-        return programs.Count > 0 && !programs.Any(p => p.SourceHeight > 1080);
+        return programs.Count > 0
+            && !programs.Any(p => p.SourceHeight > 1080)
+            && !programs.Any(p => _channels.IsHdrSource(p.ItemId));
     }
 
     /// <summary>
@@ -150,7 +157,7 @@ public class StreamSessionService
 
         var (index, _) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow, ScheduleCalculator.Epoch);
         var uniform = programs[0].SourceHeight > 0 && programs.All(p => p.SourceHeight == programs[0].SourceHeight);
-        LogEncodePlan(channel, programs.Count, index, perItem: false, uniform);
+        LogEncodePlan(channel, programs.Count, index, perItem: false, uniform, hasHdr: false);
 
         await StreamConcatAsync(ffmpeg, channel, programs, output: null, pipePath, cancellationToken).ConfigureAwait(false);
     }
@@ -317,7 +324,7 @@ public class StreamSessionService
     // Logs, once per tune-in, exactly how the channel will be encoded — resolution, codec, the resolved
     // hardware/software encoder, and whether decoding is hardware-assisted — so the active pipeline is visible
     // in the logs without enabling debug output.
-    private void LogEncodePlan(Channel channel, int itemCount, int startIndex, bool perItem, bool uniform)
+    private void LogEncodePlan(Channel channel, int itemCount, int startIndex, bool perItem, bool uniform, bool hasHdr)
     {
         var (width, videoCodec, audioCodec) = Plugin.Instance?.ReadConfiguration(c => (c.TranscodeWidth, c.VideoCodec, c.AudioCodec))
             ?? (1280, Models.VideoCodec.H264, Models.AudioCodec.Aac);
@@ -332,7 +339,8 @@ public class StreamSessionService
         var burnIn = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never;
         var pipeline = perItem ? "per-item" : "continuous";
         var burnInForcesSoftware = burnIn && !string.IsNullOrEmpty(profile.DecodeDownload);
-        var hwDecode = profile.DecodeHwaccel is not null && (perItem ? !burnInForcesSoftware : uniform);
+        // HDR is always software-decoded (the 10-bit range must survive to the tone-map).
+        var hwDecode = !hasHdr && profile.DecodeHwaccel is not null && (perItem ? !burnInForcesSoftware : uniform);
         var decode = hwDecode ? profile.DecodeHwaccel! : "software";
 
         _logger.LogInformation(
