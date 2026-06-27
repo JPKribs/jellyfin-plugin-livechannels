@@ -36,13 +36,15 @@ public static class StreamArguments
         string audioEncoder,
         int audioBitrate,
         (int RelativeIndex, bool IsText)? forcedSubtitle,
-        string? externalSubtitlePath = null)
+        string? externalSubtitlePath = null,
+        bool softwareDecode = false)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(video);
         ArgumentNullException.ThrowIfNull(audioEncoder);
 
         var burnIn = forcedSubtitle.HasValue;
+        var hwDecode = !softwareDecode && !string.IsNullOrEmpty(video.DecodeHwaccel);
 
         // +genpts fills in any missing presentation timestamps so each item starts from a clean, monotonic
         // timeline before the offset is applied.
@@ -54,12 +56,19 @@ public static class StreamArguments
             args.Add(init);
         }
 
-        // Hardware-assisted decoding (no output format set, so frames land in system memory for the software
-        // scale/pad). Offloads the heavy decode of 4K/HEVC sources from the CPU.
-        if (!string.IsNullOrEmpty(video.DecodeHwaccel))
+        // Hardware-assisted decoding offloads the heavy decode of 4K/HEVC sources from the CPU. QSV/VAAPI keep
+        // frames on the GPU (an output format plus a leading hwdownload, below, brings them back for the software
+        // scale); VideoToolbox auto-downloads. The caller can force software decode (the per-item fallback when a
+        // hardware decode fails, and for subtitle burn-in whose overlay needs system frames the simple way).
+        if (hwDecode)
         {
             args.Add("-hwaccel");
-            args.Add(video.DecodeHwaccel);
+            args.Add(video.DecodeHwaccel!);
+            if (!string.IsNullOrEmpty(video.DecodeOutputFormat))
+            {
+                args.Add("-hwaccel_output_format");
+                args.Add(video.DecodeOutputFormat);
+            }
         }
 
         var hasOffset = offset > TimeSpan.Zero;
@@ -99,7 +108,9 @@ public static class StreamArguments
         // progressive frames and clears the interlaced frame flag. deint=1 only touches flagged frames, so
         // progressive content passes through untouched. The encoder is also told the output is progressive via
         // -field_order below; the frame flag alone is not enough on every encoder (see that line).
-        var scale = "yadif=deint=1,scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
+        // When the decoder kept frames on the GPU, bring them back to system memory before the software scale.
+        var download = hwDecode ? video.DecodeDownload : string.Empty;
+        var scale = download + "yadif=deint=1,scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
             + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30,setparams=field_mode=prog," + video.PixelStage;
 
         if (burnIn)
@@ -202,12 +213,18 @@ public static class StreamArguments
         }
 
         // Hardware-decode the playlist when the caller allows it (every item is the same resolution, so the one
-        // shared decoder never hits a mid-stream resolution change it cannot follow). Frames land in system
-        // memory for the software scale, the same as the per-item path.
-        if (!string.IsNullOrEmpty(decodeHwaccel))
+        // shared decoder never hits a mid-stream resolution change it cannot follow). QSV/VAAPI keep frames on
+        // the GPU; the output format plus the leading hwdownload (below) bring them back for the software scale.
+        var hwDecode = !string.IsNullOrEmpty(decodeHwaccel);
+        if (hwDecode)
         {
             args.Add("-hwaccel");
-            args.Add(decodeHwaccel);
+            args.Add(decodeHwaccel!);
+            if (!string.IsNullOrEmpty(video.DecodeOutputFormat))
+            {
+                args.Add("-hwaccel_output_format");
+                args.Add(video.DecodeOutputFormat);
+            }
         }
 
         if (offset > TimeSpan.Zero)
@@ -229,8 +246,10 @@ public static class StreamArguments
         var h = height.ToString(CultureInfo.InvariantCulture);
         args.Add("-vf");
         // Deinterlace first (see Build): clears the interlaced flag so Jellyfin's re-transcode stays progressive
-        // and does not add a deinterlace_vaapi pass that fails on QSV.
-        args.Add("yadif=deint=1,scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
+        // and does not add a deinterlace_vaapi pass that fails on QSV. The leading download (when present) brings
+        // hardware-decoded frames back to system memory for the software scale.
+        var download = hwDecode ? video.DecodeDownload : string.Empty;
+        args.Add(download + "yadif=deint=1,scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
             + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30,setparams=field_mode=prog," + video.PixelStage);
 
         var br = bitrate.ToString(CultureInfo.InvariantCulture);

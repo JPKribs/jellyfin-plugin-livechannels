@@ -82,7 +82,7 @@ public class StreamSessionService
         var highRes = programs.Any(p => p.SourceHeight > 1080);
         var perItem = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never || highRes;
         var uniform = programs.Count > 0 && programs[0].SourceHeight > 0 && programs.All(p => p.SourceHeight == programs[0].SourceHeight);
-        LogEncodePlan(channel, programs.Count, index, perItem, highRes, uniform);
+        LogEncodePlan(channel, programs.Count, index, perItem, uniform);
 
         if (perItem)
         {
@@ -141,7 +141,7 @@ public class StreamSessionService
 
         var (index, _) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow, ScheduleCalculator.Epoch);
         var uniform = programs[0].SourceHeight > 0 && programs.All(p => p.SourceHeight == programs[0].SourceHeight);
-        LogEncodePlan(channel, programs.Count, index, perItem: false, highRes: false, uniform);
+        LogEncodePlan(channel, programs.Count, index, perItem: false, uniform);
 
         await StreamConcatAsync(ffmpeg, channel, programs, output: null, pipePath, cancellationToken).ConfigureAwait(false);
     }
@@ -308,7 +308,7 @@ public class StreamSessionService
     // Logs, once per tune-in, exactly how the channel will be encoded — resolution, codec, the resolved
     // hardware/software encoder, and whether decoding is hardware-assisted — so the active pipeline is visible
     // in the logs without enabling debug output.
-    private void LogEncodePlan(Channel channel, int itemCount, int startIndex, bool perItem, bool highRes, bool uniform)
+    private void LogEncodePlan(Channel channel, int itemCount, int startIndex, bool perItem, bool uniform)
     {
         var (width, videoCodec, audioCodec) = Plugin.Instance?.ReadConfiguration(c => (c.TranscodeWidth, c.VideoCodec, c.AudioCodec))
             ?? (1280, Models.VideoCodec.H264, Models.AudioCodec.Aac);
@@ -316,13 +316,15 @@ public class StreamSessionService
         var profile = _encoders.ResolveVideo(videoCodec, allowHardware: true);
         var (audioEncoder, _) = EncoderResolver.ResolveAudio(audioCodec);
 
-        // Decode follows the server's hardware acceleration: the per-item path hardware-decodes (unless it is
-        // burning in a 1080p subtitle, which forces software for the filter graph), and the continuous pipeline
-        // hardware-decodes when every item is the same resolution, otherwise software.
+        // Decode follows the server's hardware acceleration. The per-item path hardware-decodes each item, except
+        // subtitle burn-in on a GPU-resident decoder (QSV/VAAPI), which composites in software. The continuous
+        // pipeline hardware-decodes only when every item is the same resolution. Either way, software is used when
+        // no hardware decoder is configured (and the paths fall back to software if a hardware decode fails).
         var burnIn = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never;
         var pipeline = perItem ? "per-item" : "continuous";
-        var hwDecode = perItem ? !burnIn || highRes : uniform;
-        var decode = hwDecode ? profile.DecodeHwaccel ?? "software" : "software";
+        var burnInForcesSoftware = burnIn && !string.IsNullOrEmpty(profile.DecodeDownload);
+        var hwDecode = profile.DecodeHwaccel is not null && (perItem ? !burnInForcesSoftware : uniform);
+        var decode = hwDecode ? profile.DecodeHwaccel! : "software";
 
         _logger.LogInformation(
             "Live Channels: streaming {Name} ({Items} items) at {Width}x{Height} via {Encoder} ({Mode} encode, {Decode} decode, {Pipeline}), audio {Audio}, from item {Index}/{Items}",
@@ -365,8 +367,18 @@ public class StreamSessionService
             }
         }
 
-        var args = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath);
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false);
         var total = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken).ConfigureAwait(false);
+
+        // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
+        // nothing (e.g. a codec the GPU can't decode) once in software, so one bad item can't blank the channel.
+        if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
+            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true);
+            total = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken).ConfigureAwait(false);
+        }
+
         return total > 0;
     }
 
@@ -557,7 +569,7 @@ public class StreamSessionService
         return total;
     }
 
-    private List<string> BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath)
+    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode)
     {
         // Read just the scalars we need inside the config lock, rather than holding a reference to the live
         // (mutable, shared) configuration object after the lock releases.
@@ -565,13 +577,19 @@ public class StreamSessionService
             (c.TranscodeWidth, c.TranscodeVideoBitrateKbps, c.VideoCodec, c.AudioCodec))
             ?? (1280, 4000, Models.VideoCodec.H264, Models.AudioCodec.Aac);
 
-        // Burning a subtitle uses a software overlay filter, which wants software-decoded frames. For a 1080p
-        // source that is cheap, so decode in software. But a high-resolution source (4K/HEVC) is too slow to
-        // software-decode, so hardware-decode it (frames download to system memory) and overlay there instead.
+        // The hardware encoder still applies to burn-in; only the decode side cares about the overlay.
         var allowHardware = !forcedSubtitle.HasValue || sourceHeight > 1080;
         var video = _encoders.ResolveVideo(videoCodec, allowHardware);
         var (audioEncoder, audioBitrate) = EncoderResolver.ResolveAudio(audioCodec);
-        return StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath);
+
+        // Burning a subtitle composites on software frames. VideoToolbox auto-downloads so it can still
+        // hardware-decode, but a decoder that keeps frames on the GPU (QSV/VAAPI) would need its hwdownload to sit
+        // before the overlay; rather than thread that ordering through the filter graph, decode burn-in in
+        // software for those. The caller can also force software decode for the per-item hardware-decode fallback.
+        var forceSoftware = softwareDecode || (forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeDownload));
+        var hardwareDecode = !forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel);
+        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware);
+        return (args, hardwareDecode);
     }
 
     private static async Task<string> ReadStandardErrorAsync(Process process, CancellationToken cancellationToken)

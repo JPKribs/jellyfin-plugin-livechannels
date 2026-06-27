@@ -45,6 +45,39 @@ public class StreamArgumentsTests
         Assert.True(Pair(StreamArguments.BuildConcat("/tmp/list.txt", default, 1280, 4000, SoftwareH264, "aac", 192), "-field_order", "progressive"));
     }
 
+    private static readonly VideoEncoderProfile QsvStyle = new(
+        "h264_qsv", "QSV", true, Array.Empty<string>(), Array.Empty<string>(), "format=nv12,hwupload", false,
+        DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12,");
+
+    [Fact]
+    public void HardwareDecode_GpuResident_DownloadsBeforeScale_AndSetsOutputFormat()
+    {
+        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, QsvStyle, "aac", 192, null);
+        Assert.True(Pair(a, "-hwaccel", "qsv"));
+        Assert.True(Pair(a, "-hwaccel_output_format", "qsv"));
+        Assert.True(a.IndexOf("-hwaccel") < a.IndexOf("-i"));
+        Assert.Contains(a, x => x.StartsWith("hwdownload,format=nv12,", StringComparison.Ordinal) && x.Contains("scale=1280:720", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SoftwareDecodeOverride_OmitsHardwareDecode()
+    {
+        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, QsvStyle, "aac", 192, null, null, softwareDecode: true);
+        Assert.DoesNotContain("-hwaccel", a);
+        Assert.DoesNotContain("-hwaccel_output_format", a);
+        Assert.DoesNotContain(a, x => x.Contains("hwdownload", StringComparison.Ordinal));
+        Assert.True(Pair(a, "-c:v", "h264_qsv")); // hardware ENCODE is still used
+    }
+
+    [Fact]
+    public void Concat_HardwareDecode_DownloadsBeforeScale()
+    {
+        var a = StreamArguments.BuildConcat("/tmp/list.txt", default, 1280, 4000, QsvStyle, "aac", 192, decodeHwaccel: "qsv");
+        Assert.True(Pair(a, "-hwaccel", "qsv"));
+        Assert.True(Pair(a, "-hwaccel_output_format", "qsv"));
+        Assert.Contains(a, x => x.StartsWith("hwdownload,format=nv12,", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void AlwaysTranscodes_Libx264_8bit_ConstantScale_NeverCopies()
     {
