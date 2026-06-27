@@ -89,8 +89,6 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
             EmbeddedResourcePath = $"{ns}.Configuration.livechannels_settings.js"
         };
 
-        // The Material Symbols font, so the channels page can preview symbol logos with the same glyphs the
-        // server draws into the guide.
         yield return new PluginPageInfo
         {
             Name = "livechannels_symbols.ttf",
