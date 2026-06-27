@@ -79,6 +79,35 @@ public class StreamArgumentsTests
     }
 
     [Fact]
+    public void Hdr_OnIntelHardware_UsesVaapiTonemapPipeline()
+    {
+        // HDR on a QSV/VAAPI encoder must tone-map on the GPU (validated at ~2x realtime on an N100): VAAPI decode,
+        // tonemap_vaapi, scale/pad on VAAPI, hwmap to QSV. No software zscale tone-map.
+        var a = StreamArguments.Build("/m.mkv", default, default, 1920, 8000, QsvStyle, "aac", 192, null, null, false, isHdr: true);
+        Assert.True(Pair(a, "-hwaccel", "vaapi"));
+        Assert.Contains("vaapi=va:,vendor_id=0x8086,driver=iHD", a);
+        var vf = a[a.IndexOf("-vf") + 1];
+        Assert.Contains("tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709", vf, StringComparison.Ordinal);
+        Assert.Contains("scale_vaapi=w=1920:h=1080:force_original_aspect_ratio=decrease", vf, StringComparison.Ordinal);
+        Assert.Contains("pad_vaapi=1920:1080", vf, StringComparison.Ordinal);
+        Assert.Contains("fps=30,hwmap=derive_device=qsv,format=qsv", vf, StringComparison.Ordinal);
+        Assert.DoesNotContain("zscale", vf, StringComparison.Ordinal);
+        Assert.True(Pair(a, "-c:v", "h264_qsv"));
+        Assert.True(Pair(a, "-field_order", "progressive"));
+    }
+
+    [Fact]
+    public void Hdr_SoftwareFallback_UsesSoftwareTonemap_NotVaapi()
+    {
+        // The per-item fallback (softwareDecode) drops HDR back to the software zscale tone-map, no VAAPI.
+        var a = StreamArguments.Build("/m.mkv", default, default, 1920, 8000, QsvStyle, "aac", 192, null, null, softwareDecode: true, isHdr: true);
+        Assert.DoesNotContain("-hwaccel", a);
+        var vf = a[a.IndexOf("-vf") + 1];
+        Assert.Contains("tonemap=tonemap=hable", vf, StringComparison.Ordinal);
+        Assert.DoesNotContain("tonemap_vaapi", vf, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AlwaysTranscodes_Libx264_8bit_ConstantScale_NeverCopies()
     {
         var a = Build();

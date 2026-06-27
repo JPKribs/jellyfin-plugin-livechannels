@@ -352,9 +352,12 @@ public class StreamSessionService
         var burnIn = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never;
         var pipeline = perItem ? "per-item" : "continuous";
         var burnInForcesSoftware = burnIn && !string.IsNullOrEmpty(profile.DecodeDownload);
-        // HDR is always software-decoded (the 10-bit range must survive to the tone-map).
+        var intelHardware = profile.Name.Contains("qsv", StringComparison.Ordinal) || profile.Name.Contains("vaapi", StringComparison.Ordinal);
         var hwDecode = !hasHdr && profile.DecodeHwaccel is not null && (perItem ? !burnInForcesSoftware : uniform);
-        var decode = hwDecode ? profile.DecodeHwaccel! : "software";
+        // HDR on Intel hardware tone-maps on the GPU (VAAPI); HDR elsewhere tone-maps in software.
+        var decode = hasHdr
+            ? (intelHardware && !burnIn ? "vaapi (HDR)" : "software (HDR)")
+            : (hwDecode ? profile.DecodeHwaccel! : "software");
 
         _logger.LogInformation(
             "Live Channels: streaming {Name} ({Items} items) at {Width}x{Height} via {Encoder} ({Mode} encode, {Decode} decode, {Pipeline}), audio {Audio}, from item {Index}/{Items}",
@@ -613,13 +616,18 @@ public class StreamSessionService
         var video = _encoders.ResolveVideo(videoCodec, allowHardware);
         var (audioEncoder, audioBitrate) = EncoderResolver.ResolveAudio(audioCodec);
 
-        // Burning a subtitle composites on software frames. VideoToolbox auto-downloads so it can still
-        // hardware-decode, but a decoder that keeps frames on the GPU (QSV/VAAPI) would need its hwdownload to sit
-        // before the overlay; rather than thread that ordering through the filter graph, decode burn-in in
-        // software for those. HDR is also decoded in software: a hardware download to nv12 would clip the 10-bit
-        // HDR range before the tone-map can map it to SDR. The caller can also force software for the fallback.
-        var forceSoftware = softwareDecode || isHdr || (forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeDownload));
-        var hardwareDecode = !forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel);
+        // HDR on an Intel hardware encoder (QSV/VAAPI) tone-maps on the GPU (handled inside Build) and must NOT be
+        // forced to software. HDR anywhere else (VideoToolbox/NVENC/software) and HDR burn-in tone-map in software,
+        // which needs software-decoded frames. Burn-in on a GPU-resident decoder also forces software (the overlay
+        // needs system frames). The caller can force software for the per-item fallback.
+        var intelHardware = video.Name.Contains("qsv", StringComparison.Ordinal) || video.Name.Contains("vaapi", StringComparison.Ordinal);
+        var usesHdrVaapi = isHdr && intelHardware && !forcedSubtitle.HasValue && !softwareDecode;
+        var hdrNeedsSoftware = isHdr && !usesHdrVaapi;
+        var forceSoftware = softwareDecode || hdrNeedsSoftware || (forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeDownload));
+
+        // The HDR VAAPI path runs on hardware, so a failure should fall back to software exactly like a hardware
+        // decode does (StreamItemAsync retries with softwareDecode).
+        var hardwareDecode = usesHdrVaapi || (!forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel));
         var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr);
         return (args, hardwareDecode);
     }
