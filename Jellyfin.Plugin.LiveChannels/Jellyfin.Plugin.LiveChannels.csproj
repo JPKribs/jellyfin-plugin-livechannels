@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.LiveChannels</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Nullable>enable</Nullable>
+    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <CodeAnalysisRuleSet>../jellyfin.ruleset</CodeAnalysisRuleSet>
+    <NoWarn>NU1605;CA1002;CA2227;CA1305</NoWarn>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Jellyfin.Plugin.LiveChannels.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.10">
+      <PrivateAssets>all</PrivateAssets>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="Jellyfin.Model" Version="10.11.10">
+      <PrivateAssets>all</PrivateAssets>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="JPKribs.Jellyfin.Base" Version="2026.6.23" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Admin dashboard page -->
+    <EmbeddedResource Include="Configuration\livechannels_channels.html" />
+    <EmbeddedResource Include="Configuration\livechannels_channels.js" />
+    <EmbeddedResource Include="Configuration\livechannels_settings.html" />
+    <EmbeddedResource Include="Configuration\livechannels_settings.js" />
+  </ItemGroup>
+
+</Project>

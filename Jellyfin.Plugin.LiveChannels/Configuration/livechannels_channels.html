@@ -1,0 +1,210 @@
+<div id="LiveChannelsPage" data-role="page"
+     class="page type-interior pluginConfigurationPage withTabs"
+     data-require="emby-input,emby-button,emby-checkbox,emby-select"
+     data-controller="__plugin/livechannels_channels.js">
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="LiveChannelsForm">
+                <div class="verticalSection verticalSection-extrabottompadding">
+
+                    <div class="sectionTitleContainer flex align-items-center">
+                        <h1 class="sectionTitle">Live Channels</h1>
+                    </div>
+
+                    <div class="fieldDescription">
+                        Create a looping virtual channel from media in your library. Set the output resolution, codecs, and bitrate in the <strong>Settings</strong> tab.
+                    </div>
+
+                    <div id="channelCounts" class="jpk-cards"></div>
+
+                    <!-- Channel selector -->
+                    <div class="jpk-selector">
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="selectChannel">Channel</label>
+                            <select id="selectChannel" class="jpk-selector-dropdown"></select>
+                        </div>
+                        <div class="jpk-selector-actions">
+                            <button is="emby-button" type="button" id="btnNewChannel" class="raised jpk-icon-btn jpk-button-submit" title="New channel">
+                                <span class="material-icons" aria-hidden="true">add</span><span>New</span>
+                            </button>
+                            <button is="emby-button" type="button" id="btnEnable" class="raised jpk-icon-btn" title="Toggle enabled">
+                                <span class="material-icons" aria-hidden="true">visibility</span><span id="enableLabel">Enabled</span>
+                            </button>
+                            <button is="emby-button" type="button" id="btnDeleteChannel" class="raised jpk-icon-btn jpk-button-destructive" title="Delete channel">
+                                <span class="material-icons" aria-hidden="true">delete</span><span>Delete</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="emptyState" class="jpk-empty-section hidden">No channels yet. Click <strong>New</strong> to create one.</div>
+
+                    <!-- Channel editor -->
+                    <div id="channelEditor" class="hidden">
+
+                        <!-- Channel basics -->
+                        <div class="jpk-collapsible-section">
+                            <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionChannel">
+                                <span class="jpk-collapsible-title">Channel</span>
+                                <span class="jpk-collapsible-icon">&#9660;</span>
+                            </button>
+                            <div id="sectionChannel" class="jpk-collapsible-content collapsed">
+                                <div class="inputContainer">
+                                    <label for="channelName">Name</label>
+                                    <input is="emby-input" type="text" id="channelName" autocomplete="off" />
+                                </div>
+                                <div class="inputContainer">
+                                    <label for="channelNumber">Channel number</label>
+                                    <input is="emby-input" type="number" id="channelNumber" min="1" step="1" autocomplete="off" />
+                                </div>
+                                <div class="inputContainer">
+                                    <label>Logo</label>
+                                    <div class="jpk-selector">
+                                        <img id="logoPreview" alt="Channel logo" class="jpk-logo-preview hidden" style="width:128px;height:128px;border-radius:8px;object-fit:cover;background:rgba(255,255,255,0.04);" />
+                                        <div class="jpk-selector-actions">
+                                            <button is="emby-button" type="button" id="btnUploadLogo" class="raised jpk-icon-btn" title="Upload image">
+                                                <span class="material-icons" aria-hidden="true">upload</span><span>Upload</span>
+                                            </button>
+                                            <button is="emby-button" type="button" id="btnClearLogo" class="raised jpk-icon-btn jpk-button-destructive hidden" title="Remove image">
+                                                <span class="material-icons" aria-hidden="true">delete</span><span>Clear</span>
+                                            </button>
+                                        </div>
+                                        <input type="file" id="logoFile" accept="image/*" class="hidden" />
+                                    </div>
+                                    <div class="fieldDescription">Upload a custom square logo for this channel.</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Content -->
+                        <div class="jpk-collapsible-section">
+                            <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionContent">
+                                <span class="jpk-collapsible-title">Content</span>
+                                <span class="jpk-collapsible-icon">&#9660;</span>
+                            </button>
+                            <div id="sectionContent" class="jpk-collapsible-content collapsed">
+                                <div class="fieldDescription">This channel will contain content from the libraries configured below.</div>
+                                <div id="librarySources" class="jpk-source-list"></div>
+                                <div class="jpk-selector-actions jpk-section-spacer">
+                                    <button is="emby-button" type="button" id="btnAddLibrary" class="raised jpk-icon-btn jpk-button-submit" title="Add a source">
+                                        <span class="material-icons" aria-hidden="true">add</span><span>Add source</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Channel settings -->
+                        <div class="jpk-collapsible-section">
+                            <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionSettings">
+                                <span class="jpk-collapsible-title">Channel settings</span>
+                                <span class="jpk-collapsible-icon">&#9660;</span>
+                            </button>
+                            <div id="sectionSettings" class="jpk-collapsible-content collapsed">
+                                <div class="selectContainer">
+                                    <label class="selectLabel">Guide categories</label>
+                                    <div id="channelCategoriesMount"></div>
+                                    <div class="fieldDescription">Tag this channel so it appears under those filters in the Live TV guide. None by default.</div>
+                                </div>
+                                <div class="selectContainer">
+                                    <label class="selectLabel" for="subtitleBurnIn">Subtitle burn in</label>
+                                    <select is="emby-select" id="subtitleBurnIn" class="jpk-selector-dropdown">
+                                        <option value="Never">Never</option>
+                                        <option value="Forced">Forced only</option>
+                                        <option value="Always">Always</option>
+                                    </select>
+                                    <div class="fieldDescription">Burns a subtitle into the video for everyone. <strong>Always</strong> falls back to the default track when none is forced.</div>
+                                </div>
+                                <div class="selectContainer">
+                                    <label class="selectLabel" for="maxRating">Maximum age rating</label>
+                                    <select id="maxRating" class="jpk-selector-dropdown"></select>
+                                    <div class="fieldDescription">Content at or below this rating. Unrated is always allowed.</div>
+                                </div>
+                                <div class="inputContainer">
+                                    <label for="episodesPerBlock">Episodes per block</label>
+                                    <input is="emby-input" type="number" id="episodesPerBlock" min="1" step="1" autocomplete="off" />
+                                    <div class="fieldDescription">Consecutive episodes per series before moving on. 1 disables grouping.</div>
+                                </div>
+                                <div class="selectContainer">
+                                    <label class="selectLabel" for="episodeOrder">Episode order</label>
+                                    <select id="episodeOrder" class="jpk-selector-dropdown">
+                                        <option value="air">Air order</option>
+                                        <option value="random">Random</option>
+                                    </select>
+                                </div>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input type="checkbox" is="emby-checkbox" id="keepMultiPart" />
+                                        <span class="checkboxLabel">Keep multipart episodes together</span>
+                                    </label>
+                                    <div class="fieldDescription">Keeps two part episodes together across a block boundary.</div>
+                                </div>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input type="checkbox" is="emby-checkbox" id="includeSpecials" />
+                                        <span class="checkboxLabel">Include specials</span>
+                                    </label>
+                                    <div class="fieldDescription">Includes specials found in series.</div>
+                                </div>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input type="checkbox" is="emby-checkbox" id="shuffle" />
+                                        <span class="checkboxLabel">Shuffle the channel</span>
+                                    </label>
+                                    <div class="fieldDescription">Disable to play everything alphabetically.</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Save -->
+                        <div class="lc-save-actions">
+                            <button is="emby-button" type="button" id="btnSaveChannel" class="raised block jpk-button-submit">
+                                <span>Save channel</span>
+                            </button>
+                        </div>
+                        <span id="channelStatus" class="jpk-status-text"></span>
+                    </div>
+
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <style>
+        /* Full-width save with no extra divider (the last collapsible header already draws one). The button
+           uses Jellyfin's native "block" class for full width and centred text. */
+        .lc-save-actions { margin-top: 16px; }
+
+        /* Genre chips: selected chips above the picker, styled like UserManagement's tags. */
+        .jpk-chip-select { display: flex; flex-direction: column; }
+        .jpk-chip-select .jpk-tags { gap: 6px; margin: 0 0 8px 0; }
+        .jpk-chip-select .jpk-tags:empty { display: none; margin: 0; }
+        .jpk-chip-select .jpk-tag {
+            gap: 8px; background: var(--jpk-blue-bg); color: #fff;
+            border: 1px solid rgba(52, 152, 219, 0.5); border-radius: 14px;
+            padding: 3px 4px 3px 12px; font-size: 0.9em; line-height: 1.6;
+        }
+        .jpk-chip-select .jpk-tag-remove {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 18px; height: 18px; padding: 0; border-radius: 50%;
+            background: rgba(255, 255, 255, 0.12); color: #fff; opacity: 1; font-size: 1em; line-height: 1;
+        }
+        .jpk-chip-select .jpk-tag-remove:hover { background: var(--jpk-red-fg); color: #fff; opacity: 1; }
+
+        /* Library source cards, modelled on ServerSync's mapping card. Rows, thumbs, fields, subsection
+           titles, and buttons all come from the base (jpkribs_shared); this is layout glue only. */
+        .jpk-source-list { display: flex; flex-direction: column; margin-top: 8px; }
+        .lc-source { padding-bottom: 1.25em; margin-bottom: 1.25em; border-bottom: 1px solid var(--jpk-border); }
+        .lc-source:last-child { border-bottom: none; margin-bottom: 0.5em; }
+        .lc-source-header { display: flex; align-items: center; gap: 10px; margin-bottom: 1em; }
+        .lc-source-icon { color: rgba(255, 255, 255, 0.45); flex: 0 0 auto; }
+        .lc-source-library { flex: 1; min-width: 0; margin: 0; }
+        .lc-matchall-label { display: flex; align-items: center; margin-top: 10px; }
+        .lc-filter-header { display: flex; align-items: center; gap: 12px; margin-bottom: 0.6em; }
+        .lc-filter-header label { font-weight: 600; white-space: nowrap; margin: 0; }
+        .lc-filter-header select { max-width: 260px; }
+        #librarySources .jpk-table-body { max-height: 360px; overflow-y: auto; margin-top: 0.6em; }
+        #librarySources .jpk-table-row { cursor: pointer; }
+        #librarySources .jpk-table-row.selected { background: rgba(0, 164, 220, 0.12); }
+    </style>
+
+    <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">
+</div>

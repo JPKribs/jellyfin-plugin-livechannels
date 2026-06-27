@@ -1,0 +1,89 @@
+name: '🚀 Publish Plugin'
+
+on:
+  release:
+    types:
+      - released
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Get Release Info
+        id: release_info
+        run: |
+          # Extract version and targetAbi from build.yaml
+          BUILD_VERSION=$(grep '^version:' build.yaml | sed 's/version: *"\?\([^"]*\)"\?.*/\1/' | tr -d '"')
+          TARGET_ABI=$(grep '^targetAbi:' build.yaml | sed 's/targetAbi: *"\?\([^"]*\)"\?.*/\1/' | tr -d '"')
+
+          # Try to download the checksum file from the release assets
+          ASSET_URL="https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/${{ github.event.release.tag_name }}/jellyfin-plugin-livechannels-${BUILD_VERSION}.zip.md5"
+          echo "Trying to download checksum from: ${ASSET_URL}"
+
+          CHECKSUM=$(curl -sfL "${ASSET_URL}" 2>/dev/null || echo "")
+
+          # If curl failed or returned empty, calculate checksum ourselves
+          if [ -z "$CHECKSUM" ]; then
+            echo "Checksum download failed, calculating from ZIP file..."
+            ZIP_URL="https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/${{ github.event.release.tag_name }}/jellyfin-plugin-livechannels-${BUILD_VERSION}.zip"
+            curl -L -o temp_plugin.zip "${ZIP_URL}"
+            CHECKSUM=$(md5sum temp_plugin.zip | cut -d' ' -f1)
+            rm temp_plugin.zip
+          fi
+
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          echo "Build Version: ${BUILD_VERSION}"
+          echo "Target ABI: ${TARGET_ABI}"
+          echo "Checksum: ${CHECKSUM}"
+
+          echo "build_version=${BUILD_VERSION}" >> $GITHUB_OUTPUT
+          echo "target_abi=${TARGET_ABI}" >> $GITHUB_OUTPUT
+          echo "checksum=${CHECKSUM}" >> $GITHUB_OUTPUT
+          echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+
+      - name: Update Manifest
+        run: |
+          # Sanitize changelog by removing backticks
+          SANITIZED_CHANGELOG=$(echo "${{ github.event.release.body }}" | tr -d '\`')
+
+          # Use jq to safely construct the JSON object
+          NEW_VERSION=$(jq -n \
+            --arg version "${{ steps.release_info.outputs.build_version }}" \
+            --arg changelog "$SANITIZED_CHANGELOG" \
+            --arg targetAbi "${{ steps.release_info.outputs.target_abi }}" \
+            --arg sourceUrl "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/${{ github.event.release.tag_name }}/jellyfin-plugin-livechannels-${{ steps.release_info.outputs.build_version }}.zip" \
+            --arg checksum "${{ steps.release_info.outputs.checksum }}" \
+            --arg timestamp "${{ steps.release_info.outputs.timestamp }}" \
+            '{
+              version: $version,
+              changelog: $changelog,
+              targetAbi: $targetAbi,
+              sourceUrl: $sourceUrl,
+              checksum: $checksum,
+              timestamp: $timestamp
+            }')
+
+          # Add new version to the beginning of versions array
+          jq --argjson newVersion "$NEW_VERSION" '.[0].versions = [$newVersion] + .[0].versions' manifest.json > manifest_temp.json
+          mv manifest_temp.json manifest.json
+
+      - name: Commit Changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add manifest.json
+          git commit -m "Update manifest for release ${{ github.event.release.tag_name }}" || exit 0
+          git push origin HEAD:master

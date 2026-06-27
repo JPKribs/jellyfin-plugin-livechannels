@@ -1,0 +1,163 @@
+name: '📝 Create/Update Release Draft'
+
+on:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - build.yaml
+  workflow_dispatch:
+  repository_dispatch:
+    types:
+      - update-prep-command
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Get Build Info
+        id: build_info
+        run: |
+          BUILD_VERSION=$(grep '^version:' build.yaml | sed 's/version: *"\?\([^"]*\)"\?.*/\1/' | tr -d '"')
+          echo "build_version=${BUILD_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Check Existing Releases
+        id: check_releases
+        run: |
+          VERSION="${{ steps.build_info.outputs.build_version }}"
+          TAG="v${VERSION}"
+
+          # Check if any release (draft or published) exists with this tag
+          RELEASE_INFO=$(gh release view "${TAG}" --json isDraft 2>/dev/null || echo "not_found")
+
+          if [ "$RELEASE_INFO" = "not_found" ]; then
+            echo "No existing release for ${TAG} - will create new draft"
+            echo "action=create" >> $GITHUB_OUTPUT
+            echo "final_version=${VERSION}" >> $GITHUB_OUTPUT
+          else
+            IS_DRAFT=$(echo "$RELEASE_INFO" | jq -r '.isDraft')
+            if [ "$IS_DRAFT" = "true" ]; then
+              echo "Draft ${TAG} exists - will update it"
+              echo "action=update" >> $GITHUB_OUTPUT
+              echo "final_version=${VERSION}" >> $GITHUB_OUTPUT
+            else
+              # Published release exists - bump the build/bug part (4th segment).
+              # Version scheme is JJ.JJ.F.B (Jellyfin.Jellyfin.Feature.Build); an
+              # auto-increment is always a patch, so only the build part advances.
+              JF_MAJOR=$(echo $VERSION | cut -d. -f1)
+              JF_MINOR=$(echo $VERSION | cut -d. -f2)
+              FEATURE=$(echo $VERSION | cut -d. -f3)
+              BUILD=$(echo $VERSION | cut -d. -f4)
+              NEW_VERSION="${JF_MAJOR}.${JF_MINOR}.${FEATURE}.$((BUILD + 1))"
+              echo "Published ${TAG} exists - incrementing to v${NEW_VERSION}"
+              echo "action=increment" >> $GITHUB_OUTPUT
+              echo "final_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+            fi
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Version (if incrementing)
+        if: steps.check_releases.outputs.action == 'increment'
+        run: |
+          NEW_VERSION="${{ steps.check_releases.outputs.final_version }}"
+
+          echo "Updating build.yaml version to ${NEW_VERSION}"
+
+          # Update build.yaml (single source of truth for version)
+          sed -i "s/^version: .*/version: \"${NEW_VERSION}\"/" build.yaml
+
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add build.yaml
+          git commit -m "Auto-increment version to ${NEW_VERSION}"
+          git push
+
+      - name: Build Plugin
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Extract Changelog
+        id: changelog
+        run: |
+          # Extract changelog using Python for better YAML parsing
+          CHANGELOG=$(python3 << 'PYEOF'
+          import yaml
+
+          with open('build.yaml', 'r') as f:
+              data = yaml.safe_load(f)
+
+          changelog = data.get('changelog', '')
+          output = []
+
+          # Handle both string and dict formats
+          if isinstance(changelog, str):
+              # Simple string changelog
+              output.append(changelog.strip())
+          elif isinstance(changelog, dict):
+              # Categorized changelog
+              for category, items in changelog.items():
+                  if isinstance(items, list):
+                      output.append(f"\n## {category.capitalize()}")
+                      for item in items:
+                          output.append(f"- {item}")
+
+          print('\n'.join(output))
+          PYEOF
+          )
+
+          # Save changelog to file to avoid shell escaping issues
+          echo "$CHANGELOG" > /tmp/changelog.md
+
+      - name: Create or Update Draft Release
+        run: |
+          FINAL_VERSION="${{ steps.check_releases.outputs.final_version }}"
+          TAG="v${FINAL_VERSION}"
+          ACTION="${{ steps.check_releases.outputs.action }}"
+          CHANGELOG=$(cat /tmp/changelog.md)
+
+          if [ "$ACTION" = "update" ]; then
+            echo "Updating existing draft release ${TAG}"
+
+            # Delete old assets if they exist
+            gh release view "${TAG}" --json assets --jq '.assets[].name' | while read asset; do
+              if [[ "$asset" == *"jellyfin-plugin-livechannels"* ]]; then
+                echo "Deleting old asset: $asset"
+                gh release delete-asset "${TAG}" "$asset" -y || true
+              fi
+            done
+
+            # Update release notes
+            gh release edit "${TAG}" --notes "${CHANGELOG}"
+          else
+            echo "Creating new draft release ${TAG}"
+            gh release create "${TAG}" \
+              --draft \
+              --title "${TAG}" \
+              --notes "${CHANGELOG}"
+          fi
+
+          # Upload new assets
+          gh release upload "${TAG}" \
+            ./dist/jellyfin-plugin-livechannels-${FINAL_VERSION}.zip \
+            ./dist/jellyfin-plugin-livechannels-${FINAL_VERSION}.zip.md5 \
+            --clobber
+
+          echo "Successfully uploaded assets to ${TAG}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
