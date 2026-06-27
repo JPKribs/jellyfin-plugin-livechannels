@@ -81,9 +81,15 @@ public class StreamSessionService
         // per-item filter graph), streams item by item; that path hardware-decodes each item at its own size.
         // HDR also forces the per-item path: only it tone-maps each item to SDR, so a channel with any HDR item
         // (even <=1080p) plays with correct colour instead of washed-out grey.
+        // A GPU-upload encoder (QSV/VAAPI, whose pixel stage ends in hwupload) cannot survive the filter-graph
+        // reinit the concat demuxer triggers when the playlist crosses a resolution/format change: the hwupload
+        // fails to re-init ("Impossible to convert between formats", exit 218). The per-item path runs one ffmpeg
+        // per item, so there is no mid-stream reinit. Force those encoders per-item.
+        var videoCodec = Plugin.Instance?.ReadConfiguration(c => c.VideoCodec) ?? Models.VideoCodec.H264;
+        var usesHwUpload = _encoders.ResolveVideo(videoCodec, allowHardware: true).PixelStage.Contains("hwupload", StringComparison.Ordinal);
         var highRes = programs.Any(p => p.SourceHeight > 1080);
         var hasHdr = programs.Any(p => _channels.IsHdrSource(p.ItemId));
-        var perItem = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never || highRes || hasHdr;
+        var perItem = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never || highRes || hasHdr || usesHwUpload;
         var uniform = programs.Count > 0 && programs[0].SourceHeight > 0 && programs.All(p => p.SourceHeight == programs[0].SourceHeight);
         LogEncodePlan(channel, programs.Count, index, perItem, uniform, hasHdr);
 
@@ -121,8 +127,15 @@ public class StreamSessionService
             return false;
         }
 
-        // High-resolution and HDR channels take the per-item path (HDR needs per-item tone-mapping), so they
-        // never use the continuous pipe.
+        // High-resolution, HDR, and GPU-upload (QSV/VAAPI) channels take the per-item path, so they never use the
+        // continuous pipe. A GPU-upload encoder can't survive the concat demuxer's filter-graph reinit on a
+        // resolution/format change (see StreamToAsync).
+        var videoCodec = Plugin.Instance?.ReadConfiguration(c => c.VideoCodec) ?? Models.VideoCodec.H264;
+        if (_encoders.ResolveVideo(videoCodec, allowHardware: true).PixelStage.Contains("hwupload", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
         var programs = _channels.ResolvePrograms(channel);
         return programs.Count > 0
             && !programs.Any(p => p.SourceHeight > 1080)
