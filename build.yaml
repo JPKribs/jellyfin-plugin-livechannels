@@ -17,4 +17,5 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   fixes:
-  - Smaller file work
+  - Smaller file work to make music videos actually work
+  - HDR nonsense
