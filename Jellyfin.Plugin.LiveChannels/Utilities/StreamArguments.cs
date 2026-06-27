@@ -101,7 +101,7 @@ public static class StreamArguments
         // interlaced and adds its own deinterlace_vaapi, which fails on QSV. deint=1 only touches flagged frames,
         // so progressive content passes through untouched.
         var scale = "yadif=deint=1,scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
-            + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30," + video.PixelStage;
+            + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30,setparams=field_mode=prog," + video.PixelStage;
 
         if (burnIn)
         {
@@ -224,7 +224,7 @@ public static class StreamArguments
         // Deinterlace first (see Build): clears the interlaced flag so Jellyfin's re-transcode stays progressive
         // and does not add a deinterlace_vaapi pass that fails on QSV.
         args.Add("yadif=deint=1,scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
-            + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30," + video.PixelStage);
+            + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30,setparams=field_mode=prog," + video.PixelStage);
 
         var br = bitrate.ToString(CultureInfo.InvariantCulture);
         Add(args, "-c:v", video.Name);
