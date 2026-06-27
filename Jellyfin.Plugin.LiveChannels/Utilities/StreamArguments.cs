@@ -95,7 +95,12 @@ public static class StreamArguments
 
         var w = width.ToString(CultureInfo.InvariantCulture);
         var h = height.ToString(CultureInfo.InvariantCulture);
-        var scale = "scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
+        // Deinterlace interlaced sources (e.g. broadcast/DVD music videos) before scaling: it produces clean
+        // progressive frames and, crucially, clears the interlaced flag so the output is progressive. Otherwise
+        // the flag propagates through scale to the encoder, Jellyfin's re-transcode then probes the stream as
+        // interlaced and adds its own deinterlace_vaapi, which fails on QSV. deint=1 only touches flagged frames,
+        // so progressive content passes through untouched.
+        var scale = "yadif=deint=1,scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
             + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30," + video.PixelStage;
 
         if (burnIn)
@@ -216,7 +221,9 @@ public static class StreamArguments
         var w = width.ToString(CultureInfo.InvariantCulture);
         var h = height.ToString(CultureInfo.InvariantCulture);
         args.Add("-vf");
-        args.Add("scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
+        // Deinterlace first (see Build): clears the interlaced flag so Jellyfin's re-transcode stays progressive
+        // and does not add a deinterlace_vaapi pass that fails on QSV.
+        args.Add("yadif=deint=1,scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
             + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30," + video.PixelStage);
 
         var br = bitrate.ToString(CultureInfo.InvariantCulture);
