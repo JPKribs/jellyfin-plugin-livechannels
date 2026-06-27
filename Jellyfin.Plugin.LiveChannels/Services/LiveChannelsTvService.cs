@@ -252,8 +252,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
     }
 
-    // Starts the file-backed producer: opens the rolling temp file and runs the adaptive (concat or per-item)
-    // pipeline into it, disposing the file when the producer stops.
+    // Starts the file-backed producer (the per-item path, and the fallback when a pipe can't be created): opens
+    // a temp file the producer appends to and Jellyfin reads, disposing it when the producer stops. The file
+    // grows for the life of the session (it is deleted on close); the pipe path is the zero-disk alternative.
     private Task StartFileProducer(Channel channel, string path, CancellationTokenSource cts)
     {
         var output = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, BufferSize, useAsync: true);
@@ -544,7 +545,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     {
         // Hand Jellyfin the path only once the producer is a few seconds ahead: enough for ffmpeg to find
         // codec parameters, and a head-start buffer so the brief gap between items (the per-item path spawns
-        // a fresh ffmpeg per item) is absorbed by the rolling temp file and never reaches the player.
+        // a fresh ffmpeg per item) is absorbed by the buffered temp file and never reaches the player.
         var bitrateKbps = Plugin.Instance?.ReadConfiguration(c => c.TranscodeVideoBitrateKbps) ?? 4000;
         var minReadyBytes = Math.Max(2_000_000L, (long)bitrateKbps * 1000L / 8L * 4L);
         var deadline = DateTime.UtcNow.AddSeconds(20);
