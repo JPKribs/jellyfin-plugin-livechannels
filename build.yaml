@@ -17,4 +17,4 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   fixes:
-  - Even more QSV nonsense
+  - Even more QSV nonsense...
