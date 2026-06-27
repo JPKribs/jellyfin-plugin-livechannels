@@ -35,8 +35,6 @@ Per channel you can also set:
 * **Episode order** plays a series in air order or at random.
 * **Subtitle burn in** bakes a subtitle track into the video for everyone. Choose **Never**, **Forced only**, or **Always**.
 
-Programs are tagged in the guide automatically: movies as movies, and anything rated at or below the channel's **Kids rating** as Kids, so Live TV's category filters surface the channel.
-
 ### Output
 
 Resolution, video codec, audio codec, and bitrate are set on the **Settings** tab and apply to every channel. Decoding and encoding both follow Jellyfin's own hardware acceleration, with a switch to force software when you want it. HDR sources are tone mapped to SDR so they never play washed out. 1080p is the practical sweet spot for a round the clock channel.
