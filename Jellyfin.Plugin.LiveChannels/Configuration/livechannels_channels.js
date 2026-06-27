@@ -183,6 +183,28 @@ export default function (view) {
 
     // A 1:1 pastel square (number centred, title on one or two bottom rows), drawn client-side so the box
     // updates live as the name/number change. Mirrors the server-generated logo.
+    // Whether the Material Icons font actually has a glyph for this ligature name. Draws it on a scratch canvas
+    // and checks for any ink, so an unknown name falls back to the number in the preview just like the server.
+    function symbolRenders(symbol) {
+        try {
+            var px = 48;
+            var c = document.createElement('canvas');
+            c.width = px;
+            c.height = px;
+            var x = c.getContext('2d');
+            x.font = Math.round(px * 0.7) + 'px "Material Icons"';
+            x.textAlign = 'center';
+            x.textBaseline = 'middle';
+            x.fillStyle = '#000';
+            x.fillText(symbol, px / 2, px / 2);
+            var data = x.getImageData(0, 0, px, px).data;
+            for (var i = 3; i < data.length; i += 4) { if (data[i] !== 0) { return true; } }
+            return false;
+        } catch (e) {
+            return true; // If the check fails, assume valid and let the server decide.
+        }
+    }
+
     function defaultLogoDataUrl(number, name, style, symbol, showName) {
         var hue = logoHue(name);
         var size = 256;
@@ -197,11 +219,12 @@ export default function (view) {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        if (style === 'Symbol' && symbol) {
+        if (style === 'Symbol' && symbol && symbolRenders(symbol)) {
             // The Material Icons font (loaded by Jellyfin) renders the ligature name as its glyph.
             ctx.font = Math.round(size * 0.4) + 'px "Material Icons"';
             ctx.fillText(symbol, size / 2, size / 2);
         } else {
+            // Number style, or a symbol the font has no glyph for: show the number, matching the server.
             ctx.font = '700 ' + Math.round(size * 0.4) + 'px' + fam;
             ctx.fillText(String(number || 0), size / 2, size / 2);
         }
