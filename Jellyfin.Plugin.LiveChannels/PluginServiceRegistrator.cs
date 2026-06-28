@@ -3,6 +3,7 @@ using MediaBrowser.Controller;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Plugins;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Jellyfin.Plugin.LiveChannels;
 
@@ -21,5 +22,6 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<DefaultLogoService>();
         serviceCollection.AddSingleton<ActivityLogger>();
         serviceCollection.AddSingleton<ILiveTvService, LiveChannelsTvService>();
+        serviceCollection.AddHostedService<TunerRegistrar>();
     }
 }

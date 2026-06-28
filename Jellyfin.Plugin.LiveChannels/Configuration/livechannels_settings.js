@@ -43,6 +43,7 @@ export default function (view) {
         el('disableHwa').checked = !!config.DisableHardwareAcceleration;
         el('trimStreamFiles').checked = config.TrimStreamFiles !== false;
         el('enableConcatPipe').checked = !!config.EnableConcatPipe;
+        el('allowExternalTuner').checked = !!config.AllowExternalTunerAccess;
         renderAcceleration();
     }
 
@@ -64,6 +65,7 @@ export default function (view) {
             fresh.DisableHardwareAcceleration = el('disableHwa').checked;
             fresh.TrimStreamFiles = el('trimStreamFiles').checked;
             fresh.EnableConcatPipe = el('enableConcatPipe').checked;
+            fresh.AllowExternalTunerAccess = el('allowExternalTuner').checked;
             return Shared.saveConfig(fresh);
         }).then(function () {
             renderAcceleration();

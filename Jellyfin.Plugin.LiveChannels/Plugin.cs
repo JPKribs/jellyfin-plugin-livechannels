@@ -54,6 +54,9 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
         }
 
         base.UpdateConfiguration(configuration);
+
+        // Keep the M3U tuner and XMLTV guide in sync with the saved channels and settings.
+        Services.TunerRegistrar.Reregister();
     }
 
     /// <inheritdoc />

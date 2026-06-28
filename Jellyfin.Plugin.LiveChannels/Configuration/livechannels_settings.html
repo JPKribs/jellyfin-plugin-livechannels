@@ -36,6 +36,12 @@
                     </label>
                     <div class="fieldDescription">Advanced. Pipes the continuous (non per-item) channels straight to Jellyfin instead of a buffered temp file, so nothing is written to disk. Leave off if those channels fail to play: some setups (notably Intel QSV) cannot probe a live pipe and show standby instead.</div>
 
+                    <label class="emby-checkbox-label">
+                        <input type="checkbox" is="emby-checkbox" id="allowExternalTuner" />
+                        <span class="checkboxLabel">Allow external access to the tuner</span>
+                    </label>
+                    <div class="fieldDescription">This allows devices, outside of this one, the ability to access this tuner. <b>This connection is unauthenticated so expose this with caution.</b></div>
+
                     <div class="selectContainer">
                         <label class="selectLabel" for="resolution">Resolution</label>
                         <select is="emby-select" id="resolution" class="jpk-selector-dropdown">

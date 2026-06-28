@@ -31,6 +31,12 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Gets or sets a value indicating whether the temp file backing a channel stream has its already played prefix freed on Linux so its on disk size stays bounded.</summary>
     public bool TrimStreamFiles { get; set; } = true;
 
+    /// <summary>Gets or sets the loopback base URL Jellyfin uses to reach this server, used to register the M3U tuner and XMLTV guide. Defaults to the loopback address and standard port; change it only if Jellyfin runs on a non default port or behind a base path.</summary>
+    public string TunerBaseUrl { get; set; } = "http://127.0.0.1:8096";
+
+    /// <summary>Gets or sets a value indicating whether the tuner, guide, and stream endpoints answer requests from other devices. Off by default, so only this host (127.0.0.1) can reach them. The endpoints are unauthenticated, so enable this only on a trusted network.</summary>
+    public bool AllowExternalTunerAccess { get; set; }
+
     /// <summary>Gets or sets a value indicating whether the continuous (concat) pipeline may stream into a zero-disk
     /// named pipe instead of a buffered file. Off by default: a non-seekable pipe makes some servers (notably
     /// Intel QSV) probe the live stream as interlaced and insert a deinterlace pass that fails, whereas the
