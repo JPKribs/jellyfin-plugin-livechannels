@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.3.2",
+        "changelog": "## Fixes\r\n- Remove the trim and zero disk settings that could cause stutter",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.3.2/jellyfin-plugin-livechannels-10.11.3.2.zip",
+        "checksum": "02ddd376b3305ac805b8c00dff39eb64",
+        "timestamp": "2026-06-28T22:24:21Z"
+      },
+      {
         "version": "10.11.3.1",
         "changelog": "## Fixes\r\n- Decode 10-bit HEVC and 4K sources on the GPU instead of falling back to software",
         "targetAbi": "10.11.9.0",
