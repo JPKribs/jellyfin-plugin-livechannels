@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.2.3",
+        "changelog": "## Fixes\r\n- Forced subtitles now show for non-English audio",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.3/jellyfin-plugin-livechannels-10.11.2.3.zip",
+        "checksum": "5ee66ceceae9bd681864b210bde155f3",
+        "timestamp": "2026-06-28T04:14:18Z"
+      },
+      {
         "version": "10.11.2.2",
         "changelog": "## Fixes\r\n- Activity cleanup\r\n- Better subtitle defaults",
         "targetAbi": "10.11.9.0",
