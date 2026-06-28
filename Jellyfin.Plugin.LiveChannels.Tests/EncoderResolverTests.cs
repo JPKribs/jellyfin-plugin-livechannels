@@ -79,14 +79,17 @@ public class EncoderResolverTests
         => Assert.Null(Resolver("nvenc").ResolveVideo(VideoCodec.H264, true).DecodeHwaccel);
 
     [Fact]
-    public void ResolveVideo_Qsv_HardwareDecodes_WithDownload()
+    public void ResolveVideo_Qsv_HardwareDecodes_WithDownload_Allowing10Bit()
     {
         // QSV keeps decoded frames on the GPU, so it must set an output format and a leading hwdownload that
-        // brings them back for the software scale (the per-item and continuous paths fall back to software).
+        // brings them back for the software scale (the per-item and continuous paths fall back to software). The
+        // download must accept p010le so a 10-bit source (most HEVC, all 4K HDR) keeps hardware-decoding instead
+        // of collapsing to a software decode that cannot hold realtime.
         var profile = Resolver("qsv").ResolveVideo(VideoCodec.H264, true);
         Assert.Equal("qsv", profile.DecodeHwaccel);
         Assert.Equal("qsv", profile.DecodeOutputFormat);
         Assert.Contains("hwdownload", profile.DecodeDownload, StringComparison.Ordinal);
+        Assert.Contains("p010le", profile.DecodeDownload, StringComparison.Ordinal);
     }
 
     [Fact]

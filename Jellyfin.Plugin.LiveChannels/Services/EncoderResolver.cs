@@ -57,10 +57,12 @@ public class EncoderResolver
             // Hardware ENCODE follows the server's configured accelerator for every vendor. Hardware DECODE
             // offloads the heaviest part of the pipeline (decoding 4K/HEVC sources) from the CPU. VideoToolbox
             // auto-downloads decoded frames to system memory; QSV/VAAPI keep frames on the GPU, so they set an
-            // output format and a leading hwdownload that brings frames back for the software scale (without it,
-            // the software scale fails with "Impossible to convert between formats"). The continuous and per-item
-            // paths fall back to software decode if a hardware decode fails, so a driver that cannot decode some
-            // codec never breaks playback. NVENC/AMF stay encode-only (no decode offload wired up here).
+            // output format and a leading hwdownload that brings frames back for the software scale. The download
+            // must allow nv12 (8-bit) AND p010le (10-bit): a 10-bit source (most HEVC, all 4K HDR) decodes to a
+            // p010 surface, and pinning the download to nv12 alone makes it fail, dropping the whole item to a
+            // software decode that cannot hold realtime (the choppiness on HEVC/4K). The continuous and per-item
+            // paths still fall back to software decode if a hardware decode genuinely fails, so a codec a driver
+            // cannot decode never breaks playback. NVENC/AMF stay encode-only (no decode offload wired up here).
             case "videotoolbox":
                 return new VideoEncoderProfile(family + "_videotoolbox", label + " (VideoToolbox)", true,
                     Empty, VideotoolboxExtra, "format=yuv420p", false, DecodeHwaccel: "videotoolbox");
@@ -73,13 +75,13 @@ public class EncoderResolver
             case "qsv":
                 return new VideoEncoderProfile(family + "_qsv", label + " (QSV)", true,
                     QsvInit, Empty, "format=nv12,hwupload=extra_hw_frames=64", false,
-                    DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12,");
+                    DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12|p010le,");
             case "vaapi":
                 var device = string.IsNullOrEmpty(options?.VaapiDevice) ? "/dev/dri/renderD128" : options.VaapiDevice;
                 return new VideoEncoderProfile(family + "_vaapi", label + " (VAAPI)", true,
                     new[] { "-init_hw_device", "vaapi=va:" + device, "-filter_hw_device", "va" }, Empty,
                     "format=nv12,hwupload", false,
-                    DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: "hwdownload,format=nv12,");
+                    DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: "hwdownload,format=nv12|p010le,");
             default:
                 return Software(codec);
         }

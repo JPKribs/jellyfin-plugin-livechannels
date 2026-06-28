@@ -76,7 +76,7 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
             EmbeddedResourcePath = $"{ns}.Configuration.livechannels_channels.js"
         };
 
-        // Tab 2: Settings (tuner-wide configuration).
+        // Tab 2: Settings (plugin-wide configuration).
         yield return new PluginPageInfo
         {
             Name = "livechannels_settings",

@@ -2,8 +2,8 @@
   {
     "guid": "ac6940fb-aac6-4de8-b622-55a662e23658",
     "name": "Live Channels",
-    "overview": "Build looping virtual TV channels that appear in Jellyfin's Live TV.",
-    "description": "Live Channels lets administrators build looping virtual TV channels from genres and official ratings or from a list of items they pick. The channels are served to Jellyfin as a self configuring M3U tuner with an XMLTV guide, registered automatically so there are no URLs to paste, and reachable only on the loopback address unless external access is enabled.",
+    "overview": "Build looping virtual TV channels that appear natively in Jellyfin's Live TV.",
+    "description": "Live Channels lets administrators build looping virtual TV channels from genres and official ratings or from a hand-picked list of items. Each channel, its guide, and its stream are served in-process through Jellyfin's own Live TV, so the channels appear automatically with no tuner to add, no URLs to paste, and no exposed endpoints.",
     "imageUrl": "https://raw.githubusercontent.com/JPKribs/jellyfin-plugin-livechannels/master/Jellyfin.Plugin.LiveChannels/Assets/Logo.png",
     "owner": "JPKribs",
     "category": "LiveTV",
