@@ -41,6 +41,7 @@ export default function (view) {
         el('audioCodec').value = config.AudioCodec || 'Aac';
         el('videoBitrate').value = config.TranscodeVideoBitrateKbps || 4000;
         el('disableHwa').checked = !!config.DisableHardwareAcceleration;
+        el('trimStreamFiles').checked = config.TrimStreamFiles !== false;
         el('enableConcatPipe').checked = !!config.EnableConcatPipe;
         renderAcceleration();
     }
@@ -61,6 +62,7 @@ export default function (view) {
             fresh.AudioCodec = el('audioCodec').value;
             fresh.TranscodeVideoBitrateKbps = Math.max(500, parseInt(el('videoBitrate').value, 10) || 4000);
             fresh.DisableHardwareAcceleration = el('disableHwa').checked;
+            fresh.TrimStreamFiles = el('trimStreamFiles').checked;
             fresh.EnableConcatPipe = el('enableConcatPipe').checked;
             return Shared.saveConfig(fresh);
         }).then(function () {

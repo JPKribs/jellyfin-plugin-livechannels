@@ -275,7 +275,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     // No-op on any other OS or filesystem that does not support hole punching (the file just grows as before).
     private void StartFileTrimmer(string path, CancellationToken token)
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() || !(Plugin.Instance?.ReadConfiguration(c => c.TrimStreamFiles) ?? true))
         {
             return;
         }
