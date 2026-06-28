@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.2.9",
+        "changelog": "## Fixes\r\n- Pin the Intel iHD driver on the VAAPI device so the GPU pipeline initialises on multi-GPU systems\r\n- Log the producer command so playback failures are visible",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.9/jellyfin-plugin-livechannels-10.11.2.9.zip",
+        "checksum": "59420094bcad87813f17c81bd4712f30",
+        "timestamp": "2026-06-28T09:45:18Z"
+      },
+      {
         "version": "10.11.2.8",
         "changelog": "## Fixes\r\n- Rebuild the Intel decode pipeline to run entirely on the GPU through VAAPI, fixing 10-bit and HDR playback\r\n- Channels start fast again instead of probing every item on tune-in",
         "targetAbi": "10.11.9.0",
