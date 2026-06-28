@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.3.0",
+        "changelog": "## Fixes\r\n- Build channels internally through Jellyfin Live TV again so playback works\r\n- Keep the stream building ahead of playback to reduce stutter",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.3.0/jellyfin-plugin-livechannels-10.11.3.0.zip",
+        "checksum": "897a54ca43275d98c0a95f3998b9ec1d",
+        "timestamp": "2026-06-28T20:55:17Z"
+      },
+      {
         "version": "10.11.2.10",
         "changelog": "## Fixes\r\n- Run the Intel pipeline the same way Jellyfin does, decoding on VAAPI and encoding on QSV, so 10-bit and HDR channels play\r\n- Read the GPU render device from the Jellyfin configuration and log the producer command",
         "targetAbi": "10.11.9.0",
