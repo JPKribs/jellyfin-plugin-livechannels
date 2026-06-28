@@ -68,24 +68,31 @@ public class EncoderResolver
             case "amf":
                 return new VideoEncoderProfile(family + "_amf", label + " (AMF)", true,
                     Empty, Empty, "format=yuv420p", false);
-            // Intel QSV and VAAPI drive the same silicon. We run both through VAAPI, the way Tunarr/ErsatzTV build
-            // the Intel pipeline: decode on the GPU and scale/pad/deinterlace/tone-map with the VAAPI filters (in
-            // StreamArguments), so frames never leave the GPU. That deletes the hwdownload-to-nv12 step that crashed
-            // on 10-bit (p010) sources, and a VAAPI filter handles any bit depth or HDR transparently.
+            // Intel QSV: decode and filter on VAAPI (scale/pad/deinterlace/tone-map on the GPU), then hwmap the
+            // frames onto a derived QSV device and encode with h264_qsv. This mirrors Jellyfin's own working Intel
+            // command exactly (vaapi=va,driver=iHD -> qsv=qs@va -> filter_hw_device qs -> ... -> h264_qsv), so it
+            // runs on the hardware/driver Jellyfin already proves works, and frames never leave the GPU (no
+            // hwdownload-to-nv12, the step that crashed 10-bit sources). The filter chain appends the hwmap in
+            // StreamArguments when the encoder is QSV. PixelStage uploads to QSV for the software fallback.
             case "qsv":
+                var qsvDevice = ResolveVaapiDevice(options);
+                _logger.LogInformation("Live Channels: QSV-over-VAAPI pipeline on {Device}", qsvDevice);
+                return new VideoEncoderProfile(family + "_qsv", label + " (QSV)", true,
+                    new[]
+                    {
+                        "-init_hw_device", "vaapi=va:" + qsvDevice + ",driver=iHD",
+                        "-init_hw_device", "qsv=qs@va",
+                        "-filter_hw_device", "qs"
+                    },
+                    Empty, "format=nv12,hwupload=extra_hw_frames=64", false,
+                    DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: string.Empty, VaapiFilters: true);
+
+            // Plain VAAPI (e.g. AMD): decode, filter and encode all on VAAPI, no QSV hop. Frames stay on the GPU.
             case "vaapi":
-                var device = ResolveVaapiDevice(options);
-                // Match Jellyfin's own working Intel command, which pins the iHD driver on the VAAPI device. On a
-                // multi-GPU box (e.g. an Arc alongside the CPU's iGPU) libva can otherwise load the wrong driver
-                // for the wrong node and fail to initialise. Only pin iHD for the Intel (QSV) path; a box configured
-                // for plain VAAPI may be AMD (radeonsi), so leave its driver to libva.
-                var deviceSpec = accel == "qsv" ? device + ",driver=iHD" : device;
-                _logger.LogInformation("Live Channels: VAAPI pipeline on {Device}", deviceSpec);
-                // PixelStage is only used by the software-fallback chain (burn-in, software-decode retry): it
-                // uploads system frames to the GPU so the VAAPI encoder can take them. The all-GPU VaapiFilters
-                // path never reaches it (frames are already VAAPI surfaces).
+                var vaapiDevice = ResolveVaapiDevice(options);
+                _logger.LogInformation("Live Channels: VAAPI pipeline on {Device}", vaapiDevice);
                 return new VideoEncoderProfile(family + "_vaapi", label + " (VAAPI)", true,
-                    new[] { "-init_hw_device", "vaapi=va:" + deviceSpec, "-filter_hw_device", "va" }, Empty,
+                    new[] { "-init_hw_device", "vaapi=va:" + vaapiDevice, "-filter_hw_device", "va" }, Empty,
                     "format=nv12,hwupload", false,
                     DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: string.Empty, VaapiFilters: true);
             default:
@@ -115,19 +122,35 @@ public class EncoderResolver
         };
     }
 
-    // The DRM render node the VAAPI pipeline binds to. Prefer whatever Jellyfin is already configured to use for
-    // hardware transcoding (QSV or VAAPI device), so we land on the same GPU the user's working setup uses; fall
-    // back to the first render node, which inside a container is normally the only GPU mapped in.
-    private static string ResolveVaapiDevice(EncodingOptions? options)
+    // The DRM render node the VAAPI pipeline binds to, taken straight from Jellyfin's encoding config so we land
+    // on the exact GPU its own hardware transcoding uses. On Linux QSV/VAAPI, VaapiDevice is the canonical render
+    // node (the QSV device is derived from it and is usually left blank), so it wins. Only when nothing is
+    // configured do we fall back: the single render node present, or renderD128 as a last resort.
+    private string ResolveVaapiDevice(EncodingOptions? options)
     {
+        if (!string.IsNullOrWhiteSpace(options?.VaapiDevice))
+        {
+            return options!.VaapiDevice;
+        }
+
         if (!string.IsNullOrWhiteSpace(options?.QsvDevice))
         {
             return options!.QsvDevice;
         }
 
-        if (!string.IsNullOrWhiteSpace(options?.VaapiDevice))
+        try
         {
-            return options!.VaapiDevice;
+            var nodes = System.IO.Directory.GetFiles("/dev/dri", "renderD*");
+            if (nodes.Length > 0)
+            {
+                Array.Sort(nodes, StringComparer.Ordinal);
+                _logger.LogInformation("Live Channels: no VAAPI device configured in Jellyfin; using detected node {Node}", nodes[0]);
+                return nodes[0];
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not enumerate /dev/dri render nodes");
         }
 
         return "/dev/dri/renderD128";

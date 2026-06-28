@@ -126,7 +126,10 @@ public static class StreamArguments
         string scale;
         if (vaapiPipeline)
         {
-            scale = VaapiFilterChain(w, h, isHdr, isInterlaced);
+            // QSV encoders take the VAAPI frames through a hwmap onto the derived QSV device (Jellyfin's own
+            // proven Intel chain). A plain VAAPI encoder consumes the VAAPI frames directly.
+            var mapToQsv = video.Name.Contains("qsv", StringComparison.Ordinal);
+            scale = VaapiFilterChain(w, h, isHdr, isInterlaced, mapToQsv);
         }
         else
         {
@@ -403,7 +406,9 @@ public static class StreamArguments
     //                        pin the output to 8-bit nv12, which also converts a 10-bit (p010) surface on the GPU.
     //   pad_vaapi          - letterbox to exactly WxH, auto-centred (x=-1:y=-1).
     //   fps                - constant frame rate so every item shares one stream shape (runs fine on VAAPI frames).
-    private static string VaapiFilterChain(string w, string h, bool isHdr, bool isInterlaced)
+    //   hwmap              - QSV encoders only: maps the VAAPI frame onto the derived QSV device for h264_qsv,
+    //                        exactly as Jellyfin's own working Intel transcode does.
+    private static string VaapiFilterChain(string w, string h, bool isHdr, bool isInterlaced, bool mapToQsv)
     {
         var chain = string.Empty;
         if (isInterlaced)
@@ -416,9 +421,10 @@ public static class StreamArguments
             chain += "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,";
         }
 
-        return chain
-            + "scale_vaapi=w=" + w + ":h=" + h + ":format=nv12:extra_hw_frames=64:force_divisible_by=2:force_original_aspect_ratio=decrease,setsar=1,"
+        chain += "scale_vaapi=w=" + w + ":h=" + h + ":format=nv12:extra_hw_frames=64:force_original_aspect_ratio=decrease,setsar=1,"
             + "pad_vaapi=w=" + w + ":h=" + h + ":x=-1:y=-1:color=black,fps=30";
+
+        return mapToQsv ? chain + ",hwmap=derive_device=qsv,format=qsv" : chain;
     }
 
     // Appends a run of arguments (params avoids constant-array allocations the analyzer flags).

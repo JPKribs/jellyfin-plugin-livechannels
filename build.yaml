@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.2.9"
+version: "10.11.2.10"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear in Jellyfin's Live TV."
@@ -17,5 +17,5 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   fixes:
-  - Pin the Intel iHD driver on the VAAPI device so the GPU pipeline initialises on multi-GPU systems
-  - Log the producer command so playback failures are visible
+  - Run the Intel pipeline the same way Jellyfin does, decoding on VAAPI and encoding on QSV, so 10-bit and HDR channels play
+  - Read the GPU render device from the Jellyfin configuration and log the producer command

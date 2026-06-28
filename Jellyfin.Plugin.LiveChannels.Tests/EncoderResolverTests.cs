@@ -35,7 +35,7 @@ public class EncoderResolverTests
     [InlineData("videotoolbox", VideoCodec.Hevc, "hevc_videotoolbox")]
     [InlineData("nvenc", VideoCodec.H264, "h264_nvenc")]
     [InlineData("amf", VideoCodec.Hevc, "hevc_amf")]
-    [InlineData("qsv", VideoCodec.H264, "h264_vaapi")]
+    [InlineData("qsv", VideoCodec.H264, "h264_qsv")]
     [InlineData("vaapi", VideoCodec.H264, "h264_vaapi")]
     public void ResolveVideo_MapsHardwareAccel_ToEncoder(string accel, VideoCodec codec, string expected)
     {
@@ -79,16 +79,18 @@ public class EncoderResolverTests
         => Assert.Null(Resolver("nvenc").ResolveVideo(VideoCodec.H264, true).DecodeHwaccel);
 
     [Fact]
-    public void ResolveVideo_Qsv_RunsVaapiPipeline_WithoutDownload()
+    public void ResolveVideo_Qsv_DecodesOnVaapi_EncodesOnQsv_NoDownload()
     {
-        // Intel QSV is driven through the all-GPU VAAPI pipeline (Tunarr's Intel path): VAAPI decode, GPU filters,
-        // VAAPI encode. No hwdownload at all - that step crashed 10-bit sources. Frames never leave the GPU.
+        // Intel QSV decodes and filters on VAAPI, then hwmaps onto QSV to encode with h264_qsv - mirroring
+        // Jellyfin's own working Intel command. No hwdownload (that step crashed 10-bit). The init derives a QSV
+        // device from the VAAPI one and pins the iHD driver.
         var profile = Resolver("qsv").ResolveVideo(VideoCodec.H264, true);
-        Assert.Equal("h264_vaapi", profile.Name);
+        Assert.Equal("h264_qsv", profile.Name);
         Assert.Equal("vaapi", profile.DecodeHwaccel);
-        Assert.Equal("vaapi", profile.DecodeOutputFormat);
         Assert.True(profile.VaapiFilters);
         Assert.Equal(string.Empty, profile.DecodeDownload);
+        Assert.Contains(profile.InitArgs, a => a.Contains("driver=iHD", StringComparison.Ordinal));
+        Assert.Contains(profile.InitArgs, a => a.Contains("qsv=qs@va", StringComparison.Ordinal));
     }
 
     [Fact]

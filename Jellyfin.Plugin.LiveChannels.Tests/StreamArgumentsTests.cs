@@ -69,6 +69,27 @@ public class StreamArgumentsTests
         Array.Empty<string>(), "format=nv12,hwupload", false,
         DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: "", VaapiFilters: true);
 
+    // The Intel QSV path: VAAPI decode + filters, hwmapped onto QSV for the h264_qsv encoder (Jellyfin's chain).
+    private static readonly VideoEncoderProfile QsvStyle = new(
+        "h264_qsv", "QSV", true,
+        new[] { "-init_hw_device", "vaapi=va:/dev/dri/renderD128,driver=iHD", "-init_hw_device", "qsv=qs@va", "-filter_hw_device", "qs" },
+        Array.Empty<string>(), "format=nv12,hwupload=extra_hw_frames=64", false,
+        DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: "", VaapiFilters: true);
+
+    [Fact]
+    public void QsvPipeline_DecodesVaapi_FiltersOnGpu_HwmapsToQsv_NoDownload()
+    {
+        // Mirrors Jellyfin's proven Intel command: vaapi decode, scale/pad on VAAPI, hwmap to QSV, encode h264_qsv.
+        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, QsvStyle, "aac", 192, null);
+        Assert.True(Pair(a, "-hwaccel", "vaapi"));
+        var vf = a[a.IndexOf("-vf") + 1];
+        Assert.Contains("scale_vaapi=w=1280:h=720:format=nv12", vf, StringComparison.Ordinal);
+        Assert.Contains("pad_vaapi=w=1280:h=720:x=-1:y=-1:color=black", vf, StringComparison.Ordinal);
+        Assert.EndsWith("hwmap=derive_device=qsv,format=qsv", vf);
+        Assert.DoesNotContain("hwdownload", vf, StringComparison.Ordinal);
+        Assert.True(Pair(a, "-c:v", "h264_qsv"));
+    }
+
     [Fact]
     public void VaapiPipeline_ScalesOnGpu_NeverDownloads()
     {
