@@ -25,18 +25,6 @@
                     <div class="fieldDescription">Forces software encoding and decoding. Turn this on if channels fail to play with hardware acceleration.</div>
 
                     <label class="emby-checkbox-label">
-                        <input type="checkbox" is="emby-checkbox" id="trimStreamFiles" />
-                        <span class="checkboxLabel">Trim stream files</span>
-                    </label>
-                    <div class="fieldDescription">Frees the already played part of a channel's temp file on Linux so it stays small instead of growing over a long watch.</div>
-
-                    <label class="emby-checkbox-label">
-                        <input type="checkbox" is="emby-checkbox" id="enableConcatPipe" />
-                        <span class="checkboxLabel">Stream continuous channels with zero disk use</span>
-                    </label>
-                    <div class="fieldDescription">Advanced. Pipes the continuous (non per-item) channels straight to Jellyfin instead of a buffered temp file, so nothing is written to disk. Leave off if those channels fail to play: some setups (notably Intel QSV) cannot probe a live pipe and show standby instead.</div>
-
-                    <label class="emby-checkbox-label">
                         <input type="checkbox" is="emby-checkbox" id="allowExternalTuner" />
                         <span class="checkboxLabel">Allow external access to the tuner</span>
                     </label>

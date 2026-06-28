@@ -21,7 +21,6 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<EncoderResolver>();
         serviceCollection.AddSingleton<StreamSessionService>();
         serviceCollection.AddSingleton<DefaultLogoService>();
-        serviceCollection.AddSingleton<ActivityLogger>();
         serviceCollection.AddHostedService<TunerRegistrar>();
     }
 }

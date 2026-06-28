@@ -129,6 +129,27 @@ public class ChannelService
     }
 
     /// <summary>
+    /// Whether the item's video is more than 8 bits per channel (10-bit). Such a source decodes to a p010 surface
+    /// that the per-item hardware pipeline cannot hwdownload to nv12, so the stream pipeline decodes it in software.
+    /// </summary>
+    /// <param name="itemId">The item id.</param>
+    /// <returns><c>true</c> when the item's video stream is deeper than 8-bit.</returns>
+    public bool IsTenBitSource(Guid itemId)
+    {
+        try
+        {
+            var bitDepth = _mediaSourceManager.GetMediaStreams(itemId)
+                .FirstOrDefault(s => s.Type == MediaStreamType.Video)?.BitDepth;
+            return bitDepth is > 8;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read media streams for bit depth check on {ItemId}", itemId);
+            return false;
+        }
+    }
+
+    /// <summary>
     /// The position, among an item's audio streams ordered by index, of the track Jellyfin marks as default, or
     /// 0 when none is flagged, so the stream pipeline maps the same audio track Jellyfin itself would play
     /// instead of letting ffmpeg pick by channel count. Returns <c>null</c> when the streams cannot be read.
