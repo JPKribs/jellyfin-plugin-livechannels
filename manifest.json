@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.3.1",
+        "changelog": "## Fixes\r\n- Decode 10-bit HEVC and 4K sources on the GPU instead of falling back to software",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.3.1/jellyfin-plugin-livechannels-10.11.3.1.zip",
+        "checksum": "377a648bf8b63b4e614a9e7755836fdc",
+        "timestamp": "2026-06-28T21:52:39Z"
+      },
+      {
         "version": "10.11.3.0",
         "changelog": "## Fixes\r\n- Build channels internally through Jellyfin Live TV again so playback works\r\n- Keep the stream building ahead of playback to reduce stutter",
         "targetAbi": "10.11.9.0",
