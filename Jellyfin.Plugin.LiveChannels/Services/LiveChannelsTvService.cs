@@ -61,7 +61,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         // run that ended without CloseLiveStream (a crash). Sweep it now, then periodically reap sessions whose
         // producer has stopped but that Jellyfin never closed, so neither files nor encoders pile up.
         ReapOrphanFiles();
-        _reaper = new Timer(_ => ReapCompletedSessions(), state: null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+        _reaper = new Timer(_ => ReapCompletedSessions(), state: null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
     }
 
     /// <inheritdoc />
@@ -179,7 +179,12 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             ? Task.Run(() => RunProducerAsync(() => _streams.StreamConcatToPipeAsync(channel, path, cts.Token), channel.Name, output: null), CancellationToken.None)
             : StartFileProducer(channel, path, cts);
 
-        _live[liveStreamId] = new LiveSession(cts, worker, path, channel.Name);
+        _live[liveStreamId] = new LiveSession(cts, worker, path, channel.Name, channelId);
+
+        // Jellyfin shares one live stream per channel, so any earlier session still open for this channel was
+        // abandoned (a re-tune Jellyfin never closed). Tear those down now so producers and their downstream
+        // transcodes do not pile up and saturate the box. Also sweep any finished sessions while we are here.
+        EvictStaleSessions(channelId, keep: liveStreamId);
 
         // A regular file is opened immediately by Jellyfin, so wait until the producer has buffered enough to
         // play and, if it dies with nothing, tear the session down and surface a clear failure rather than
@@ -480,6 +485,41 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
     }
 
+    // Tears down every session except the one just opened: any other session for the same channel is an abandoned
+    // re-tune Jellyfin never closed, and any finished session anywhere is dead weight. Each producer's CTS is
+    // cancelled (which ends its ffmpeg and lets the file be deleted) without blocking the caller.
+    private void EvictStaleSessions(string channelId, string keep)
+    {
+        foreach (var (id, session) in _live)
+        {
+            if (string.Equals(id, keep, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var sameChannel = string.Equals(session.ChannelId, channelId, StringComparison.Ordinal);
+            if (!sameChannel && !session.Worker.IsCompleted)
+            {
+                continue;
+            }
+
+            if (_live.TryRemove(id, out var removed))
+            {
+                _logger.LogInformation("Live Channels: evicting stale session {Id} ({Name})", id, removed.ChannelName);
+                try
+                {
+                    removed.Cts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Already finished.
+                }
+
+                DisposeSession(removed);
+            }
+        }
+    }
+
     private void DisposeSession(LiveSession session)
     {
         try
@@ -725,5 +765,5 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
     }
 
-    private sealed record LiveSession(CancellationTokenSource Cts, Task Worker, string Path, string ChannelName);
+    private sealed record LiveSession(CancellationTokenSource Cts, Task Worker, string Path, string ChannelName, string ChannelId);
 }
