@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.2.4",
+        "changelog": "## Fixes\r\n- Stop abandoned channel sessions from piling up",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.4/jellyfin-plugin-livechannels-10.11.2.4.zip",
+        "checksum": "1015015b2300cd263d3b702824fa37cb",
+        "timestamp": "2026-06-28T05:17:49Z"
+      },
+      {
         "version": "10.11.2.3",
         "changelog": "## Fixes\r\n- Forced subtitles now show for non-English audio",
         "targetAbi": "10.11.9.0",
