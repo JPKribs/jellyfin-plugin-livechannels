@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.2.8",
+        "changelog": "## Fixes\r\n- Rebuild the Intel decode pipeline to run entirely on the GPU through VAAPI, fixing 10-bit and HDR playback\r\n- Channels start fast again instead of probing every item on tune-in",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.8/jellyfin-plugin-livechannels-10.11.2.8.zip",
+        "checksum": "628b3ff7769f98c011a69d95e3ed640e",
+        "timestamp": "2026-06-28T09:31:46Z"
+      },
+      {
         "version": "10.11.2.7",
         "changelog": "## Fixes\r\n- Decode 10-bit sources in software so they no longer fail on QSV",
         "targetAbi": "10.11.9.0",
