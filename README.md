@@ -34,7 +34,7 @@ Per channel you can also set:
 * **Shuffle** is on by default and is fixed and repeatable, so the guide and the live stream always agree. Disable it to play everything alphabetically.
 * **Episode order** plays a series in air order or at random.
 * **Favor content type** weights a channel toward movies, shows, or music videos so that type plays more often, at a slight, moderate, or heavy strength. Shuffle must be on.
-* **Subtitle burn in** bakes a subtitle track into the video for everyone. Choose **Never**, **Forced only**, or **Always**. Forced only also burns subtitles when the audio is in a known language other than English, preferring an English subtitle, so foreign content stays readable.
+* **Subtitle burn in** bakes a subtitle track into the video for everyone. Choose **Never**, **Forced only**, or **Always**. Forced only burns only the forced track, but switches to Always behaviour when the audio is in a known language other than English, so foreign content stays readable.
 
 ### Output
 

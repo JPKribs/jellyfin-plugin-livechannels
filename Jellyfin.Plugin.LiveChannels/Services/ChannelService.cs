@@ -117,8 +117,8 @@ public class ChannelService
 
     /// <summary>
     /// Picks the subtitle track to burn into an item for the given mode. <see cref="SubtitleBurnInMode.Forced"/>
-    /// burns the forced track when present, and otherwise burns subtitles when the default audio track is in a
-    /// known non-English language (preferring an English subtitle), so foreign-language content stays followable.
+    /// burns only the forced track, except when the default audio track is in a known non-English language, where
+    /// it behaves like <see cref="SubtitleBurnInMode.Always"/> so foreign-language content stays followable.
     /// <see cref="SubtitleBurnInMode.Always"/> burns the forced track when present, otherwise the default or first.
     /// </summary>
     /// <param name="itemId">The item id.</param>
@@ -163,15 +163,10 @@ public class ChannelService
 
         if ((mode == SubtitleBurnInMode.Always || forcedForNonEnglishAudio) && subtitles.Count > 0)
         {
-            // For non-English audio prefer an English subtitle (the viewer reads English over the foreign
-            // dialogue); otherwise, and for "Always", fall back to the default or first track.
-            var chosen = forcedForNonEnglishAudio ? subtitles.FindIndex(s => IsEnglish(s.Language)) : -1;
-            if (chosen < 0)
-            {
-                var defaultIndex = subtitles.FindIndex(s => s.IsDefault);
-                chosen = defaultIndex >= 0 ? defaultIndex : 0;
-            }
-
+            // Both "Always" and non-English-audio "Forced only" burn the same track "Always" picks: the default
+            // subtitle, or the first one when none is flagged default.
+            var defaultIndex = subtitles.FindIndex(s => s.IsDefault);
+            var chosen = defaultIndex >= 0 ? defaultIndex : 0;
             return (chosen, subtitles[chosen].IsTextSubtitleStream);
         }
 
