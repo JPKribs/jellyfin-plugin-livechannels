@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.2.5",
+        "changelog": "## Fixes\r\n- Serve channels as an M3U tuner on a private loopback port",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.5/jellyfin-plugin-livechannels-10.11.2.5.zip",
+        "checksum": "025c146cd75d3264e7f6cbc2b626216d",
+        "timestamp": "2026-06-28T07:22:06Z"
+      },
+      {
         "version": "10.11.2.4",
         "changelog": "## Fixes\r\n- Stop abandoned channel sessions from piling up",
         "targetAbi": "10.11.9.0",
