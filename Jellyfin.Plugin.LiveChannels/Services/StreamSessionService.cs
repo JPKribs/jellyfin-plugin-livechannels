@@ -69,7 +69,7 @@ public class StreamSessionService
         if (programs.Count == 0)
         {
             _logger.LogWarning("Live channel {Name} resolved to no playable items; showing standby", channel.Name);
-            await StreamSlateAsync(ffmpeg, output, pipePath: null, cancellationToken).ConfigureAwait(false);
+            await StreamSlateAsync(ffmpeg, output, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -99,92 +99,20 @@ public class StreamSessionService
         }
         else
         {
-            await StreamConcatAsync(ffmpeg, channel, programs, output, pipePath: null, cancellationToken).ConfigureAwait(false);
+            await StreamConcatAsync(ffmpeg, channel, programs, output, cancellationToken).ConfigureAwait(false);
         }
-    }
-
-    /// <summary>
-    /// Whether a channel will stream through the seamless continuous (concat) path. That path is one long-lived
-    /// ffmpeg, so it is the only one that can safely write to a named pipe — killing ffmpeg cleanly ends a stuck
-    /// write. The per-item path (subtitle burn-in or high-resolution sources) needs a buffered file instead.
-    /// </summary>
-    /// <param name="channel">The channel to inspect.</param>
-    /// <returns><c>true</c> when the channel can stream straight into a pipe.</returns>
-    public bool ShouldUsePipe(Channel channel)
-    {
-        ArgumentNullException.ThrowIfNull(channel);
-
-        // Default to the buffered file. A non-seekable pipe makes some servers (notably Intel QSV) probe the live
-        // stream as interlaced and add a deinterlace pass that fails (exit 187), where the file is probed
-        // correctly and remuxed. The pipe stays available behind an opt-in flag for setups that want zero disk.
-        if (!(Plugin.Instance?.ReadConfiguration(c => c.EnableConcatPipe) ?? false))
-        {
-            return false;
-        }
-
-        if (channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never)
-        {
-            return false;
-        }
-
-        // High-resolution, HDR, and GPU-upload (QSV/VAAPI) channels take the per-item path, so they never use the
-        // continuous pipe. A GPU-upload encoder can't survive the concat demuxer's filter-graph reinit on a
-        // resolution/format change (see StreamToAsync).
-        var videoCodec = Plugin.Instance?.ReadConfiguration(c => c.VideoCodec) ?? Models.VideoCodec.H264;
-        if (_encoders.ResolveVideo(videoCodec, allowHardware: true).PixelStage.Contains("hwupload", StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var programs = _channels.ResolvePrograms(channel);
-        return programs.Count > 0
-            && !programs.Any(p => p.SourceHeight > 1080)
-            && !programs.Any(p => _channels.IsHdrSource(p.ItemId));
-    }
-
-    /// <summary>
-    /// Streams a channel's continuous feed straight into a named pipe, so nothing accumulates on disk. Only
-    /// valid for channels <see cref="ShouldUsePipe"/> approves; ffmpeg writes the pipe itself.
-    /// </summary>
-    /// <param name="channel">The channel to stream.</param>
-    /// <param name="pipePath">The named-pipe path ffmpeg writes to.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>A task that completes when streaming stops.</returns>
-    public async Task StreamConcatToPipeAsync(Channel channel, string pipePath, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(channel);
-
-        var ffmpeg = _encoder.EncoderPath;
-        if (string.IsNullOrEmpty(ffmpeg))
-        {
-            _logger.LogError("No ffmpeg encoder is configured; cannot stream channel {Name}", channel.Name);
-            return;
-        }
-
-        var programs = _channels.ResolvePrograms(channel);
-        if (programs.Count == 0)
-        {
-            await StreamSlateAsync(ffmpeg, output: null, pipePath, cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        var (index, _) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow, ScheduleCalculator.Epoch);
-        var uniform = programs[0].SourceHeight > 0 && programs.All(p => p.SourceHeight == programs[0].SourceHeight);
-        LogEncodePlan(channel, programs.Count, index, perItem: false, uniform, hasHdr: false);
-
-        await StreamConcatAsync(ffmpeg, channel, programs, output: null, pipePath, cancellationToken).ConfigureAwait(false);
     }
 
     // Streams the channel as ONE continuous ffmpeg using the concat demuxer, so item boundaries are seamless
     // (no timestamp or continuity reset). Software decode (hardware decoders fail on the per-segment resolution
     // changes a playlist produces) with the hardware encoder.
-    private async Task StreamConcatAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, Stream? output, string? pipePath, CancellationToken cancellationToken)
+    private async Task StreamConcatAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, Stream output, CancellationToken cancellationToken)
     {
         var playable = programs.Where(p => !string.IsNullOrEmpty(p.Path) && File.Exists(p.Path)).ToList();
         if (playable.Count == 0)
         {
             _logger.LogWarning("Every item on channel {Name} is unreachable; showing standby", channel.Name);
-            await StreamSlateAsync(ffmpeg, output, pipePath, cancellationToken).ConfigureAwait(false);
+            await StreamSlateAsync(ffmpeg, output, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -217,10 +145,10 @@ public class StreamSessionService
             while (!cancellationToken.IsCancellationRequested)
             {
                 var seek = SeekToNow(playable);
-                var args = StreamArguments.BuildConcat(listFile, seek, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel, OutputTarget(pipePath));
+                var args = StreamArguments.BuildConcat(listFile, seek, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel);
 
                 var started = DateTime.UtcNow;
-                var total = await RunSinkAsync(ffmpeg, args, channel.Name, output, pipePath, cancellationToken).ConfigureAwait(false);
+                var total = await RunFfmpegAsync(ffmpeg, args, channel.Name, output, cancellationToken).ConfigureAwait(false);
                 if (cancellationToken.IsCancellationRequested)
                 {
                     break;
@@ -239,19 +167,12 @@ public class StreamSessionService
                 if (quickFail)
                 {
                     _logger.LogWarning("Channel {Name}: continuous stream failed to run; showing standby", channel.Name);
-                    await StreamSlateAsync(ffmpeg, output, pipePath, cancellationToken).ConfigureAwait(false);
+                    await StreamSlateAsync(ffmpeg, output, cancellationToken).ConfigureAwait(false);
                     break;
                 }
 
-                if (pipePath is not null)
-                {
-                    // On the pipe path a fresh ffmpeg can't re-attach to the reader Jellyfin already saw end, so
-                    // there is nothing to resume into: let the stream end and the client re-tune. (The buffered
-                    // file path below resumes seamlessly because Jellyfin keeps reading the same growing file.)
-                    _logger.LogDebug("Channel {Name}: continuous pipe stream ended", channel.Name);
-                    break;
-                }
-
+                // Jellyfin keeps reading the same growing file, so a fresh ffmpeg resumes seamlessly at the
+                // current wall-clock position.
                 _logger.LogDebug("Channel {Name}: continuous stream ended; resuming at the current position", channel.Name);
             }
         }
@@ -311,7 +232,7 @@ public class StreamSessionService
             else if (++consecutiveFailures >= programs.Count)
             {
                 _logger.LogWarning("Every item on channel {Name} failed to play; showing standby", channel.Name);
-                await StreamSlateAsync(ffmpeg, output, pipePath: null, cancellationToken).ConfigureAwait(false);
+                await StreamSlateAsync(ffmpeg, output, cancellationToken).ConfigureAwait(false);
                 break;
             }
             else
@@ -419,7 +340,7 @@ public class StreamSessionService
 
     // Streams a standby slate (colour bars + silence), looped, until the client disconnects. Shown when a
     // channel has no playable content so viewers get an intentional standby card, not a black screen.
-    private async Task StreamSlateAsync(string ffmpeg, Stream? output, string? pipePath, CancellationToken cancellationToken)
+    private async Task StreamSlateAsync(string ffmpeg, Stream output, CancellationToken cancellationToken)
     {
         var (width, bitrate) = Plugin.Instance?.ReadConfiguration(c => (c.TranscodeWidth, c.TranscodeVideoBitrateKbps))
             ?? (1280, 4000);
@@ -429,9 +350,9 @@ public class StreamSessionService
         var timeline = TimeSpan.Zero;
         while (!cancellationToken.IsCancellationRequested)
         {
-            var args = StreamArguments.BuildSlate(width, bitrate, clipSeconds, timeline, font, OutputTarget(pipePath));
+            var args = StreamArguments.BuildSlate(width, bitrate, clipSeconds, timeline, font);
             var started = DateTime.UtcNow;
-            var total = await RunSinkAsync(ffmpeg, args, "standby", output, pipePath, cancellationToken).ConfigureAwait(false);
+            var total = await RunFfmpegAsync(ffmpeg, args, "standby", output, cancellationToken).ConfigureAwait(false);
             if (total == 0)
             {
                 break; // ffmpeg could not even produce the slate; avoid a hot loop.
@@ -453,78 +374,6 @@ public class StreamSessionService
 
             timeline += TimeSpan.FromSeconds(clipSeconds);
         }
-    }
-
-    // ffmpeg's output target: a named pipe (which ffmpeg writes directly, so a SIGKILL cleanly ends a stuck
-    // write) when one is provided, otherwise stdout for our process to pump to a file.
-    private static string OutputTarget(string? pipePath) => pipePath ?? "pipe:1";
-
-    // Runs ffmpeg to whichever sink the caller chose. Both forms return a positive value on a healthy run and
-    // zero on an immediate failure, so the self-heal loops can treat them identically.
-    private Task<long> RunSinkAsync(string ffmpeg, IReadOnlyList<string> args, string label, Stream? output, string? pipePath, CancellationToken cancellationToken)
-        => pipePath is not null
-            ? RunFfmpegToPipeAsync(ffmpeg, args, label, cancellationToken)
-            : RunFfmpegAsync(ffmpeg, args, label, output!, cancellationToken);
-
-    // Runs ffmpeg when it writes its output to a named pipe itself (no stdout pumping). We cannot count bytes,
-    // so a run that survived at least a couple of seconds (or was cancelled) is treated as healthy; an early
-    // non-zero exit is a real failure. Returns 1 (healthy) or 0 (failed), matching RunFfmpegAsync's contract.
-    private async Task<long> RunFfmpegToPipeAsync(string ffmpeg, IReadOnlyList<string> args, string label, CancellationToken cancellationToken)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = ffmpeg,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        foreach (var arg in args)
-        {
-            startInfo.ArgumentList.Add(arg);
-        }
-
-        _logger.LogDebug("Live Channels: producer ffmpeg [{Label}] -> pipe: {Ffmpeg} {Args}", label, ffmpeg, string.Join(' ', args));
-
-        using var process = new Process { StartInfo = startInfo };
-        try
-        {
-            process.Start();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to start ffmpeg for {Label}", label);
-            return 0;
-        }
-
-        var stderrTask = ReadStandardErrorAsync(process, cancellationToken);
-        var started = DateTime.UtcNow;
-        try
-        {
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Closed by the player or by CloseLiveStream; expected.
-        }
-        finally
-        {
-            await KillAndWaitAsync(process).ConfigureAwait(false);
-        }
-
-        var stderr = await stderrTask.ConfigureAwait(false);
-        var exitCode = process.HasExited ? process.ExitCode : -1;
-        var healthy = cancellationToken.IsCancellationRequested || DateTime.UtcNow - started >= TimeSpan.FromSeconds(2);
-        if (!healthy)
-        {
-            _logger.LogWarning("ffmpeg exited early for {Label} (exit {Exit}): {Error}", label, exitCode, stderr.Trim());
-        }
-        else if (!string.IsNullOrWhiteSpace(stderr))
-        {
-            _logger.LogDebug("ffmpeg ({Label}, exit {Exit}): {Error}", label, exitCode, stderr.Trim());
-        }
-
-        return healthy ? 1 : 0;
     }
 
     // Runs ffmpeg with the given arguments, pumping its stdout to the output stream. Returns the bytes

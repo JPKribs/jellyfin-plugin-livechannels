@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Models;
@@ -169,15 +168,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
 
         var cts = new CancellationTokenSource();
 
-        // Prefer a named pipe so nothing accumulates on disk: ffmpeg writes the pipe and Jellyfin reads it
-        // exactly like a file (it runs `ffmpeg -i <path>` and does not probe). Only the seamless continuous
-        // path can use it — it is one long-lived ffmpeg, so a kill on close cleanly ends a stuck write. The
-        // per-item path (subtitle burn-in / high-resolution sources) needs a buffered file, and so does any
-        // system without mkfifo (Windows) or where it fails.
-        var usePipe = _streams.ShouldUsePipe(channel) && TryCreateFifo(path);
-        var worker = usePipe
-            ? Task.Run(() => RunProducerAsync(() => _streams.StreamConcatToPipeAsync(channel, path, cts.Token), channel.Name, output: null), CancellationToken.None)
-            : StartFileProducer(channel, path, cts);
+        var worker = StartFileProducer(channel, path, cts);
 
         _live[liveStreamId] = new LiveSession(cts, worker, path, channel.Name, channelId);
 
@@ -186,35 +177,31 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         // transcodes do not pile up and saturate the box. Also sweep any finished sessions while we are here.
         EvictStaleSessions(channelId, keep: liveStreamId);
 
-        // A regular file is opened immediately by Jellyfin, so wait until the producer has buffered enough to
-        // play and, if it dies with nothing, tear the session down and surface a clear failure rather than
-        // handing over an empty file. A pipe needs no pre-buffer: ffmpeg's TS headers lead the stream and
-        // Jellyfin blocks on the pipe until ffmpeg opens it.
-        if (!usePipe)
+        // Jellyfin opens the temp file immediately, so wait until the producer has buffered enough to play and,
+        // if it dies with nothing, tear the session down and surface a clear failure rather than handing over an
+        // empty file.
+        try
         {
-            try
+            await WaitForBytesAsync(path, worker, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (_live.TryRemove(liveStreamId, out var failed))
             {
-                await WaitForBytesAsync(path, worker, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                if (_live.TryRemove(liveStreamId, out var failed))
+                try
                 {
-                    try
-                    {
-                        await failed.Cts.CancelAsync().ConfigureAwait(false);
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                        // Already finished.
-                    }
-
-                    DisposeSession(failed);
+                    await failed.Cts.CancelAsync().ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Already finished.
                 }
 
-                _logger.LogWarning(ex, "Live Channels: {Name} produced no playable output", channel.Name);
-                throw;
+                DisposeSession(failed);
             }
+
+            _logger.LogWarning(ex, "Live Channels: {Name} produced no playable output", channel.Name);
+            throw;
         }
 
         _activity.Log(
@@ -225,112 +212,16 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         return BuildSource(liveStreamId, path);
     }
 
-    // P/Invoke (not LibraryImport, which would require enabling unsafe code project-wide). Unix-only; gated and
-    // never reached on Windows. The search-path attribute satisfies CA5392 and is ignored by the Unix loader.
-    [DllImport("libc", SetLastError = true)]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    private static extern int mkfifo(string path, uint mode);
-
-    // Creates a FIFO (named pipe) at the path. Unix only; returns false on Windows or any failure so the caller
-    // falls back to a regular file. The path is a fresh GUID, so it never collides with an existing file.
-    private bool TryCreateFifo(string path)
-    {
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS() && !OperatingSystem.IsFreeBSD())
-        {
-            return false;
-        }
-
-        try
-        {
-            if (mkfifo(path, Convert.ToUInt32("600", 8)) == 0)
-            {
-                return true;
-            }
-
-            _logger.LogDebug("Live Channels: mkfifo failed for {Path} (errno {Errno}); using a regular file", path, Marshal.GetLastWin32Error());
-            return false;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Live Channels: could not create a named pipe at {Path}; using a regular file", path);
-            return false;
-        }
-    }
-
-    // FALLOC_FL_KEEP_SIZE (0x01) | FALLOC_FL_PUNCH_HOLE (0x02): free the blocks in a range while leaving the file
-    // length unchanged, so the freed region reads back as zeros. Linux only; gated below.
-    [DllImport("libc", SetLastError = true)]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    private static extern int fallocate(int fd, int mode, long offset, long len);
-
-    // Starts the file-backed producer (the per-item path, and the fallback when a pipe can't be created): opens
-    // a temp file the producer appends to and Jellyfin reads, disposing it when the producer stops (it is deleted
-    // on close). The trimmer keeps its on-disk size bounded; the pipe path is the zero-disk alternative.
+    // Starts the file-backed producer: opens a temp file the producer appends to and Jellyfin reads, disposing it
+    // when the producer stops (it is deleted on close).
     private Task StartFileProducer(Channel channel, string path, CancellationTokenSource cts)
     {
         var output = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, BufferSize, useAsync: true);
-        StartFileTrimmer(path, cts.Token);
         return Task.Run(() => RunProducerAsync(() => _streams.StreamToAsync(channel, output, cts.Token), channel.Name, output), CancellationToken.None);
     }
 
-    // Bounds the temp file's on-disk size. Jellyfin reads the file forward at realtime, so everything more than a
-    // few minutes behind the write head has been consumed and will never be re-read. On Linux we punch a hole over
-    // that consumed prefix: the file's logical length is unchanged (Jellyfin's read offsets stay valid) but the
-    // blocks are freed, so disk use stays flat at the retained tail instead of growing for the whole session.
-    // No-op on any other OS or filesystem that does not support hole punching (the file just grows as before).
-    private void StartFileTrimmer(string path, CancellationToken token)
-    {
-        if (!OperatingSystem.IsLinux() || !(Plugin.Instance?.ReadConfiguration(c => c.TrimStreamFiles) ?? true))
-        {
-            return;
-        }
-
-        _ = Task.Run(() => TrimFileLoopAsync(path, token), CancellationToken.None);
-    }
-
-    private async Task TrimFileLoopAsync(string path, CancellationToken token)
-    {
-        // Keep the last few minutes of stream on disk. Jellyfin's transcoder reads only a handful of seconds
-        // behind the producer, so this is a large safety margin; the floor covers very low bitrates.
-        var bitrateKbps = Plugin.Instance?.ReadConfiguration(c => c.TranscodeVideoBitrateKbps) ?? 4000;
-        var retain = Math.Max(64L * 1024 * 1024, (long)bitrateKbps * 1000 / 8 * 300);
-
-        try
-        {
-            using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
-            var fd = handle.DangerousGetHandle().ToInt32();
-            while (!token.IsCancellationRequested)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(15), token).ConfigureAwait(false);
-                try
-                {
-                    var punch = RandomAccess.GetLength(handle) - retain;
-                    if (punch > 0 && fallocate(fd, 0x01 | 0x02, 0, punch) != 0)
-                    {
-                        // The filesystem does not support hole punching (e.g. some overlay/network mounts). It will
-                        // keep failing, so stop trying; the file simply grows as it did before, deleted on close.
-                        _logger.LogDebug("Live Channels: hole punching unsupported for {Path} (errno {Errno}); leaving the temp file untrimmed", path, Marshal.GetLastWin32Error());
-                        return;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Live Channels: could not trim temp file {Path}", path);
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Stream closed; stop trimming.
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Live Channels: temp-file trimmer could not open {Path}", path);
-        }
-    }
-
     // Runs a producer delegate with the standard lifecycle: swallow cancellation, log any real failure, and
-    // dispose the output file if there is one (the pipe producer passes none — ffmpeg owns the pipe).
+    // dispose the output file.
     private async Task RunProducerAsync(Func<Task> produce, string channelName, FileStream? output)
     {
         try
@@ -632,8 +523,8 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             Container = "ts",
             IsInfiniteStream = true,
             // Read the stream at native frame rate so Jellyfin's transcoder paces itself to realtime instead of
-            // racing through our file to EOF and ending the stream after a few seconds (the per-item path writes
-            // a regular file, which, unlike a pipe, returns EOF the moment the reader catches the write head).
+            // racing through our growing file to EOF and ending the stream after a few seconds (a regular file
+            // returns EOF the moment the reader catches the producer's write head).
             ReadAtNativeFramerate = true,
             RequiresOpening = path is null,
             RequiresClosing = true,

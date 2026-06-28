@@ -255,8 +255,7 @@ public static class StreamArguments
         VideoEncoderProfile video,
         string audioEncoder,
         int audioBitrate,
-        string? decodeHwaccel = null,
-        string outputTarget = "pipe:1")
+        string? decodeHwaccel = null)
     {
         ArgumentNullException.ThrowIfNull(listFilePath);
         ArgumentNullException.ThrowIfNull(video);
@@ -341,11 +340,10 @@ public static class StreamArguments
         Add(args, "-max_muxing_queue_size", "1024");
 
         // One continuous encoder, so no per-item timeline offset is needed. But mark the first packets as a
-        // discontinuity: on the file path the self-heal loop restarts ffmpeg and appends to the same file Jellyfin
-        // keeps reading, so the fresh stream's reset continuity counters/PCR must be flagged or the reader sees a
-        // broken seam. The target is stdout (pipe:1) when our process pumps the output to a file, or a named-pipe
-        // path when ffmpeg writes the pipe directly. -y overwrites the path target without prompting.
-        Add(args, "-y", "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-muxpreload", "0", "-muxdelay", "0", outputTarget);
+        // discontinuity: the self-heal loop restarts ffmpeg and appends to the same file Jellyfin keeps reading,
+        // so the fresh stream's reset continuity counters/PCR must be flagged or the reader sees a broken seam.
+        // ffmpeg writes to stdout (pipe:1) and our process pumps that to the file. -y overwrites without prompting.
+        Add(args, "-y", "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-muxpreload", "0", "-muxdelay", "0", "pipe:1");
 
         return args;
     }
@@ -361,7 +359,7 @@ public static class StreamArguments
     /// <param name="timeline">Output timestamp offset, continuing the channel's timeline.</param>
     /// <param name="fontPath">A TrueType font to label the slate, or <c>null</c> to fall back to colour bars.</param>
     /// <returns>The ffmpeg argument list.</returns>
-    public static List<string> BuildSlate(int width, int bitrate, double seconds, TimeSpan timeline, string? fontPath, string outputTarget = "pipe:1")
+    public static List<string> BuildSlate(int width, int bitrate, double seconds, TimeSpan timeline, string? fontPath)
     {
         var height = (int)Math.Round(width * 9.0 / 16.0);
         if (height % 2 != 0)
@@ -403,7 +401,7 @@ public static class StreamArguments
             args.Add(timeline.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture));
         }
 
-        Add(args, "-y", "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-muxdelay", "0", outputTarget);
+        Add(args, "-y", "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-muxdelay", "0", "pipe:1");
         return args;
     }
 
