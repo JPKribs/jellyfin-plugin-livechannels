@@ -63,6 +63,12 @@ public class Channel
     /// <summary>Gets or sets a value indicating whether episodes within a series are shuffled rather than played in air order.</summary>
     public bool ShuffleEpisodes { get; set; }
 
+    /// <summary>Gets or sets the content type the channel weights more heavily in its (shuffled) loop, or <see cref="Models.FavorKind.None"/>.</summary>
+    public FavorKind FavorKind { get; set; } = FavorKind.None;
+
+    /// <summary>Gets or sets how strongly <see cref="FavorKind"/> is favoured.</summary>
+    public FavorStrength FavorStrength { get; set; } = FavorStrength.Moderate;
+
     /// <summary>
     /// Gets or sets which subtitle track is burned into the video. Burn-in is baked in for every viewer
     /// (a linear stream cannot carry selectable tracks).

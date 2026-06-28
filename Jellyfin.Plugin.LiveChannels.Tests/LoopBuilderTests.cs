@@ -15,7 +15,7 @@ public class LoopBuilderTests
     private static readonly long Hour = TimeSpan.FromHours(1).Ticks;
 
     private static ProgramEntry Movie(string title)
-        => new ProgramEntry(Guid.NewGuid(), title, null, Hour, "/m.mkv");
+        => new ProgramEntry(Guid.NewGuid(), title, null, Hour, "/m.mkv") { IsMovie = true };
 
     private static ProgramEntry Ep(Guid seriesId, string seriesName, int season, int number, string rawName)
         => new ProgramEntry(Guid.NewGuid(), seriesName + " - " + rawName, null, Hour, "/e.mkv")
@@ -27,8 +27,8 @@ public class LoopBuilderTests
             RawName = rawName
         };
 
-    private static ChannelLoopOptions Opts(int block = 1, bool keepMulti = true, bool shuffle = false, bool shuffleEp = false, string ch = "ch1")
-        => new ChannelLoopOptions(block, keepMulti, shuffle, shuffleEp, ch);
+    private static ChannelLoopOptions Opts(int block = 1, bool keepMulti = true, bool shuffle = false, bool shuffleEp = false, string ch = "ch1", FavorKind favor = FavorKind.None, FavorStrength strength = FavorStrength.Moderate)
+        => new ChannelLoopOptions(block, keepMulti, shuffle, shuffleEp, ch, favor, strength);
 
     // Episode numbers of one series, in output order.
     private static List<int> EpisodeOrder(IReadOnlyList<ProgramEntry> loop, Guid seriesId)
@@ -160,6 +160,30 @@ public class LoopBuilderTests
         }
 
         Assert.True(maxRun <= 4, "a series ran for " + maxRun + " consecutive items (more than one 4-episode block)");
+    }
+
+    [Fact]
+    public void Favor_BoostsChosenKind_ByRepeating()
+    {
+        // Four movies against a 40-episode show. Naturally the show dominates; favoring movies should multiply
+        // their airtime by repeating them, so movies become at least as common as the show.
+        var items = new List<ProgramEntry>();
+        for (var i = 0; i < 4; i++)
+        {
+            items.Add(Movie("Movie" + i));
+        }
+
+        var show = new Guid("33333333-3333-3333-3333-333333333333");
+        items.AddRange(Enumerable.Range(1, 40).Select(i => Ep(show, "Show", 1, i, "e" + i)));
+
+        int Movies(IReadOnlyList<ProgramEntry> loop) => loop.Count(e => e.SeriesId is null);
+
+        var plain = ProgramLoopBuilder.Build(items, Opts(block: 1, shuffle: true));
+        var favored = ProgramLoopBuilder.Build(items, Opts(block: 1, shuffle: true, favor: FavorKind.Movies, strength: FavorStrength.Heavy));
+
+        Assert.Equal(4, Movies(plain));                                   // natural: each movie once
+        Assert.True(Movies(favored) >= Movies(plain) * 5, "favoring should multiply movie airtime");
+        Assert.True(Movies(favored) >= favored.Count(e => e.SeriesId is not null), "favored movies should be at least as common as the show");
     }
 
     [Fact]

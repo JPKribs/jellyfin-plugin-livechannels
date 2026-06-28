@@ -636,6 +636,8 @@ export default function (view) {
         el('includeSpecials').checked = !!ch.IncludeSpecials;
         el('shuffle').checked = ch.Shuffle !== false;
         el('episodeOrder').value = ch.ShuffleEpisodes ? 'random' : 'air';
+        el('favorKind').value = ch.FavorKind || 'None';
+        el('favorStrength').value = ch.FavorStrength || 'Moderate';
         el('subtitleBurnIn').value = ch.SubtitleBurnIn || 'Never';
 
         currentEnabled = ch.Enabled !== false;
@@ -659,6 +661,8 @@ export default function (view) {
         ch.IncludeSpecials = el('includeSpecials').checked;
         ch.Shuffle = el('shuffle').checked;
         ch.ShuffleEpisodes = el('episodeOrder').value === 'random';
+        ch.FavorKind = el('favorKind').value;
+        ch.FavorStrength = el('favorStrength').value;
         ch.SubtitleBurnIn = el('subtitleBurnIn').value;
         ch.Enabled = currentEnabled;
         // Sources are mutated live by the cards; keep LibraryName in sync.
@@ -725,7 +729,8 @@ export default function (view) {
             LogoStyle: 'Number', LogoSymbol: '', LogoShowName: true,
             Sources: [], MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, KidsRatingThreshold: 'G',
             EpisodesPerBlock: 1, KeepMultiPartTogether: true,
-            IncludeSpecials: false, Shuffle: true, ShuffleEpisodes: false, SubtitleBurnIn: 'Never', Enabled: true
+            IncludeSpecials: false, Shuffle: true, ShuffleEpisodes: false,
+            FavorKind: 'None', FavorStrength: 'Moderate', SubtitleBurnIn: 'Never', Enabled: true
         });
         currentIndex = channels.length - 1;
         renderSelect();

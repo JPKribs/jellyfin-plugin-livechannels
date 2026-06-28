@@ -319,7 +319,9 @@ public class ChannelService
             channel.KeepMultiPartTogether,
             channel.Shuffle,
             channel.ShuffleEpisodes,
-            channel.Id);
+            channel.Id,
+            channel.FavorKind,
+            channel.FavorStrength);
 
         return ProgramLoopBuilder.Build(entries, options);
     }

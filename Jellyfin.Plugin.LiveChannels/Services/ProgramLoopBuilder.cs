@@ -14,12 +14,16 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// <param name="Shuffle">Shuffle block order (deterministically) instead of ordering by name.</param>
 /// <param name="ShuffleEpisodes">Shuffle episodes within a series instead of playing them in air order.</param>
 /// <param name="ChannelId">Channel id, seeding the deterministic shuffle so the guide and stream agree.</param>
+/// <param name="FavorKind">A content type to weight more heavily in the shuffled loop, or <see cref="Models.FavorKind.None"/>.</param>
+/// <param name="FavorStrength">How strongly <paramref name="FavorKind"/> is favoured.</param>
 public readonly record struct ChannelLoopOptions(
     int EpisodesPerBlock,
     bool KeepMultiPartTogether,
     bool Shuffle,
     bool ShuffleEpisodes,
-    string ChannelId);
+    string ChannelId,
+    FavorKind FavorKind = FavorKind.None,
+    FavorStrength FavorStrength = FavorStrength.Moderate);
 
 /// <summary>
 /// Turns a channel's resolved items into the ordered loop it cycles through: episodes are grouped by series
@@ -110,13 +114,20 @@ public static class ProgramLoopBuilder
         // hash so equal-sized series do not line up. Sorting by that position deals each series out at even
         // intervals and interleaves the series in proportion to their size, while keeping a series in order.
         // Standalone items are one-block groups, so each lands at its own random phase and scatters too.
+        // When the channel favours a content type, give every group of that type extra slots so it fills the
+        // target share of the loop, cycling its blocks to cover the slots (the "repeat to fill the share" choice).
+        // A multiplier of 1 leaves a group untouched.
+        var favorMultiplier = FavorMultiplier(blocks, options);
+
         var spread = blocks
             .GroupBy(b => b.GroupKey, StringComparer.Ordinal)
             .SelectMany(g =>
             {
                 var ordered = g.OrderBy(b => b.Seq).ToList();
                 var phase = (uint)ShuffleKey(options.ChannelId, "phase:" + g.Key) / (double)uint.MaxValue;
-                return ordered.Select((b, i) => (Block: b, Position: (i + phase) / ordered.Count));
+                var favored = options.FavorKind != FavorKind.None && KindOf(ordered[0]) == options.FavorKind;
+                var slots = favored ? Math.Max(ordered.Count, (int)Math.Round(ordered.Count * favorMultiplier)) : ordered.Count;
+                return Enumerable.Range(0, slots).Select(k => (Block: ordered[k % ordered.Count], Position: (k + phase) / slots));
             })
             .OrderBy(x => x.Position)
             .ThenBy(x => x.Block.GroupKey, StringComparer.Ordinal)
@@ -232,6 +243,48 @@ public static class ProgramLoopBuilder
     }
 
     private static bool SameSeries(Block a, Block b) => string.Equals(a.GroupKey, b.GroupKey, StringComparison.Ordinal);
+
+    // The content type of a block, from its first item: an episode (has a series), a movie, or otherwise a
+    // standalone (music video).
+    private static FavorKind KindOf(Block block)
+    {
+        var item = block.Items[0];
+        return item.SeriesId is not null ? FavorKind.Shows : (item.IsMovie ? FavorKind.Movies : FavorKind.MusicVideos);
+    }
+
+    // How many times to inflate the favoured type's slots so it reaches its target share of the loop. Returns 1
+    // (no change) when nothing is favoured, the type is absent, the type is already the whole channel, or it is
+    // already above its target. Capped so a tiny favoured library does not repeat absurdly often.
+    private static double FavorMultiplier(List<Block> blocks, ChannelLoopOptions options)
+    {
+        if (options.FavorKind == FavorKind.None)
+        {
+            return 1.0;
+        }
+
+        var favored = blocks.Count(b => KindOf(b) == options.FavorKind);
+        var others = blocks.Count - favored;
+        if (favored == 0 || others == 0)
+        {
+            return 1.0;
+        }
+
+        var target = options.FavorStrength switch
+        {
+            FavorStrength.Slight => 0.45,
+            FavorStrength.Heavy => 0.85,
+            _ => 0.65
+        };
+
+        if ((double)favored / blocks.Count >= target)
+        {
+            return 1.0;
+        }
+
+        // favored*m / (favored*m + others) = target  ->  m = target*others / (favored*(1-target))
+        var m = target * others / (favored * (1 - target));
+        return Math.Clamp(m, 1.0, 10.0);
+    }
 
     // Counts the same-series adjacent pairs touching positions a and b (the only pairs a swap of a and b changes).
     // a < b always, so the only overlapping right-index is a+1 == b.
