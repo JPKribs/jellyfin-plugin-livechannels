@@ -39,6 +39,7 @@ public static class StreamArguments
         string? externalSubtitlePath = null,
         bool softwareDecode = false,
         bool isHdr = false,
+        bool isInterlaced = false,
         int? audioOrdinal = null)
     {
         ArgumentNullException.ThrowIfNull(path);
@@ -47,31 +48,29 @@ public static class StreamArguments
 
         var burnIn = forcedSubtitle.HasValue;
 
-        // HDR on an Intel hardware encoder (QSV/VAAPI) tone-maps entirely on the iGPU: VAAPI decode, tonemap_vaapi,
-        // scale and pad on VAAPI, then map to QSV for the encoder. Software tone-mapping a 4K HDR source cannot
-        // hold realtime on low-power hardware (e.g. an N100), so this is the only way HDR plays there. Burn-in and
-        // the software-decode fallback drop back to the software tone-map path below.
-        var useHdrVaapi = isHdr && !burnIn && !softwareDecode && IsIntelHardware(video.Name);
-        var hwDecode = !useHdrVaapi && !softwareDecode && !string.IsNullOrEmpty(video.DecodeHwaccel);
+        // The all-GPU VAAPI pipeline (Intel/AMD), built the way Tunarr/ErsatzTV build it: decode, deinterlace,
+        // tone-map, scale and pad all run on VAAPI surfaces and feed the VAAPI encoder directly, so frames never
+        // return to system memory. It handles any bit depth and HDR without a hwdownload, which is exactly the
+        // step that crashed the old path on 10-bit (p010) sources. Subtitle burn-in (the overlay needs system
+        // frames) and the software-decode fallback drop to the software filter chain below.
+        var vaapiPipeline = video.VaapiFilters && !burnIn && !softwareDecode;
+        var hwDecode = !vaapiPipeline && !softwareDecode && !string.IsNullOrEmpty(video.DecodeHwaccel);
 
         // +genpts fills in any missing presentation timestamps so each item starts from a clean, monotonic
         // timeline before the offset is applied.
         var args = new List<string> { "-hide_banner", "-loglevel", "error", "-fflags", "+genpts" };
 
-        // Hardware device initialisation goes before the input. The HDR path needs a VAAPI device with a QSV
-        // device derived from it (so VAAPI filters and the QSV encoder share frames); everything else uses the
-        // encoder profile's own init.
-        foreach (var init in useHdrVaapi ? HdrVaapiInit : video.InitArgs)
+        // Hardware device initialisation goes before the input.
+        foreach (var init in video.InitArgs)
         {
             args.Add(init);
         }
 
-        // Hardware-assisted decoding offloads the heavy decode of 4K/HEVC sources from the CPU. The HDR path
-        // decodes on VAAPI and keeps frames on the GPU through the tone-map. Otherwise QSV/VAAPI keep frames on
-        // the GPU (an output format plus a leading hwdownload, below, brings them back for the software scale);
-        // VideoToolbox auto-downloads. The caller can force software decode (the per-item fallback when a hardware
-        // decode fails, and for subtitle burn-in whose overlay needs system frames the simple way).
-        if (useHdrVaapi)
+        // Hardware-assisted decoding offloads the heavy decode of 4K/HEVC sources from the CPU. The VAAPI pipeline
+        // decodes on the GPU and keeps frames there through every filter. VideoToolbox auto-downloads. The caller
+        // can force software decode (the per-item fallback when a hardware decode fails, and for subtitle burn-in
+        // whose overlay needs system frames).
+        if (vaapiPipeline)
         {
             Add(args, "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi");
         }
@@ -125,13 +124,9 @@ public static class StreamArguments
         var w = width.ToString(CultureInfo.InvariantCulture);
         var h = height.ToString(CultureInfo.InvariantCulture);
         string scale;
-        if (useHdrVaapi)
+        if (vaapiPipeline)
         {
-            // Full GPU HDR pipeline: tone-map PQ/HLG to SDR bt709, scale and letterbox on VAAPI, then map onto a
-            // QSV frame for the encoder. fps pins the constant frame rate; pad_vaapi keeps a 1:1 aspect.
-            scale = "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,"
-                + "scale_vaapi=w=" + w + ":h=" + h + ":force_original_aspect_ratio=decrease,"
-                + "pad_vaapi=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30,hwmap=derive_device=qsv,format=qsv";
+            scale = VaapiFilterChain(w, h, isHdr, isInterlaced);
         }
         else
         {
@@ -399,18 +394,32 @@ public static class StreamArguments
         return args;
     }
 
-    // Device init for the HDR path: a VAAPI device (Intel iHD) with a QSV device derived from it, so the VAAPI
-    // tone-map/scale filters and the QSV encoder share GPU frames through a hwmap.
-    private static readonly string[] HdrVaapiInit =
+    // The all-GPU VAAPI filter chain, mirroring Tunarr/ErsatzTV's Intel pipeline. Every step runs on a VAAPI
+    // surface and the result feeds the VAAPI encoder directly, so frames never touch system memory:
+    //   deinterlace_vaapi  - only for interlaced sources; progressive content skips it (deinterlacing progressive
+    //                        frames would halve their quality), so unlike the auto yadif=deint=1 this is gated.
+    //   tonemap_vaapi      - HDR (PQ/HLG) to SDR bt709, on the GPU, outputting nv12.
+    //   scale_vaapi        - scale to fit within WxH preserving aspect (force_original_aspect_ratio=decrease) and
+    //                        pin the output to 8-bit nv12, which also converts a 10-bit (p010) surface on the GPU.
+    //   pad_vaapi          - letterbox to exactly WxH, auto-centred (x=-1:y=-1).
+    //   fps                - constant frame rate so every item shares one stream shape (runs fine on VAAPI frames).
+    private static string VaapiFilterChain(string w, string h, bool isHdr, bool isInterlaced)
     {
-        "-init_hw_device", "vaapi=va:,vendor_id=0x8086,driver=iHD",
-        "-init_hw_device", "qsv=qs@va",
-        "-filter_hw_device", "qs"
-    };
+        var chain = string.Empty;
+        if (isInterlaced)
+        {
+            chain += "deinterlace_vaapi,";
+        }
 
-    // Whether the encoder is an Intel hardware encoder (QSV or VAAPI), which can run the GPU HDR tone-map path.
-    private static bool IsIntelHardware(string encoderName)
-        => encoderName.Contains("qsv", StringComparison.Ordinal) || encoderName.Contains("vaapi", StringComparison.Ordinal);
+        if (isHdr)
+        {
+            chain += "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,";
+        }
+
+        return chain
+            + "scale_vaapi=w=" + w + ":h=" + h + ":format=nv12:extra_hw_frames=64:force_divisible_by=2:force_original_aspect_ratio=decrease,setsar=1,"
+            + "pad_vaapi=w=" + w + ":h=" + h + ":x=-1:y=-1:color=black,fps=30";
+    }
 
     // Appends a run of arguments (params avoids constant-array allocations the analyzer flags).
     private static void Add(List<string> args, params string[] values)

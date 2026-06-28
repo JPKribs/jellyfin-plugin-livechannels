@@ -35,7 +35,7 @@ public class EncoderResolverTests
     [InlineData("videotoolbox", VideoCodec.Hevc, "hevc_videotoolbox")]
     [InlineData("nvenc", VideoCodec.H264, "h264_nvenc")]
     [InlineData("amf", VideoCodec.Hevc, "hevc_amf")]
-    [InlineData("qsv", VideoCodec.H264, "h264_qsv")]
+    [InlineData("qsv", VideoCodec.H264, "h264_vaapi")]
     [InlineData("vaapi", VideoCodec.H264, "h264_vaapi")]
     public void ResolveVideo_MapsHardwareAccel_ToEncoder(string accel, VideoCodec codec, string expected)
     {
@@ -79,19 +79,21 @@ public class EncoderResolverTests
         => Assert.Null(Resolver("nvenc").ResolveVideo(VideoCodec.H264, true).DecodeHwaccel);
 
     [Fact]
-    public void ResolveVideo_Qsv_HardwareDecodes_WithDownload()
+    public void ResolveVideo_Qsv_RunsVaapiPipeline_WithoutDownload()
     {
-        // QSV keeps decoded frames on the GPU, so it must set an output format and a leading hwdownload that
-        // brings them back for the software scale (the per-item and continuous paths fall back to software).
+        // Intel QSV is driven through the all-GPU VAAPI pipeline (Tunarr's Intel path): VAAPI decode, GPU filters,
+        // VAAPI encode. No hwdownload at all - that step crashed 10-bit sources. Frames never leave the GPU.
         var profile = Resolver("qsv").ResolveVideo(VideoCodec.H264, true);
-        Assert.Equal("qsv", profile.DecodeHwaccel);
-        Assert.Equal("qsv", profile.DecodeOutputFormat);
-        Assert.Contains("hwdownload", profile.DecodeDownload, StringComparison.Ordinal);
+        Assert.Equal("h264_vaapi", profile.Name);
+        Assert.Equal("vaapi", profile.DecodeHwaccel);
+        Assert.Equal("vaapi", profile.DecodeOutputFormat);
+        Assert.True(profile.VaapiFilters);
+        Assert.Equal(string.Empty, profile.DecodeDownload);
     }
 
     [Fact]
     public void ResolveVideo_Qsv_StillUsesHardwareEncoder()
-        => Assert.Equal("h264_qsv", Resolver("qsv").ResolveVideo(VideoCodec.H264, true).Name);
+        => Assert.True(Resolver("qsv").ResolveVideo(VideoCodec.H264, true).IsHardware);
 
     [Fact]
     public void ResolveVideo_Software_HasNoHardwareDecode()

@@ -118,8 +118,7 @@ public class ChannelService
         {
             var transfer = _mediaSourceManager.GetMediaStreams(itemId)
                 .FirstOrDefault(s => s.Type == MediaStreamType.Video)?.ColorTransfer;
-            return string.Equals(transfer, "smpte2084", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(transfer, "arib-std-b67", StringComparison.OrdinalIgnoreCase);
+            return IsHdrTransfer(transfer);
         }
         catch (Exception ex)
         {
@@ -129,25 +128,32 @@ public class ChannelService
     }
 
     /// <summary>
-    /// Whether the item's video is more than 8 bits per channel (10-bit). Such a source decodes to a p010 surface
-    /// that the per-item hardware pipeline cannot hwdownload to nv12, so the stream pipeline decodes it in software.
+    /// The per-item facts the encode plan needs, read in a single media-stream lookup: whether the video is HDR
+    /// (so the VAAPI pipeline tone-maps), whether it is interlaced (so it deinterlaces), and the ordinal of the
+    /// default audio track. Falls back to SDR/progressive/first-track when the streams cannot be read.
     /// </summary>
     /// <param name="itemId">The item id.</param>
-    /// <returns><c>true</c> when the item's video stream is deeper than 8-bit.</returns>
-    public bool IsTenBitSource(Guid itemId)
+    /// <returns>The HDR flag, interlaced flag, and default audio ordinal for the item.</returns>
+    public (bool IsHdr, bool IsInterlaced, int AudioOrdinal) GetSourceInfo(Guid itemId)
     {
         try
         {
-            var bitDepth = _mediaSourceManager.GetMediaStreams(itemId)
-                .FirstOrDefault(s => s.Type == MediaStreamType.Video)?.BitDepth;
-            return bitDepth is > 8;
+            var streams = _mediaSourceManager.GetMediaStreams(itemId);
+            var video = streams.FirstOrDefault(s => s.Type == MediaStreamType.Video);
+            return (IsHdrTransfer(video?.ColorTransfer), video?.IsInterlaced ?? false, DefaultAudio(streams)?.Ordinal ?? 0);
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Could not read media streams for bit depth check on {ItemId}", itemId);
-            return false;
+            _logger.LogDebug(ex, "Could not read media streams for source info on {ItemId}", itemId);
+            return (false, false, 0);
         }
     }
+
+    // PQ (smpte2084) and HLG (arib-std-b67) are the HDR transfer functions every mature pseudo-TV pipeline keys
+    // on (ErsatzTV/Tunarr).
+    private static bool IsHdrTransfer(string? transfer)
+        => string.Equals(transfer, "smpte2084", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(transfer, "arib-std-b67", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The position, among an item's audio streams ordered by index, of the track Jellyfin marks as default, or
