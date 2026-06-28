@@ -36,6 +36,23 @@ public class StreamArgumentsTests
     }
 
     [Fact]
+    public void MapsDefaultAudioTrack_ByOrdinal()
+    {
+        // Honor the audio track Jellyfin marks as default (here the third audio stream) instead of letting ffmpeg
+        // pick by channel count. Any -map disables ffmpeg's auto-selection, so the video is mapped explicitly too.
+        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, false, 2);
+        Assert.Contains("0:a:2?", a);
+        Assert.Contains("0:v:0", a);
+    }
+
+    [Fact]
+    public void MapsFirstAudio_WhenNoDefaultOrdinal()
+    {
+        // With no ordinal supplied the first audio track is mapped, optional so an item without audio still runs.
+        Assert.Contains("0:a:0?", Build());
+    }
+
+    [Fact]
     public void SignalsProgressiveFieldOrder_OnBothPaths()
     {
         // The encoder must tag the output progressive so Jellyfin remuxes instead of adding a deinterlace pass

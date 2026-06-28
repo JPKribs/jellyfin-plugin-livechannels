@@ -38,7 +38,8 @@ public static class StreamArguments
         (int RelativeIndex, bool IsText)? forcedSubtitle,
         string? externalSubtitlePath = null,
         bool softwareDecode = false,
-        bool isHdr = false)
+        bool isHdr = false,
+        int? audioOrdinal = null)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(video);
@@ -152,12 +153,20 @@ public static class StreamArguments
 
         if (burnIn)
         {
-            AppendSubtitleFilter(args, path, forcedSubtitle!.Value, scale, externalSubtitlePath);
+            AppendSubtitleFilter(args, path, forcedSubtitle!.Value, scale, externalSubtitlePath, audioOrdinal);
         }
         else
         {
             args.Add("-vf");
             args.Add(scale);
+
+            // Map the first video stream and the audio track Jellyfin marks as default, so we play the same track
+            // the user would hear in normal playback instead of letting ffmpeg pick by channel count. Any -map
+            // disables ffmpeg's automatic stream selection, so the video must be mapped explicitly too.
+            args.Add("-map");
+            args.Add("0:v:0");
+            args.Add("-map");
+            args.Add(AudioMap(audioOrdinal));
         }
 
         var br = bitrate.ToString(CultureInfo.InvariantCulture);
@@ -412,9 +421,15 @@ public static class StreamArguments
         }
     }
 
+    // The audio stream specifier for the chosen default audio track, optional (`?`) so an item without that
+    // track maps nothing instead of failing. ffmpeg's `a:N` indexes within audio streams, matching the ordinal
+    // ChannelService returns; a missing ordinal falls back to the first audio track.
+    private static string AudioMap(int? audioOrdinal)
+        => "0:a:" + (audioOrdinal ?? 0).ToString(CultureInfo.InvariantCulture) + "?";
+
     // Burns the chosen forced subtitle into the picture. Text subtitles render through the libass-backed
     // `subtitles` filter; bitmap subtitles (PGS/VOBSUB) are composited with `overlay`.
-    private static void AppendSubtitleFilter(List<string> args, string path, (int RelativeIndex, bool IsText) forced, string scale, string? externalSubtitlePath)
+    private static void AppendSubtitleFilter(List<string> args, string path, (int RelativeIndex, bool IsText) forced, string scale, string? externalSubtitlePath, int? audioOrdinal)
     {
         var index = forced.RelativeIndex.ToString(CultureInfo.InvariantCulture);
         string filter;
@@ -440,7 +455,7 @@ public static class StreamArguments
         args.Add("-map");
         args.Add("[v]");
         args.Add("-map");
-        args.Add("0:a?");
+        args.Add(AudioMap(audioOrdinal));
     }
 
     // libavfilter parses the subtitles filename: backslash, single quote, and colon must be escaped so the

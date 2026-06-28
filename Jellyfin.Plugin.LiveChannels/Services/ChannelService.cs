@@ -76,6 +76,36 @@ public class ChannelService
     }
 
     /// <summary>
+    /// The position, among an item's audio streams ordered by index, of the track Jellyfin marks as default, or
+    /// 0 when none is flagged, so the stream pipeline maps the same audio track Jellyfin itself would play
+    /// instead of letting ffmpeg pick by channel count. Returns <c>null</c> when the streams cannot be read.
+    /// </summary>
+    /// <param name="itemId">The item id.</param>
+    /// <returns>The default audio track's ordinal among the item's audio streams, or <c>null</c>.</returns>
+    public int? GetDefaultAudioOrdinal(Guid itemId)
+    {
+        try
+        {
+            var audio = _mediaSourceManager.GetMediaStreams(itemId)
+                .Where(s => s.Type == MediaStreamType.Audio)
+                .OrderBy(s => s.Index)
+                .ToList();
+            if (audio.Count == 0)
+            {
+                return 0;
+            }
+
+            var defaultIndex = audio.FindIndex(s => s.IsDefault);
+            return defaultIndex >= 0 ? defaultIndex : 0;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read media streams for audio selection on {ItemId}", itemId);
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Picks the subtitle track to burn into an item for the given mode: the forced track for
     /// <see cref="SubtitleBurnInMode.Forced"/>, or the forced/default/first track for
     /// <see cref="SubtitleBurnInMode.Always"/>.
