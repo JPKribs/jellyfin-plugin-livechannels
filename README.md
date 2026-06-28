@@ -33,6 +33,7 @@ Per channel you can also set:
 * **Include specials** opts season 0 in. Off by default.
 * **Shuffle** is on by default and is fixed and repeatable, so the guide and the live stream always agree. Disable it to play everything alphabetically.
 * **Episode order** plays a series in air order or at random.
+* **Favor content type** weights a channel toward movies, shows, or music videos so that type plays more often, at a slight, moderate, or heavy strength. Shuffle must be on.
 * **Subtitle burn in** bakes a subtitle track into the video for everyone. Choose **Never**, **Forced only**, or **Always**.
 
 ### Output
