@@ -1,6 +1,6 @@
 # ![Live Channels](Jellyfin.Plugin.LiveChannels/Assets/Logo.png)
 
-**A Jellyfin plugin that builds looping virtual TV channels from your own library and presents them in Jellyfin's Live TV. It sets up its own tuner and guide automatically, so there are no URLs to paste.**
+**A Jellyfin plugin that builds looping virtual TV channels from your own library and presents them natively in Jellyfin's Live TV. No tuner URLs to paste and no exposed endpoints.**
 
 ## Why Does This Exist
 
@@ -8,7 +8,7 @@ There are a lot of psuedo TV channel programs out there but I've always found th
 
 ## How It Works
 
-You define **channels** in the plugin configuration. Each channel resolves to an ordered list of items that loops forever on a fixed schedule. The plugin serves the channels to Jellyfin as a self configuring **M3U tuner** with an **XMLTV guide**, both registered automatically so you never paste a URL. The tuner, guide, channel logos, and streams are served on the loopback address only, so Jellyfin reaches them on the same machine while they stay unreachable from outside even if the Jellyfin port is forwarded. A **Settings** toggle, off by default, opens them to other devices when you want that, with the warning that the connection is unauthenticated. The channels appear in the Live TV guide and play like any other live channel, and saving the configuration keeps the tuner and guide in sync with your channels.
+You define **channels** in the plugin configuration. Each channel resolves to an ordered list of items that loops forever on a fixed schedule. The plugin registers directly with Jellyfin's **Live TV** from inside the server, so the channels, their guide, and their streams are all served by Jellyfin itself. The channels appear in the Live TV guide and play like any other live channel. Saving a channel runs Jellyfin's **Refresh Guide** task so your edits show up right away.
 
 ### Channel content
 

@@ -39,7 +39,7 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
 
     /// <inheritdoc />
     public override string Description =>
-        "Build looping virtual TV channels from genres and ratings or a list of items you pick, served to Jellyfin's Live TV as a tuner and guide it sets up automatically.";
+        "Build looping virtual TV channels from genres and ratings or hand-picked items, presented natively in Jellyfin's Live TV with no exposed endpoints.";
 
     /// <summary>
     /// Validates incoming configuration before persisting it. The dashboard enforces the same rules in the
@@ -54,9 +54,6 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
         }
 
         base.UpdateConfiguration(configuration);
-
-        // Keep the M3U tuner and XMLTV guide in sync with the saved channels and settings.
-        Services.TunerRegistrar.Reregister();
     }
 
     /// <inheritdoc />

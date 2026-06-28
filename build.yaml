@@ -1,15 +1,15 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.2.10"
+version: "10.11.3.0"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
-overview: "Build looping virtual TV channels that appear in Jellyfin's Live TV."
+overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
 description: >
   Live Channels lets administrators build looping virtual TV channels from genres and official
-  ratings or from a list of items they pick. The channels are served to Jellyfin as a self
-  configuring M3U tuner with an XMLTV guide, registered automatically so there are no URLs to
-  paste, and reachable only on the loopback address unless external access is enabled.
+  ratings or from a hand-picked list of items. Each channel, its guide, and its stream are served
+  in-process through Jellyfin's own Live TV, so the channels appear automatically with no tuner to
+  add, no URLs to paste, and no exposed endpoints.
 category: "Live TV"
 imageUrl: "https://raw.githubusercontent.com/JPKribs/jellyfin-plugin-livechannels/refs/heads/master/Jellyfin.Plugin.LiveChannels/Assets/Logo.png"
 owner: "JPKribs"
@@ -17,5 +17,5 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   fixes:
-  - Run the Intel pipeline the same way Jellyfin does, decoding on VAAPI and encoding on QSV, so 10-bit and HDR channels play
-  - Read the GPU render device from the Jellyfin configuration and log the producer command
+  - Build channels internally through Jellyfin Live TV again so playback works
+  - Keep the stream building ahead of playback to reduce stutter

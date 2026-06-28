@@ -19,6 +19,7 @@ public class EncoderResolver
 {
     private static readonly string[] Empty = Array.Empty<string>();
     private static readonly string[] VideotoolboxExtra = { "-allow_sw", "1" };
+    private static readonly string[] QsvInit = { "-init_hw_device", "qsv=hw", "-filter_hw_device", "hw" };
     private static readonly string[] KnownAccels = { "videotoolbox", "nvenc", "amf", "qsv", "vaapi" };
 
     private readonly IServerConfigurationManager _config;
@@ -54,11 +55,12 @@ public class EncoderResolver
         switch (accel)
         {
             // Hardware ENCODE follows the server's configured accelerator for every vendor. Hardware DECODE
-            // offloads the heaviest part of the pipeline (decoding 4K/HEVC sources) from the CPU. Intel (QSV/VAAPI)
-            // runs the all-GPU VAAPI pipeline below, keeping frames on the GPU through every filter. VideoToolbox
-            // hardware-decodes and auto-downloads to system memory for the software scale. The per-item path falls
-            // back to software decode if a hardware decode fails, so a codec a driver cannot decode never breaks
-            // playback. NVENC/AMF stay encode-only (no decode offload wired up here).
+            // offloads the heaviest part of the pipeline (decoding 4K/HEVC sources) from the CPU. VideoToolbox
+            // auto-downloads decoded frames to system memory; QSV/VAAPI keep frames on the GPU, so they set an
+            // output format and a leading hwdownload that brings frames back for the software scale (without it,
+            // the software scale fails with "Impossible to convert between formats"). The continuous and per-item
+            // paths fall back to software decode if a hardware decode fails, so a driver that cannot decode some
+            // codec never breaks playback. NVENC/AMF stay encode-only (no decode offload wired up here).
             case "videotoolbox":
                 return new VideoEncoderProfile(family + "_videotoolbox", label + " (VideoToolbox)", true,
                     Empty, VideotoolboxExtra, "format=yuv420p", false, DecodeHwaccel: "videotoolbox");
@@ -68,33 +70,16 @@ public class EncoderResolver
             case "amf":
                 return new VideoEncoderProfile(family + "_amf", label + " (AMF)", true,
                     Empty, Empty, "format=yuv420p", false);
-            // Intel QSV: decode and filter on VAAPI (scale/pad/deinterlace/tone-map on the GPU), then hwmap the
-            // frames onto a derived QSV device and encode with h264_qsv. This mirrors Jellyfin's own working Intel
-            // command exactly (vaapi=va,driver=iHD -> qsv=qs@va -> filter_hw_device qs -> ... -> h264_qsv), so it
-            // runs on the hardware/driver Jellyfin already proves works, and frames never leave the GPU (no
-            // hwdownload-to-nv12, the step that crashed 10-bit sources). The filter chain appends the hwmap in
-            // StreamArguments when the encoder is QSV. PixelStage uploads to QSV for the software fallback.
             case "qsv":
-                var qsvDevice = ResolveVaapiDevice(options);
-                _logger.LogInformation("Live Channels: QSV-over-VAAPI pipeline on {Device}", qsvDevice);
                 return new VideoEncoderProfile(family + "_qsv", label + " (QSV)", true,
-                    new[]
-                    {
-                        "-init_hw_device", "vaapi=va:" + qsvDevice + ",driver=iHD",
-                        "-init_hw_device", "qsv=qs@va",
-                        "-filter_hw_device", "qs"
-                    },
-                    Empty, "format=nv12,hwupload=extra_hw_frames=64", false,
-                    DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: string.Empty, VaapiFilters: true);
-
-            // Plain VAAPI (e.g. AMD): decode, filter and encode all on VAAPI, no QSV hop. Frames stay on the GPU.
+                    QsvInit, Empty, "format=nv12,hwupload=extra_hw_frames=64", false,
+                    DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12,");
             case "vaapi":
-                var vaapiDevice = ResolveVaapiDevice(options);
-                _logger.LogInformation("Live Channels: VAAPI pipeline on {Device}", vaapiDevice);
+                var device = string.IsNullOrEmpty(options?.VaapiDevice) ? "/dev/dri/renderD128" : options.VaapiDevice;
                 return new VideoEncoderProfile(family + "_vaapi", label + " (VAAPI)", true,
-                    new[] { "-init_hw_device", "vaapi=va:" + vaapiDevice, "-filter_hw_device", "va" }, Empty,
+                    new[] { "-init_hw_device", "vaapi=va:" + device, "-filter_hw_device", "va" }, Empty,
                     "format=nv12,hwupload", false,
-                    DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: string.Empty, VaapiFilters: true);
+                    DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: "hwdownload,format=nv12,");
             default:
                 return Software(codec);
         }
@@ -116,44 +101,10 @@ public class EncoderResolver
             "videotoolbox" => ("VideoToolbox", true),
             "nvenc" => ("NVENC", true),
             "amf" => ("AMF", true),
-            "qsv" => ("Intel (VAAPI)", true),
+            "qsv" => ("QSV (Intel Quick Sync)", true),
             "vaapi" => ("VAAPI", true),
             _ => ("Software (no hardware acceleration configured in Jellyfin)", false)
         };
-    }
-
-    // The DRM render node the VAAPI pipeline binds to, taken straight from Jellyfin's encoding config so we land
-    // on the exact GPU its own hardware transcoding uses. On Linux QSV/VAAPI, VaapiDevice is the canonical render
-    // node (the QSV device is derived from it and is usually left blank), so it wins. Only when nothing is
-    // configured do we fall back: the single render node present, or renderD128 as a last resort.
-    private string ResolveVaapiDevice(EncodingOptions? options)
-    {
-        if (!string.IsNullOrWhiteSpace(options?.VaapiDevice))
-        {
-            return options!.VaapiDevice;
-        }
-
-        if (!string.IsNullOrWhiteSpace(options?.QsvDevice))
-        {
-            return options!.QsvDevice;
-        }
-
-        try
-        {
-            var nodes = System.IO.Directory.GetFiles("/dev/dri", "renderD*");
-            if (nodes.Length > 0)
-            {
-                Array.Sort(nodes, StringComparer.Ordinal);
-                _logger.LogInformation("Live Channels: no VAAPI device configured in Jellyfin; using detected node {Node}", nodes[0]);
-                return nodes[0];
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not enumerate /dev/dri render nodes");
-        }
-
-        return "/dev/dri/renderD128";
     }
 
     private EncodingOptions? ReadOptions()

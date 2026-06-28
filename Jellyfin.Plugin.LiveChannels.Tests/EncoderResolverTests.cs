@@ -79,23 +79,19 @@ public class EncoderResolverTests
         => Assert.Null(Resolver("nvenc").ResolveVideo(VideoCodec.H264, true).DecodeHwaccel);
 
     [Fact]
-    public void ResolveVideo_Qsv_DecodesOnVaapi_EncodesOnQsv_NoDownload()
+    public void ResolveVideo_Qsv_HardwareDecodes_WithDownload()
     {
-        // Intel QSV decodes and filters on VAAPI, then hwmaps onto QSV to encode with h264_qsv - mirroring
-        // Jellyfin's own working Intel command. No hwdownload (that step crashed 10-bit). The init derives a QSV
-        // device from the VAAPI one and pins the iHD driver.
+        // QSV keeps decoded frames on the GPU, so it must set an output format and a leading hwdownload that
+        // brings them back for the software scale (the per-item and continuous paths fall back to software).
         var profile = Resolver("qsv").ResolveVideo(VideoCodec.H264, true);
-        Assert.Equal("h264_qsv", profile.Name);
-        Assert.Equal("vaapi", profile.DecodeHwaccel);
-        Assert.True(profile.VaapiFilters);
-        Assert.Equal(string.Empty, profile.DecodeDownload);
-        Assert.Contains(profile.InitArgs, a => a.Contains("driver=iHD", StringComparison.Ordinal));
-        Assert.Contains(profile.InitArgs, a => a.Contains("qsv=qs@va", StringComparison.Ordinal));
+        Assert.Equal("qsv", profile.DecodeHwaccel);
+        Assert.Equal("qsv", profile.DecodeOutputFormat);
+        Assert.Contains("hwdownload", profile.DecodeDownload, StringComparison.Ordinal);
     }
 
     [Fact]
     public void ResolveVideo_Qsv_StillUsesHardwareEncoder()
-        => Assert.True(Resolver("qsv").ResolveVideo(VideoCodec.H264, true).IsHardware);
+        => Assert.Equal("h264_qsv", Resolver("qsv").ResolveVideo(VideoCodec.H264, true).Name);
 
     [Fact]
     public void ResolveVideo_Software_HasNoHardwareDecode()

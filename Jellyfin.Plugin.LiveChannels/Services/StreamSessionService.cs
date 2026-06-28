@@ -69,7 +69,7 @@ public class StreamSessionService
         if (programs.Count == 0)
         {
             _logger.LogWarning("Live channel {Name} resolved to no playable items; showing standby", channel.Name);
-            await StreamSlateAsync(ffmpeg, output, cancellationToken).ConfigureAwait(false);
+            await StreamSlateAsync(ffmpeg, output, pipePath: null, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -88,22 +88,10 @@ public class StreamSessionService
         var videoCodec = Plugin.Instance?.ReadConfiguration(c => c.VideoCodec) ?? Models.VideoCodec.H264;
         var usesHwUpload = _encoders.ResolveVideo(videoCodec, allowHardware: true).PixelStage.Contains("hwupload", StringComparison.Ordinal);
         var highRes = programs.Any(p => p.SourceHeight > 1080);
-
-        // Per-item is forced by subtitle burn-in (needs a per-item filter graph), any >1080p source (the concat
-        // decoder can't follow per-segment resolution changes), or a GPU-upload encoder (QSV/VAAPI can't survive
-        // the concat demuxer's filter reinit). HDR and 10-bit are resolved per item inside BuildArguments, so they
-        // do NOT need a channel-wide probe here: IsHdrSource does a media lookup per item, and probing every item
-        // of a multi-thousand-item channel cost seconds of startup latency on every tune-in (the stream appeared
-        // to never load). Only the concat-eligible encoders need the HDR check, and only to keep an HDR item from
-        // playing washed-out through the non-tone-mapping concat path, so pay it solely when concat is still live.
-        var perItem = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never || highRes || usesHwUpload;
-        if (!perItem)
-        {
-            perItem = programs.Any(p => _channels.IsHdrSource(p.ItemId));
-        }
-
+        var hasHdr = programs.Any(p => _channels.IsHdrSource(p.ItemId));
+        var perItem = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never || highRes || hasHdr || usesHwUpload;
         var uniform = programs.Count > 0 && programs[0].SourceHeight > 0 && programs.All(p => p.SourceHeight == programs[0].SourceHeight);
-        LogEncodePlan(channel, programs.Count, index, perItem, uniform);
+        LogEncodePlan(channel, programs.Count, index, perItem, uniform, hasHdr);
 
         if (perItem)
         {
@@ -111,20 +99,92 @@ public class StreamSessionService
         }
         else
         {
-            await StreamConcatAsync(ffmpeg, channel, programs, output, cancellationToken).ConfigureAwait(false);
+            await StreamConcatAsync(ffmpeg, channel, programs, output, pipePath: null, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Whether a channel will stream through the seamless continuous (concat) path. That path is one long-lived
+    /// ffmpeg, so it is the only one that can safely write to a named pipe — killing ffmpeg cleanly ends a stuck
+    /// write. The per-item path (subtitle burn-in or high-resolution sources) needs a buffered file instead.
+    /// </summary>
+    /// <param name="channel">The channel to inspect.</param>
+    /// <returns><c>true</c> when the channel can stream straight into a pipe.</returns>
+    public bool ShouldUsePipe(Channel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+
+        // Default to the buffered file. A non-seekable pipe makes some servers (notably Intel QSV) probe the live
+        // stream as interlaced and add a deinterlace pass that fails (exit 187), where the file is probed
+        // correctly and remuxed. The pipe stays available behind an opt-in flag for setups that want zero disk.
+        if (!(Plugin.Instance?.ReadConfiguration(c => c.EnableConcatPipe) ?? false))
+        {
+            return false;
+        }
+
+        if (channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never)
+        {
+            return false;
+        }
+
+        // High-resolution, HDR, and GPU-upload (QSV/VAAPI) channels take the per-item path, so they never use the
+        // continuous pipe. A GPU-upload encoder can't survive the concat demuxer's filter-graph reinit on a
+        // resolution/format change (see StreamToAsync).
+        var videoCodec = Plugin.Instance?.ReadConfiguration(c => c.VideoCodec) ?? Models.VideoCodec.H264;
+        if (_encoders.ResolveVideo(videoCodec, allowHardware: true).PixelStage.Contains("hwupload", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var programs = _channels.ResolvePrograms(channel);
+        return programs.Count > 0
+            && !programs.Any(p => p.SourceHeight > 1080)
+            && !programs.Any(p => _channels.IsHdrSource(p.ItemId));
+    }
+
+    /// <summary>
+    /// Streams a channel's continuous feed straight into a named pipe, so nothing accumulates on disk. Only
+    /// valid for channels <see cref="ShouldUsePipe"/> approves; ffmpeg writes the pipe itself.
+    /// </summary>
+    /// <param name="channel">The channel to stream.</param>
+    /// <param name="pipePath">The named-pipe path ffmpeg writes to.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>A task that completes when streaming stops.</returns>
+    public async Task StreamConcatToPipeAsync(Channel channel, string pipePath, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+
+        var ffmpeg = _encoder.EncoderPath;
+        if (string.IsNullOrEmpty(ffmpeg))
+        {
+            _logger.LogError("No ffmpeg encoder is configured; cannot stream channel {Name}", channel.Name);
+            return;
+        }
+
+        var programs = _channels.ResolvePrograms(channel);
+        if (programs.Count == 0)
+        {
+            await StreamSlateAsync(ffmpeg, output: null, pipePath, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var (index, _) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow, ScheduleCalculator.Epoch);
+        var uniform = programs[0].SourceHeight > 0 && programs.All(p => p.SourceHeight == programs[0].SourceHeight);
+        LogEncodePlan(channel, programs.Count, index, perItem: false, uniform, hasHdr: false);
+
+        await StreamConcatAsync(ffmpeg, channel, programs, output: null, pipePath, cancellationToken).ConfigureAwait(false);
     }
 
     // Streams the channel as ONE continuous ffmpeg using the concat demuxer, so item boundaries are seamless
     // (no timestamp or continuity reset). Software decode (hardware decoders fail on the per-segment resolution
     // changes a playlist produces) with the hardware encoder.
-    private async Task StreamConcatAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, Stream output, CancellationToken cancellationToken)
+    private async Task StreamConcatAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, Stream? output, string? pipePath, CancellationToken cancellationToken)
     {
         var playable = programs.Where(p => !string.IsNullOrEmpty(p.Path) && File.Exists(p.Path)).ToList();
         if (playable.Count == 0)
         {
             _logger.LogWarning("Every item on channel {Name} is unreachable; showing standby", channel.Name);
-            await StreamSlateAsync(ffmpeg, output, cancellationToken).ConfigureAwait(false);
+            await StreamSlateAsync(ffmpeg, output, pipePath, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -157,10 +217,10 @@ public class StreamSessionService
             while (!cancellationToken.IsCancellationRequested)
             {
                 var seek = SeekToNow(playable);
-                var args = StreamArguments.BuildConcat(listFile, seek, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel, "pipe:1");
+                var args = StreamArguments.BuildConcat(listFile, seek, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel, OutputTarget(pipePath));
 
                 var started = DateTime.UtcNow;
-                var total = await RunFfmpegAsync(ffmpeg, args, channel.Name, output, cancellationToken).ConfigureAwait(false);
+                var total = await RunSinkAsync(ffmpeg, args, channel.Name, output, pipePath, cancellationToken).ConfigureAwait(false);
                 if (cancellationToken.IsCancellationRequested)
                 {
                     break;
@@ -179,7 +239,16 @@ public class StreamSessionService
                 if (quickFail)
                 {
                     _logger.LogWarning("Channel {Name}: continuous stream failed to run; showing standby", channel.Name);
-                    await StreamSlateAsync(ffmpeg, output, cancellationToken).ConfigureAwait(false);
+                    await StreamSlateAsync(ffmpeg, output, pipePath, cancellationToken).ConfigureAwait(false);
+                    break;
+                }
+
+                if (pipePath is not null)
+                {
+                    // On the pipe path a fresh ffmpeg can't re-attach to the reader Jellyfin already saw end, so
+                    // there is nothing to resume into: let the stream end and the client re-tune. (The buffered
+                    // file path below resumes seamlessly because Jellyfin keeps reading the same growing file.)
+                    _logger.LogDebug("Channel {Name}: continuous pipe stream ended", channel.Name);
                     break;
                 }
 
@@ -216,9 +285,8 @@ public class StreamSessionService
         return seek;
     }
 
-    // Streams item-by-item (one ffmpeg per item, timestamps stitched with -output_ts_offset). Used whenever the
-    // concat pipeline can't serve a channel: subtitle burn-in (needs a per-item filter graph), high-resolution or
-    // HDR sources, and GPU-upload encoders (QSV/VAAPI) that can't survive the concat demuxer's filter reinit.
+    // Streams item-by-item (one ffmpeg per item, timestamps stitched with -output_ts_offset). Used only for
+    // subtitle burn-in, which needs a per-item filter graph the concat pipeline cannot provide.
     private async Task StreamPerItemLoopAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, int index, TimeSpan offset, Stream output, CancellationToken cancellationToken)
     {
         var startOffset = offset;
@@ -243,7 +311,7 @@ public class StreamSessionService
             else if (++consecutiveFailures >= programs.Count)
             {
                 _logger.LogWarning("Every item on channel {Name} failed to play; showing standby", channel.Name);
-                await StreamSlateAsync(ffmpeg, output, cancellationToken).ConfigureAwait(false);
+                await StreamSlateAsync(ffmpeg, output, pipePath: null, cancellationToken).ConfigureAwait(false);
                 break;
             }
             else
@@ -269,7 +337,7 @@ public class StreamSessionService
     // Logs, once per tune-in, exactly how the channel will be encoded — resolution, codec, the resolved
     // hardware/software encoder, and whether decoding is hardware-assisted — so the active pipeline is visible
     // in the logs without enabling debug output.
-    private void LogEncodePlan(Channel channel, int itemCount, int startIndex, bool perItem, bool uniform)
+    private void LogEncodePlan(Channel channel, int itemCount, int startIndex, bool perItem, bool uniform, bool hasHdr)
     {
         var (width, videoCodec, audioCodec) = Plugin.Instance?.ReadConfiguration(c => (c.TranscodeWidth, c.VideoCodec, c.AudioCodec))
             ?? (1280, Models.VideoCodec.H264, Models.AudioCodec.Aac);
@@ -277,14 +345,19 @@ public class StreamSessionService
         var profile = _encoders.ResolveVideo(videoCodec, allowHardware: true);
         var (audioEncoder, _) = EncoderResolver.ResolveAudio(audioCodec);
 
-        // The baseline decode for the channel. The actual decode is chosen per item in BuildArguments (HDR and
-        // 10-bit drop to software, burn-in on a GPU decoder composites in software, any hardware failure falls
-        // back to software), so this is the path a plain 8-bit SDR item takes, not a per-item guarantee.
+        // Decode follows the server's hardware acceleration. The per-item path hardware-decodes each item, except
+        // subtitle burn-in on a GPU-resident decoder (QSV/VAAPI), which composites in software. The continuous
+        // pipeline hardware-decodes only when every item is the same resolution. Either way, software is used when
+        // no hardware decoder is configured (and the paths fall back to software if a hardware decode fails).
         var burnIn = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never;
         var pipeline = perItem ? "per-item" : "continuous";
         var burnInForcesSoftware = burnIn && !string.IsNullOrEmpty(profile.DecodeDownload);
-        var hwDecode = profile.DecodeHwaccel is not null && (perItem ? !burnInForcesSoftware : uniform);
-        var decode = hwDecode ? profile.DecodeHwaccel! : "software";
+        var intelHardware = profile.Name.Contains("qsv", StringComparison.Ordinal) || profile.Name.Contains("vaapi", StringComparison.Ordinal);
+        var hwDecode = !hasHdr && profile.DecodeHwaccel is not null && (perItem ? !burnInForcesSoftware : uniform);
+        // HDR on Intel hardware tone-maps on the GPU (VAAPI); HDR elsewhere tone-maps in software.
+        var decode = hasHdr
+            ? (intelHardware && !burnIn ? "vaapi (HDR)" : "software (HDR)")
+            : (hwDecode ? profile.DecodeHwaccel! : "software");
 
         _logger.LogInformation(
             "Live Channels: streaming {Name} ({Items} items) at {Width}x{Height} via {Encoder} ({Mode} encode, {Decode} decode, {Pipeline}), audio {Audio}, from item {Index}/{Items}",
@@ -327,9 +400,9 @@ public class StreamSessionService
             }
         }
 
-        // One media-stream lookup for everything the encode plan needs about this item.
-        var (isHdr, isInterlaced, audioOrdinal) = _channels.GetSourceInfo(program.ItemId);
-        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, isHdr, isInterlaced, audioOrdinal);
+        var isHdr = _channels.IsHdrSource(program.ItemId);
+        var audioOrdinal = _channels.GetDefaultAudioOrdinal(program.ItemId);
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, isHdr, audioOrdinal);
         var total = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
@@ -337,7 +410,7 @@ public class StreamSessionService
         if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
-            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, isHdr, isInterlaced, audioOrdinal);
+            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, isHdr, audioOrdinal);
             total = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken).ConfigureAwait(false);
         }
 
@@ -346,7 +419,7 @@ public class StreamSessionService
 
     // Streams a standby slate (colour bars + silence), looped, until the client disconnects. Shown when a
     // channel has no playable content so viewers get an intentional standby card, not a black screen.
-    private async Task StreamSlateAsync(string ffmpeg, Stream output, CancellationToken cancellationToken)
+    private async Task StreamSlateAsync(string ffmpeg, Stream? output, string? pipePath, CancellationToken cancellationToken)
     {
         var (width, bitrate) = Plugin.Instance?.ReadConfiguration(c => (c.TranscodeWidth, c.TranscodeVideoBitrateKbps))
             ?? (1280, 4000);
@@ -356,9 +429,9 @@ public class StreamSessionService
         var timeline = TimeSpan.Zero;
         while (!cancellationToken.IsCancellationRequested)
         {
-            var args = StreamArguments.BuildSlate(width, bitrate, clipSeconds, timeline, font, "pipe:1");
+            var args = StreamArguments.BuildSlate(width, bitrate, clipSeconds, timeline, font, OutputTarget(pipePath));
             var started = DateTime.UtcNow;
-            var total = await RunFfmpegAsync(ffmpeg, args, "standby", output, cancellationToken).ConfigureAwait(false);
+            var total = await RunSinkAsync(ffmpeg, args, "standby", output, pipePath, cancellationToken).ConfigureAwait(false);
             if (total == 0)
             {
                 break; // ffmpeg could not even produce the slate; avoid a hot loop.
@@ -382,6 +455,78 @@ public class StreamSessionService
         }
     }
 
+    // ffmpeg's output target: a named pipe (which ffmpeg writes directly, so a SIGKILL cleanly ends a stuck
+    // write) when one is provided, otherwise stdout for our process to pump to a file.
+    private static string OutputTarget(string? pipePath) => pipePath ?? "pipe:1";
+
+    // Runs ffmpeg to whichever sink the caller chose. Both forms return a positive value on a healthy run and
+    // zero on an immediate failure, so the self-heal loops can treat them identically.
+    private Task<long> RunSinkAsync(string ffmpeg, IReadOnlyList<string> args, string label, Stream? output, string? pipePath, CancellationToken cancellationToken)
+        => pipePath is not null
+            ? RunFfmpegToPipeAsync(ffmpeg, args, label, cancellationToken)
+            : RunFfmpegAsync(ffmpeg, args, label, output!, cancellationToken);
+
+    // Runs ffmpeg when it writes its output to a named pipe itself (no stdout pumping). We cannot count bytes,
+    // so a run that survived at least a couple of seconds (or was cancelled) is treated as healthy; an early
+    // non-zero exit is a real failure. Returns 1 (healthy) or 0 (failed), matching RunFfmpegAsync's contract.
+    private async Task<long> RunFfmpegToPipeAsync(string ffmpeg, IReadOnlyList<string> args, string label, CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = ffmpeg,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        _logger.LogDebug("Live Channels: producer ffmpeg [{Label}] -> pipe: {Ffmpeg} {Args}", label, ffmpeg, string.Join(' ', args));
+
+        using var process = new Process { StartInfo = startInfo };
+        try
+        {
+            process.Start();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to start ffmpeg for {Label}", label);
+            return 0;
+        }
+
+        var stderrTask = ReadStandardErrorAsync(process, cancellationToken);
+        var started = DateTime.UtcNow;
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Closed by the player or by CloseLiveStream; expected.
+        }
+        finally
+        {
+            await KillAndWaitAsync(process).ConfigureAwait(false);
+        }
+
+        var stderr = await stderrTask.ConfigureAwait(false);
+        var exitCode = process.HasExited ? process.ExitCode : -1;
+        var healthy = cancellationToken.IsCancellationRequested || DateTime.UtcNow - started >= TimeSpan.FromSeconds(2);
+        if (!healthy)
+        {
+            _logger.LogWarning("ffmpeg exited early for {Label} (exit {Exit}): {Error}", label, exitCode, stderr.Trim());
+        }
+        else if (!string.IsNullOrWhiteSpace(stderr))
+        {
+            _logger.LogDebug("ffmpeg ({Label}, exit {Exit}): {Error}", label, exitCode, stderr.Trim());
+        }
+
+        return healthy ? 1 : 0;
+    }
+
     // Runs ffmpeg with the given arguments, pumping its stdout to the output stream. Returns the bytes
     // written; zero means the item produced nothing (a real failure), which is logged with ffmpeg's stderr.
     private async Task<long> RunFfmpegAsync(string ffmpeg, IReadOnlyList<string> args, string label, Stream output, CancellationToken cancellationToken)
@@ -400,9 +545,9 @@ public class StreamSessionService
             startInfo.ArgumentList.Add(arg);
         }
 
-        // The exact producer command, at info level so a failure on a specific source is visible in the normal log
-        // without enabling debug (the downstream transcoder error only ever says the stream produced nothing).
-        _logger.LogInformation("Live Channels: producer ffmpeg [{Label}]: {Ffmpeg} {Args}", label, ffmpeg, string.Join(' ', args));
+        // The exact producer command, at debug level: enable debug logging for the plugin to diagnose a
+        // failure on a specific source (the downstream transcoder error only ever says the temp file was empty).
+        _logger.LogDebug("Live Channels: producer ffmpeg [{Label}]: {Ffmpeg} {Args}", label, ffmpeg, string.Join(' ', args));
 
         using var process = new Process { StartInfo = startInfo };
         try
@@ -459,7 +604,7 @@ public class StreamSessionService
         return total;
     }
 
-    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, bool isInterlaced, int? audioOrdinal)
+    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal)
     {
         // Read just the scalars we need inside the config lock, rather than holding a reference to the live
         // (mutable, shared) configuration object after the lock releases.
@@ -472,17 +617,19 @@ public class StreamSessionService
         var video = _encoders.ResolveVideo(videoCodec, allowHardware);
         var (audioEncoder, audioBitrate) = EncoderResolver.ResolveAudio(audioCodec);
 
-        // The VAAPI pipeline keeps every frame on the GPU, so it tone-maps HDR, converts 10-bit, and deinterlaces
-        // there (handled inside Build) and must NOT be forced to software. Two things still need system frames, so
-        // they drop to the software chain: HDR on a non-VAAPI encoder (VideoToolbox/NVENC/software), which tone-maps
-        // with the software zscale chain; and subtitle burn-in, whose overlay composites in system memory. The
-        // caller forces software for the per-item fallback when a hardware decode produces nothing.
-        var hdrNeedsSoftware = isHdr && !video.VaapiFilters;
-        var burnInNeedsSoftware = forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeHwaccel);
-        var forceSoftware = softwareDecode || hdrNeedsSoftware || burnInNeedsSoftware;
+        // HDR on an Intel hardware encoder (QSV/VAAPI) tone-maps on the GPU (handled inside Build) and must NOT be
+        // forced to software. HDR anywhere else (VideoToolbox/NVENC/software) and HDR burn-in tone-map in software,
+        // which needs software-decoded frames. Burn-in on a GPU-resident decoder also forces software (the overlay
+        // needs system frames). The caller can force software for the per-item fallback.
+        var intelHardware = video.Name.Contains("qsv", StringComparison.Ordinal) || video.Name.Contains("vaapi", StringComparison.Ordinal);
+        var usesHdrVaapi = isHdr && intelHardware && !forcedSubtitle.HasValue && !softwareDecode;
+        var hdrNeedsSoftware = isHdr && !usesHdrVaapi;
+        var forceSoftware = softwareDecode || hdrNeedsSoftware || (forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeDownload));
 
-        var hardwareDecode = !forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel);
-        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, isInterlaced, audioOrdinal);
+        // The HDR VAAPI path runs on hardware, so a failure should fall back to software exactly like a hardware
+        // decode does (StreamItemAsync retries with softwareDecode).
+        var hardwareDecode = usesHdrVaapi || (!forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel));
+        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal);
         return (args, hardwareDecode);
     }
 

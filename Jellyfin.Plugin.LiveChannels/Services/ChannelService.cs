@@ -29,7 +29,6 @@ public class ChannelService
     private readonly IMediaSourceManager _mediaSourceManager;
     private readonly ISubtitleEncoder _subtitleEncoder;
     private readonly ILocalizationManager _localization;
-    private readonly DefaultLogoService _defaultLogo;
     private readonly ILogger<ChannelService> _logger;
 
     // Item/track keys whose subtitle extraction is currently running, so concurrent tune-ins don't pile a
@@ -43,66 +42,14 @@ public class ChannelService
     /// <param name="mediaSourceManager">The media source manager used to inspect subtitle streams.</param>
     /// <param name="subtitleEncoder">The subtitle encoder used to extract (and cache) embedded subtitles for burn-in.</param>
     /// <param name="localization">The localization manager used to rank official ratings.</param>
-    /// <param name="defaultLogo">The generated fallback-logo service, used to serve channel logos to the tuner.</param>
     /// <param name="logger">The logger.</param>
-    public ChannelService(ILibraryManager libraryManager, IMediaSourceManager mediaSourceManager, ISubtitleEncoder subtitleEncoder, ILocalizationManager localization, DefaultLogoService defaultLogo, ILogger<ChannelService> logger)
+    public ChannelService(ILibraryManager libraryManager, IMediaSourceManager mediaSourceManager, ISubtitleEncoder subtitleEncoder, ILocalizationManager localization, ILogger<ChannelService> logger)
     {
         _libraryManager = libraryManager;
         _mediaSourceManager = mediaSourceManager;
         _subtitleEncoder = subtitleEncoder;
         _localization = localization;
-        _defaultLogo = defaultLogo;
         _logger = logger;
-    }
-
-    /// <summary>
-    /// Returns a channel's logo image for the tuner: the uploaded image when present, otherwise the generated
-    /// square, as raw bytes with a content type.
-    /// </summary>
-    /// <param name="channel">The channel.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The image bytes and content type, or <c>null</c> when no logo can be produced.</returns>
-    public async Task<(byte[] Bytes, string ContentType)?> GetChannelLogoAsync(Channel channel, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(channel);
-
-        try
-        {
-            if (!string.IsNullOrEmpty(channel.LogoData))
-            {
-                var contentType = string.IsNullOrEmpty(channel.LogoContentType) ? "image/png" : channel.LogoContentType;
-                return (Convert.FromBase64String(channel.LogoData), contentType);
-            }
-
-            var bytes = await _defaultLogo.GetAsync(channel.Number, channel.Name, channel.LogoStyle, channel.LogoSymbol, channel.LogoShowName, cancellationToken).ConfigureAwait(false);
-            return bytes is null ? null : (bytes, "image/png");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not produce a logo for channel {Name}", channel.Name);
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Returns the file-system path to an item's primary image, used to serve program artwork to the guide.
-    /// </summary>
-    /// <param name="itemId">The item id.</param>
-    /// <returns>The primary image path, or <c>null</c> when the item has none.</returns>
-    public string? GetItemImagePath(Guid itemId)
-    {
-        try
-        {
-            var item = _libraryManager.GetItemById(itemId);
-            return item is not null && item.HasImage(ImageType.Primary)
-                ? item.GetImagePath(ImageType.Primary, 0)
-                : null;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not resolve a primary image for item {ItemId}", itemId);
-            return null;
-        }
     }
 
     /// <summary>
@@ -118,7 +65,8 @@ public class ChannelService
         {
             var transfer = _mediaSourceManager.GetMediaStreams(itemId)
                 .FirstOrDefault(s => s.Type == MediaStreamType.Video)?.ColorTransfer;
-            return IsHdrTransfer(transfer);
+            return string.Equals(transfer, "smpte2084", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(transfer, "arib-std-b67", StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception ex)
         {
@@ -126,34 +74,6 @@ public class ChannelService
             return false;
         }
     }
-
-    /// <summary>
-    /// The per-item facts the encode plan needs, read in a single media-stream lookup: whether the video is HDR
-    /// (so the VAAPI pipeline tone-maps), whether it is interlaced (so it deinterlaces), and the ordinal of the
-    /// default audio track. Falls back to SDR/progressive/first-track when the streams cannot be read.
-    /// </summary>
-    /// <param name="itemId">The item id.</param>
-    /// <returns>The HDR flag, interlaced flag, and default audio ordinal for the item.</returns>
-    public (bool IsHdr, bool IsInterlaced, int AudioOrdinal) GetSourceInfo(Guid itemId)
-    {
-        try
-        {
-            var streams = _mediaSourceManager.GetMediaStreams(itemId);
-            var video = streams.FirstOrDefault(s => s.Type == MediaStreamType.Video);
-            return (IsHdrTransfer(video?.ColorTransfer), video?.IsInterlaced ?? false, DefaultAudio(streams)?.Ordinal ?? 0);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not read media streams for source info on {ItemId}", itemId);
-            return (false, false, 0);
-        }
-    }
-
-    // PQ (smpte2084) and HLG (arib-std-b67) are the HDR transfer functions every mature pseudo-TV pipeline keys
-    // on (ErsatzTV/Tunarr).
-    private static bool IsHdrTransfer(string? transfer)
-        => string.Equals(transfer, "smpte2084", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(transfer, "arib-std-b67", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The position, among an item's audio streams ordered by index, of the track Jellyfin marks as default, or

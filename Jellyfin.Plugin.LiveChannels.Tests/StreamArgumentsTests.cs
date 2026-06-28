@@ -40,7 +40,7 @@ public class StreamArgumentsTests
     {
         // Honor the audio track Jellyfin marks as default (here the third audio stream) instead of letting ffmpeg
         // pick by channel count. Any -map disables ffmpeg's auto-selection, so the video is mapped explicitly too.
-        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, false, false, 2);
+        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, false, 2);
         Assert.Contains("0:a:2?", a);
         Assert.Contains("0:v:0", a);
     }
@@ -62,92 +62,54 @@ public class StreamArgumentsTests
         Assert.True(Pair(StreamArguments.BuildConcat("/tmp/list.txt", default, 1280, 4000, SoftwareH264, "aac", 192), "-field_order", "progressive"));
     }
 
-    // The Intel pipeline, built the Tunarr/ErsatzTV way: VAAPI decode + GPU filters + VAAPI encode, no hwdownload.
-    private static readonly VideoEncoderProfile VaapiStyle = new(
-        "h264_vaapi", "VAAPI", true,
-        new[] { "-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-filter_hw_device", "va" },
-        Array.Empty<string>(), "format=nv12,hwupload", false,
-        DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: "", VaapiFilters: true);
-
-    // The Intel QSV path: VAAPI decode + filters, hwmapped onto QSV for the h264_qsv encoder (Jellyfin's chain).
     private static readonly VideoEncoderProfile QsvStyle = new(
-        "h264_qsv", "QSV", true,
-        new[] { "-init_hw_device", "vaapi=va:/dev/dri/renderD128,driver=iHD", "-init_hw_device", "qsv=qs@va", "-filter_hw_device", "qs" },
-        Array.Empty<string>(), "format=nv12,hwupload=extra_hw_frames=64", false,
-        DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: "", VaapiFilters: true);
+        "h264_qsv", "QSV", true, Array.Empty<string>(), Array.Empty<string>(), "format=nv12,hwupload", false,
+        DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12,");
 
     [Fact]
-    public void QsvPipeline_DecodesVaapi_FiltersOnGpu_HwmapsToQsv_NoDownload()
+    public void HardwareDecode_GpuResident_DownloadsBeforeScale_AndSetsOutputFormat()
     {
-        // Mirrors Jellyfin's proven Intel command: vaapi decode, scale/pad on VAAPI, hwmap to QSV, encode h264_qsv.
         var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, QsvStyle, "aac", 192, null);
-        Assert.True(Pair(a, "-hwaccel", "vaapi"));
-        var vf = a[a.IndexOf("-vf") + 1];
-        Assert.Contains("scale_vaapi=w=1280:h=720:format=nv12", vf, StringComparison.Ordinal);
-        Assert.Contains("pad_vaapi=w=1280:h=720:x=-1:y=-1:color=black", vf, StringComparison.Ordinal);
-        Assert.EndsWith("hwmap=derive_device=qsv,format=qsv", vf);
-        Assert.DoesNotContain("hwdownload", vf, StringComparison.Ordinal);
-        Assert.True(Pair(a, "-c:v", "h264_qsv"));
-    }
-
-    [Fact]
-    public void VaapiPipeline_ScalesOnGpu_NeverDownloads()
-    {
-        // The whole point of the VAAPI pipeline: frames stay on the GPU. scale_vaapi/pad_vaapi do the work and
-        // there is NO hwdownload, the step that crashed the old path on 10-bit (p010) sources (exit 234).
-        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, VaapiStyle, "aac", 192, null);
-        Assert.True(Pair(a, "-hwaccel", "vaapi"));
-        Assert.True(Pair(a, "-hwaccel_output_format", "vaapi"));
+        Assert.True(Pair(a, "-hwaccel", "qsv"));
+        Assert.True(Pair(a, "-hwaccel_output_format", "qsv"));
         Assert.True(a.IndexOf("-hwaccel") < a.IndexOf("-i"));
-        var vf = a[a.IndexOf("-vf") + 1];
-        Assert.Contains("scale_vaapi=w=1280:h=720:format=nv12", vf, StringComparison.Ordinal);
-        Assert.Contains("pad_vaapi=w=1280:h=720:x=-1:y=-1:color=black", vf, StringComparison.Ordinal);
-        Assert.DoesNotContain("hwdownload", vf, StringComparison.Ordinal);
-        Assert.True(Pair(a, "-c:v", "h264_vaapi"));
+        Assert.Contains(a, x => x.StartsWith("hwdownload,format=nv12,", StringComparison.Ordinal) && x.Contains("scale=1280:720", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void VaapiPipeline_Interlaced_DeinterlacesOnGpu_ProgressiveSkips()
+    public void SoftwareDecodeOverride_OmitsHardwareDecode()
     {
-        // Interlaced sources deinterlace on the GPU; progressive ones skip it (deinterlacing progressive halves
-        // quality). Either way, never a hwdownload.
-        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, VaapiStyle, "aac", 192, null, null, false, false, isInterlaced: true);
-        var vf = a[a.IndexOf("-vf") + 1];
-        Assert.StartsWith("deinterlace_vaapi,", vf);
-        Assert.DoesNotContain("hwdownload", vf, StringComparison.Ordinal);
-
-        var prog = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, VaapiStyle, "aac", 192, null);
-        Assert.DoesNotContain("deinterlace_vaapi", prog[prog.IndexOf("-vf") + 1], StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void VaapiPipeline_SoftwareOverride_UploadsForEncoder()
-    {
-        // The per-item fallback decodes in software, so the GPU filter chain can't run; it uploads the system
-        // frames for the VAAPI encoder instead. Hardware ENCODE is still used.
-        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, VaapiStyle, "aac", 192, null, null, softwareDecode: true);
+        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, QsvStyle, "aac", 192, null, null, softwareDecode: true);
         Assert.DoesNotContain("-hwaccel", a);
-        var vf = a[a.IndexOf("-vf") + 1];
-        Assert.DoesNotContain("scale_vaapi", vf, StringComparison.Ordinal);
-        Assert.Contains("hwupload", vf, StringComparison.Ordinal);
-        Assert.True(Pair(a, "-c:v", "h264_vaapi"));
+        Assert.DoesNotContain("-hwaccel_output_format", a);
+        Assert.DoesNotContain(a, x => x.Contains("hwdownload", StringComparison.Ordinal));
+        Assert.True(Pair(a, "-c:v", "h264_qsv")); // hardware ENCODE is still used
     }
 
     [Fact]
-    public void Hdr_OnVaapi_TonemapsOnGpu_NoDownload_NoHwmap()
+    public void Concat_HardwareDecode_DownloadsBeforeScale()
     {
-        // HDR tone-maps on the GPU with tonemap_vaapi, then scales/pads on the GPU and encodes directly: no
-        // hwdownload, no hwmap-to-QSV, no software zscale.
-        var a = StreamArguments.Build("/m.mkv", default, default, 1920, 8000, VaapiStyle, "aac", 192, null, null, false, isHdr: true);
+        var a = StreamArguments.BuildConcat("/tmp/list.txt", default, 1280, 4000, QsvStyle, "aac", 192, decodeHwaccel: "qsv");
+        Assert.True(Pair(a, "-hwaccel", "qsv"));
+        Assert.True(Pair(a, "-hwaccel_output_format", "qsv"));
+        Assert.Contains(a, x => x.StartsWith("hwdownload,format=nv12,", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Hdr_OnIntelHardware_UsesVaapiTonemapPipeline()
+    {
+        // HDR on a QSV/VAAPI encoder must tone-map on the GPU (validated at ~2x realtime on an N100): VAAPI decode,
+        // tonemap_vaapi, scale/pad on VAAPI, hwmap to QSV. No software zscale tone-map.
+        var a = StreamArguments.Build("/m.mkv", default, default, 1920, 8000, QsvStyle, "aac", 192, null, null, false, isHdr: true);
         Assert.True(Pair(a, "-hwaccel", "vaapi"));
+        Assert.Contains("vaapi=va:,vendor_id=0x8086,driver=iHD", a);
         var vf = a[a.IndexOf("-vf") + 1];
         Assert.Contains("tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709", vf, StringComparison.Ordinal);
-        Assert.Contains("scale_vaapi=w=1920:h=1080", vf, StringComparison.Ordinal);
-        Assert.Contains("pad_vaapi=w=1920:h=1080:x=-1:y=-1", vf, StringComparison.Ordinal);
-        Assert.DoesNotContain("hwdownload", vf, StringComparison.Ordinal);
-        Assert.DoesNotContain("hwmap", vf, StringComparison.Ordinal);
+        Assert.Contains("scale_vaapi=w=1920:h=1080:force_original_aspect_ratio=decrease", vf, StringComparison.Ordinal);
+        Assert.Contains("pad_vaapi=1920:1080", vf, StringComparison.Ordinal);
+        Assert.Contains("fps=30,hwmap=derive_device=qsv,format=qsv", vf, StringComparison.Ordinal);
         Assert.DoesNotContain("zscale", vf, StringComparison.Ordinal);
-        Assert.True(Pair(a, "-c:v", "h264_vaapi"));
+        Assert.True(Pair(a, "-c:v", "h264_qsv"));
         Assert.True(Pair(a, "-field_order", "progressive"));
     }
 
@@ -155,7 +117,7 @@ public class StreamArgumentsTests
     public void Hdr_SoftwareFallback_UsesSoftwareTonemap_NotVaapi()
     {
         // The per-item fallback (softwareDecode) drops HDR back to the software zscale tone-map, no VAAPI.
-        var a = StreamArguments.Build("/m.mkv", default, default, 1920, 8000, VaapiStyle, "aac", 192, null, null, softwareDecode: true, isHdr: true);
+        var a = StreamArguments.Build("/m.mkv", default, default, 1920, 8000, QsvStyle, "aac", 192, null, null, softwareDecode: true, isHdr: true);
         Assert.DoesNotContain("-hwaccel", a);
         var vf = a[a.IndexOf("-vf") + 1];
         Assert.Contains("tonemap=tonemap=hable", vf, StringComparison.Ordinal);
