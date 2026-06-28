@@ -8,8 +8,9 @@ using Microsoft.Extensions.Hosting;
 namespace Jellyfin.Plugin.LiveChannels;
 
 /// <summary>
-/// Registers plugin services with the Jellyfin DI container. The Live TV service is registered as an
-/// <see cref="ILiveTvService"/> so Jellyfin discovers the virtual channels in-process, with no HTTP endpoints.
+/// Registers plugin services with the Jellyfin DI container. The channels are exposed through a self
+/// configuring M3U tuner and XMLTV guide (see <see cref="TunerRegistrar"/>) rather than an in-process Live TV
+/// service, so Jellyfin consumes them over HTTP and direct-streams them.
 /// </summary>
 public class PluginServiceRegistrator : IPluginServiceRegistrator
 {
@@ -21,7 +22,6 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<StreamSessionService>();
         serviceCollection.AddSingleton<DefaultLogoService>();
         serviceCollection.AddSingleton<ActivityLogger>();
-        serviceCollection.AddSingleton<ILiveTvService, LiveChannelsTvService>();
         serviceCollection.AddHostedService<TunerRegistrar>();
     }
 }

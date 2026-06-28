@@ -73,13 +73,13 @@ public class EncoderResolver
             case "qsv":
                 return new VideoEncoderProfile(family + "_qsv", label + " (QSV)", true,
                     QsvInit, Empty, "format=nv12,hwupload=extra_hw_frames=64", false,
-                    DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12,");
+                    DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12|p010le,");
             case "vaapi":
                 var device = string.IsNullOrEmpty(options?.VaapiDevice) ? "/dev/dri/renderD128" : options.VaapiDevice;
                 return new VideoEncoderProfile(family + "_vaapi", label + " (VAAPI)", true,
                     new[] { "-init_hw_device", "vaapi=va:" + device, "-filter_hw_device", "va" }, Empty,
                     "format=nv12,hwupload", false,
-                    DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: "hwdownload,format=nv12,");
+                    DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: "hwdownload,format=nv12|p010le,");
             default:
                 return Software(codec);
         }
