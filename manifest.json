@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.2.1",
+        "changelog": "## Fixes\r\n- Use Jellyfin's default audio track instead of assuming",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.1/jellyfin-plugin-livechannels-10.11.2.1.zip",
+        "checksum": "062ceeecc725b70248387114632670b3",
+        "timestamp": "2026-06-28T03:38:03Z"
+      },
+      {
         "version": "10.11.2.0",
         "changelog": "## Features\r\n- File trimming\r\n- Prioritize file types",
         "targetAbi": "10.11.9.0",
