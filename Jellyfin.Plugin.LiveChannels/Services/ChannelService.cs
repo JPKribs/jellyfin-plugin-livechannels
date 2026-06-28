@@ -86,17 +86,7 @@ public class ChannelService
     {
         try
         {
-            var audio = _mediaSourceManager.GetMediaStreams(itemId)
-                .Where(s => s.Type == MediaStreamType.Audio)
-                .OrderBy(s => s.Index)
-                .ToList();
-            if (audio.Count == 0)
-            {
-                return 0;
-            }
-
-            var defaultIndex = audio.FindIndex(s => s.IsDefault);
-            return defaultIndex >= 0 ? defaultIndex : 0;
+            return DefaultAudio(_mediaSourceManager.GetMediaStreams(itemId))?.Ordinal ?? 0;
         }
         catch (Exception ex)
         {
@@ -105,10 +95,31 @@ public class ChannelService
         }
     }
 
+    // The default audio track (the one Jellyfin would play) and its ordinal among the item's audio streams, or
+    // null when the item has no audio.
+    private static (int Ordinal, MediaStream Stream)? DefaultAudio(IReadOnlyList<MediaStream> streams)
+    {
+        var audio = streams.Where(s => s.Type == MediaStreamType.Audio).OrderBy(s => s.Index).ToList();
+        if (audio.Count == 0)
+        {
+            return null;
+        }
+
+        var defaultIndex = audio.FindIndex(s => s.IsDefault);
+        var ordinal = defaultIndex >= 0 ? defaultIndex : 0;
+        return (ordinal, audio[ordinal]);
+    }
+
+    // ISO 639 English codes, the only language treated as needing no subtitles for non-English-audio burn-in.
+    private static bool IsEnglish(string? language)
+        => string.Equals(language, "eng", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(language, "en", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
-    /// Picks the subtitle track to burn into an item for the given mode: the forced track for
-    /// <see cref="SubtitleBurnInMode.Forced"/>, or the forced/default/first track for
-    /// <see cref="SubtitleBurnInMode.Always"/>.
+    /// Picks the subtitle track to burn into an item for the given mode. <see cref="SubtitleBurnInMode.Forced"/>
+    /// burns the forced track when present, and otherwise burns subtitles when the default audio track is in a
+    /// known non-English language (preferring an English subtitle), so foreign-language content stays followable.
+    /// <see cref="SubtitleBurnInMode.Always"/> burns the forced track when present, otherwise the default or first.
     /// </summary>
     /// <param name="itemId">The item id.</param>
     /// <param name="mode">The channel's subtitle burn-in mode.</param>
@@ -142,10 +153,25 @@ public class ChannelService
             }
         }
 
-        if (mode == SubtitleBurnInMode.Always && subtitles.Count > 0)
+        // "Forced only" also burns subtitles when the audio we play is in a known non-English language, so
+        // foreign-language content stays followable. English or untagged audio shows nothing without a forced
+        // track, so ordinary English content is never subtitled by surprise.
+        var audioLanguage = DefaultAudio(streams)?.Stream.Language;
+        var forcedForNonEnglishAudio = mode == SubtitleBurnInMode.Forced
+            && !string.IsNullOrEmpty(audioLanguage)
+            && !IsEnglish(audioLanguage);
+
+        if ((mode == SubtitleBurnInMode.Always || forcedForNonEnglishAudio) && subtitles.Count > 0)
         {
-            var defaultIndex = subtitles.FindIndex(s => s.IsDefault);
-            var chosen = defaultIndex >= 0 ? defaultIndex : 0;
+            // For non-English audio prefer an English subtitle (the viewer reads English over the foreign
+            // dialogue); otherwise, and for "Always", fall back to the default or first track.
+            var chosen = forcedForNonEnglishAudio ? subtitles.FindIndex(s => IsEnglish(s.Language)) : -1;
+            if (chosen < 0)
+            {
+                var defaultIndex = subtitles.FindIndex(s => s.IsDefault);
+                chosen = defaultIndex >= 0 ? defaultIndex : 0;
+            }
+
             return (chosen, subtitles[chosen].IsTextSubtitleStream);
         }
 
