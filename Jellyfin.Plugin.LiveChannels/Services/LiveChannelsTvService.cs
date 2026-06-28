@@ -252,13 +252,76 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
     }
 
+    // FALLOC_FL_KEEP_SIZE (0x01) | FALLOC_FL_PUNCH_HOLE (0x02): free the blocks in a range while leaving the file
+    // length unchanged, so the freed region reads back as zeros. Linux only; gated below.
+    [DllImport("libc", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern int fallocate(int fd, int mode, long offset, long len);
+
     // Starts the file-backed producer (the per-item path, and the fallback when a pipe can't be created): opens
-    // a temp file the producer appends to and Jellyfin reads, disposing it when the producer stops. The file
-    // grows for the life of the session (it is deleted on close); the pipe path is the zero-disk alternative.
+    // a temp file the producer appends to and Jellyfin reads, disposing it when the producer stops (it is deleted
+    // on close). The trimmer keeps its on-disk size bounded; the pipe path is the zero-disk alternative.
     private Task StartFileProducer(Channel channel, string path, CancellationTokenSource cts)
     {
         var output = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, BufferSize, useAsync: true);
+        StartFileTrimmer(path, cts.Token);
         return Task.Run(() => RunProducerAsync(() => _streams.StreamToAsync(channel, output, cts.Token), channel.Name, output), CancellationToken.None);
+    }
+
+    // Bounds the temp file's on-disk size. Jellyfin reads the file forward at realtime, so everything more than a
+    // few minutes behind the write head has been consumed and will never be re-read. On Linux we punch a hole over
+    // that consumed prefix: the file's logical length is unchanged (Jellyfin's read offsets stay valid) but the
+    // blocks are freed, so disk use stays flat at the retained tail instead of growing for the whole session.
+    // No-op on any other OS or filesystem that does not support hole punching (the file just grows as before).
+    private void StartFileTrimmer(string path, CancellationToken token)
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        _ = Task.Run(() => TrimFileLoopAsync(path, token), CancellationToken.None);
+    }
+
+    private async Task TrimFileLoopAsync(string path, CancellationToken token)
+    {
+        // Keep the last few minutes of stream on disk. Jellyfin's transcoder reads only a handful of seconds
+        // behind the producer, so this is a large safety margin; the floor covers very low bitrates.
+        var bitrateKbps = Plugin.Instance?.ReadConfiguration(c => c.TranscodeVideoBitrateKbps) ?? 4000;
+        var retain = Math.Max(64L * 1024 * 1024, (long)bitrateKbps * 1000 / 8 * 300);
+
+        try
+        {
+            using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+            var fd = handle.DangerousGetHandle().ToInt32();
+            while (!token.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(15), token).ConfigureAwait(false);
+                try
+                {
+                    var punch = RandomAccess.GetLength(handle) - retain;
+                    if (punch > 0 && fallocate(fd, 0x01 | 0x02, 0, punch) != 0)
+                    {
+                        // The filesystem does not support hole punching (e.g. some overlay/network mounts). It will
+                        // keep failing, so stop trying; the file simply grows as it did before, deleted on close.
+                        _logger.LogDebug("Live Channels: hole punching unsupported for {Path} (errno {Errno}); leaving the temp file untrimmed", path, Marshal.GetLastWin32Error());
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Live Channels: could not trim temp file {Path}", path);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Stream closed; stop trimming.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Live Channels: temp-file trimmer could not open {Path}", path);
+        }
     }
 
     // Runs a producer delegate with the standard lifecycle: swallow cancellation, log any real failure, and
