@@ -213,7 +213,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
 
         _activity.Log(
-            "Live Channel " + channel.Name + " has started",
+            "Live Channel: " + channel.Name + " has started",
             "LiveChannels.ChannelStarted",
             overview: "This channel is now being encoded.");
 
@@ -365,7 +365,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
 
         _activity.Log(
-            "Live Channel " + session.ChannelName + " has stopped",
+            "Live Channel: " + session.ChannelName + " has stopped",
             "LiveChannels.ChannelStopped",
             overview: "This channel has no viewers so encoding has been stopped.");
 
