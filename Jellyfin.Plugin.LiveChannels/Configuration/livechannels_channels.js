@@ -611,10 +611,13 @@ export default function (view) {
         if (changed === 'min') { el('maxRating').value = min; } else { el('minRating').value = max; }
     }
 
-    // Show the favor strength only when a content type is actually favoured.
-    function updateFavorVisibility() {
+    // Favouring only applies to a shuffled loop, so disable it when shuffle is off; show the strength only when a
+    // content type is actually favoured.
+    function updateFavorControls() {
+        var shuffleOn = el('shuffle').checked;
+        el('favorKind').disabled = !shuffleOn;
         var row = el('favorStrength').closest('.selectContainer');
-        if (row) { row.style.display = el('favorKind').value === 'None' ? 'none' : ''; }
+        if (row) { row.style.display = (shuffleOn && el('favorKind').value !== 'None') ? '' : 'none'; }
     }
 
     // MARK: Editor load / save
@@ -644,7 +647,7 @@ export default function (view) {
         el('episodeOrder').value = ch.ShuffleEpisodes ? 'random' : 'air';
         el('favorKind').value = ch.FavorKind || 'None';
         el('favorStrength').value = ch.FavorStrength || 'Moderate';
-        updateFavorVisibility();
+        updateFavorControls();
         el('subtitleBurnIn').value = ch.SubtitleBurnIn || 'Never';
 
         currentEnabled = ch.Enabled !== false;
@@ -799,7 +802,8 @@ export default function (view) {
         el('logoStyle').addEventListener('change', renderLogoPreview);
         el('logoSymbol').addEventListener('input', function () { if (!logoData) renderLogoPreview(); });
         el('logoShowName').addEventListener('change', function () { if (!logoData) renderLogoPreview(); });
-        el('favorKind').addEventListener('change', updateFavorVisibility);
+        el('favorKind').addEventListener('change', updateFavorControls);
+        el('shuffle').addEventListener('change', updateFavorControls);
         el('minRating').addEventListener('change', function () { enforceRatingBand('min'); });
         el('maxRating').addEventListener('change', function () { enforceRatingBand('max'); });
         el('btnNewChannel').addEventListener('click', addChannel);
