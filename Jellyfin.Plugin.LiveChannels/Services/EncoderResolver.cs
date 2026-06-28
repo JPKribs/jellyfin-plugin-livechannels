@@ -75,12 +75,17 @@ public class EncoderResolver
             case "qsv":
             case "vaapi":
                 var device = ResolveVaapiDevice(options);
-                _logger.LogDebug("Live Channels: VAAPI pipeline on device {Device}", device);
+                // Match Jellyfin's own working Intel command, which pins the iHD driver on the VAAPI device. On a
+                // multi-GPU box (e.g. an Arc alongside the CPU's iGPU) libva can otherwise load the wrong driver
+                // for the wrong node and fail to initialise. Only pin iHD for the Intel (QSV) path; a box configured
+                // for plain VAAPI may be AMD (radeonsi), so leave its driver to libva.
+                var deviceSpec = accel == "qsv" ? device + ",driver=iHD" : device;
+                _logger.LogInformation("Live Channels: VAAPI pipeline on {Device}", deviceSpec);
                 // PixelStage is only used by the software-fallback chain (burn-in, software-decode retry): it
                 // uploads system frames to the GPU so the VAAPI encoder can take them. The all-GPU VaapiFilters
                 // path never reaches it (frames are already VAAPI surfaces).
                 return new VideoEncoderProfile(family + "_vaapi", label + " (VAAPI)", true,
-                    new[] { "-init_hw_device", "vaapi=va:" + device, "-filter_hw_device", "va" }, Empty,
+                    new[] { "-init_hw_device", "vaapi=va:" + deviceSpec, "-filter_hw_device", "va" }, Empty,
                     "format=nv12,hwupload", false,
                     DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: string.Empty, VaapiFilters: true);
             default:

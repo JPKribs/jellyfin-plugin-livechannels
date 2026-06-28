@@ -400,9 +400,9 @@ public class StreamSessionService
             startInfo.ArgumentList.Add(arg);
         }
 
-        // The exact producer command, at debug level: enable debug logging for the plugin to diagnose a
-        // failure on a specific source (the downstream transcoder error only ever says the temp file was empty).
-        _logger.LogDebug("Live Channels: producer ffmpeg [{Label}]: {Ffmpeg} {Args}", label, ffmpeg, string.Join(' ', args));
+        // The exact producer command, at info level so a failure on a specific source is visible in the normal log
+        // without enabling debug (the downstream transcoder error only ever says the stream produced nothing).
+        _logger.LogInformation("Live Channels: producer ffmpeg [{Label}]: {Ffmpeg} {Args}", label, ffmpeg, string.Join(' ', args));
 
         using var process = new Process { StartInfo = startInfo };
         try
