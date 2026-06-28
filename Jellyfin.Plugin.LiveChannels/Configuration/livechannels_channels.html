@@ -189,23 +189,27 @@
                                     </label>
                                     <div class="fieldDescription">Disable to play everything alphabetically.</div>
                                 </div>
-                                <div class="selectContainer">
-                                    <label class="selectLabel" for="favorKind">Favor content type</label>
-                                    <select is="emby-select" id="favorKind" class="jpk-selector-dropdown">
-                                        <option value="None">No preference</option>
-                                        <option value="Movies">Movies</option>
-                                        <option value="Shows">Shows</option>
-                                        <option value="MusicVideos">Music videos</option>
-                                    </select>
-                                    <div class="fieldDescription">Weights one type more heavily in the loop, repeating it to fill the share if needed.</div>
-                                </div>
-                                <div class="selectContainer">
-                                    <label class="selectLabel" for="favorStrength">Favor strength</label>
-                                    <select is="emby-select" id="favorStrength" class="jpk-selector-dropdown">
-                                        <option value="Slight">Slight</option>
-                                        <option value="Moderate">Moderate</option>
-                                        <option value="Heavy">Heavy</option>
-                                    </select>
+                                <div id="favorGroup" class="jpk-indent hidden">
+                                    <div class="selectContainer">
+                                        <label class="selectLabel" for="favorKind">Favor content type</label>
+                                        <select is="emby-select" id="favorKind" class="jpk-selector-dropdown">
+                                            <option value="None">No preference</option>
+                                            <option value="Movies">Movies</option>
+                                            <option value="Shows">Shows</option>
+                                            <option value="MusicVideos">Music videos</option>
+                                        </select>
+                                        <div class="fieldDescription">Weights one type more heavily in the loop, repeating it to fill the share if needed.</div>
+                                    </div>
+                                    <div id="favorStrengthGroup" class="jpk-indent hidden">
+                                        <div class="selectContainer">
+                                            <label class="selectLabel" for="favorStrength">Favor strength</label>
+                                            <select is="emby-select" id="favorStrength" class="jpk-selector-dropdown">
+                                                <option value="Slight">Slight</option>
+                                                <option value="Moderate">Moderate</option>
+                                                <option value="Heavy">Heavy</option>
+                                            </select>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>

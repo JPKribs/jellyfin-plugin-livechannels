@@ -611,13 +611,11 @@ export default function (view) {
         if (changed === 'min') { el('maxRating').value = min; } else { el('minRating').value = max; }
     }
 
-    // Favouring only applies to a shuffled loop, so disable it when shuffle is off; show the strength only when a
-    // content type is actually favoured.
+    // Favouring only applies to a shuffled loop, so the favor block is nested under Shuffle and revealed with it;
+    // the strength is nested under the type and revealed once a type other than None is chosen.
     function updateFavorControls() {
-        var shuffleOn = el('shuffle').checked;
-        el('favorKind').disabled = !shuffleOn;
-        var row = el('favorStrength').closest('.selectContainer');
-        if (row) { row.style.display = (shuffleOn && el('favorKind').value !== 'None') ? '' : 'none'; }
+        el('favorGroup').classList.toggle('hidden', !el('shuffle').checked);
+        el('favorStrengthGroup').classList.toggle('hidden', el('favorKind').value === 'None');
     }
 
     // MARK: Editor load / save
