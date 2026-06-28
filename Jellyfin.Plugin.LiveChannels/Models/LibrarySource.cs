@@ -21,6 +21,10 @@ public class LibrarySource
     /// <summary>Gets or sets a value indicating whether every genre must match (AND) rather than any (OR).</summary>
     public bool MatchAllGenres { get; set; }
 
+    /// <summary>Gets or sets genres to exclude. Any item carrying one of these (on itself or, for an episode, on
+    /// its series) is dropped even if it matched the included genres. Empty means no exclusions.</summary>
+    public List<string> ExcludeGenres { get; set; } = new();
+
     /// <summary>Gets or sets how the library is narrowed: all content, a genre filter, a whitelist, or a blacklist. Exactly one applies.</summary>
     public SelectionMode Selection { get; set; } = SelectionMode.AllContent;
 

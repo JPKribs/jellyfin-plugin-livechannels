@@ -11,13 +11,17 @@ namespace Jellyfin.Plugin.LiveChannels.Utilities;
 /// </summary>
 public static class StreamArguments
 {
-    // The producer always reads faster than realtime so the encoded stream stays ahead of playback. At exactly
-    // 1.0 the head-start buffer only ever drains: every item-boundary gap (a fresh ffmpeg spawning, seeking, and
-    // decoding its first frame) and every heavy frame eats into it, and at 1.0 it never refills, so it bleeds to
-    // zero and the channel stutters. Running over 1.0 lets the producer rebuild the cushion after each gap and
-    // keep a steady lead over the player. The initial burst still fills a head start fast on tune-in.
-    private const string ReadRate = "1.5";
+    // The producer reads at realtime. Its output is packaged by an HLS segmenter into a rolling window of small
+    // segments (the playlist), and that window is the buffer the player draws from. Reading faster than realtime
+    // would push the window forward faster than the player consumes it, so the player would fall off the back as
+    // old segments are deleted. The burst is applied ONCE per session (the first item, or the single concat
+    // ffmpeg) to fill a head start before tune-in; it must never apply to a later item mid-stream (see Build).
+    private const string ReadRate = "1.0";
     private const string ReadRateInitialBurst = "30";
+
+    // How the HLS segmenter packages the producer's continuous TS into a rolling, self-trimming playlist.
+    private const string HlsSegmentSeconds = "4";
+    private const string HlsListSize = "12";
 
     /// <summary>
     /// Builds the ffmpeg arguments for one item. Every item is re-encoded to one uniform MPEG-TS (in the
@@ -47,7 +51,8 @@ public static class StreamArguments
         string? externalSubtitlePath = null,
         bool softwareDecode = false,
         bool isHdr = false,
-        int? audioOrdinal = null)
+        int? audioOrdinal = null,
+        bool initialBurst = false)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(video);
@@ -113,10 +118,19 @@ public static class StreamArguments
             }
         }
 
-        // Read faster than realtime so the encoded stream stays ahead of playback (see ReadRate). The initial
-        // burst fills a head start fast on tune-in, then the over-realtime rate keeps rebuilding it after each
-        // item-boundary gap instead of letting it bleed away.
-        Add(args, "-readrate", ReadRate, "-readrate_initial_burst", ReadRateInitialBurst);
+        // Read at realtime so the segments are produced at the rate the player consumes them, keeping the player a
+        // constant distance back from the live edge (see ReadRate). Only the first item of a session bursts a head
+        // start, and only before the player has tuned in: a burst on a later item would shove its content into the
+        // playlist faster than realtime, lurching the live edge forward until the player falls off the back of the
+        // delete window and the stream breaks.
+        if (initialBurst)
+        {
+            Add(args, "-readrate", ReadRate, "-readrate_initial_burst", ReadRateInitialBurst);
+        }
+        else
+        {
+            Add(args, "-readrate", ReadRate);
+        }
 
         args.Add("-i");
         args.Add(path);
@@ -290,9 +304,9 @@ public static class StreamArguments
             args.Add(offset.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture));
         }
 
-        // Read faster than realtime (see ReadRate) so the one long-lived ffmpeg keeps the encoded stream ahead of
-        // the player, with the initial burst filling the tune-in buffer. Loop the whole playlist forever and read
-        // it as one continuous input.
+        // Read at realtime (see ReadRate) so segments are produced at the player's consumption rate. This is one
+        // long-lived ffmpeg with no item boundaries, so a single up-front burst safely fills the tune-in head start
+        // without ever lurching the live edge mid-stream. Loop the whole playlist forever and read it as one input.
         Add(args, "-readrate", ReadRate, "-readrate_initial_burst", ReadRateInitialBurst);
         Add(args, "-stream_loop", "-1", "-safe", "0", "-f", "concat", "-i", listFilePath);
 
@@ -372,8 +386,12 @@ public static class StreamArguments
         var hasFont = !string.IsNullOrEmpty(fontPath);
 
         var args = new List<string> { "-hide_banner", "-loglevel", "error" };
-        Add(args, "-f", "lavfi", "-i", hasFont ? "color=c=0x0f1419:size=" + size + ":rate=30" : "smptebars=size=" + size + ":rate=30");
-        Add(args, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000");
+
+        // Pace the synthetic sources to realtime (-re) so the looped slate feeds the segmenter at the rate the
+        // player consumes it. Without it ffmpeg renders each clip far faster than realtime and lurches the live
+        // edge forward, the same failure a per-item burst would cause.
+        Add(args, "-re", "-f", "lavfi", "-i", hasFont ? "color=c=0x0f1419:size=" + size + ":rate=30" : "smptebars=size=" + size + ":rate=30");
+        Add(args, "-re", "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000");
         Add(args, "-t", seconds.ToString("F0", CultureInfo.InvariantCulture));
 
         if (hasFont)
@@ -402,6 +420,37 @@ public static class StreamArguments
         }
 
         Add(args, "-y", "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-muxdelay", "0", "pipe:1");
+        return args;
+    }
+
+    /// <summary>
+    /// Builds the ffmpeg arguments for the HLS segmenter: it reads the producer's continuous MPEG-TS on stdin and
+    /// repackages it (no re-encode) into a rolling window of small segments plus a live playlist, deleting
+    /// segments as they age out so on-disk size stays bounded no matter how long the channel runs.
+    /// </summary>
+    /// <param name="segmentPattern">The ffmpeg segment filename pattern (e.g. <c>.../seg%d.ts</c>).</param>
+    /// <param name="playlistPath">The playlist (.m3u8) path Jellyfin reads.</param>
+    /// <returns>The ffmpeg argument list.</returns>
+    public static List<string> BuildHlsSegmenter(string segmentPattern, string playlistPath)
+    {
+        ArgumentNullException.ThrowIfNull(segmentPattern);
+        ArgumentNullException.ThrowIfNull(playlistPath);
+
+        var args = new List<string> { "-hide_banner", "-loglevel", "error" };
+
+        // Copy the incoming TS straight into HLS segments (no decode/encode), so this stage is nearly free.
+        // delete_segments drops files once they leave the playlist window; omit_endlist keeps it a live playlist;
+        // independent_segments marks each segment as starting on a keyframe. The window length (segments * time)
+        // is the player's buffer and also the upper bound on disk use.
+        Add(args, "-fflags", "+genpts", "-i", "pipe:0", "-c", "copy",
+            "-f", "hls",
+            "-hls_time", HlsSegmentSeconds,
+            "-hls_list_size", HlsListSize,
+            "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments",
+            "-hls_segment_type", "mpegts",
+            "-hls_segment_filename", segmentPattern,
+            playlistPath);
+
         return args;
     }
 

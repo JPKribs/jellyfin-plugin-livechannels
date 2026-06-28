@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Utilities;
+using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
@@ -24,10 +25,14 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// </summary>
 public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
 {
-    private const int BufferSize = 81920;
-
     // Content added within this window is treated as new (not a repeat) in the guide.
     private const int NewWindowDays = 14;
+
+    // Default client pre-roll when the configured BufferSeconds is unreadable. A live channel is a re-encoded
+    // feed the player joins mid-stream, so without a head start it begins on an almost-empty buffer and stutters
+    // until it fills. Pre-rolling a few seconds (the declarative form of "pause briefly, then resume") starts
+    // playback on a full cushion instead; the amount is configurable in Settings.
+    private const int DefaultBufferSeconds = 3;
 
     private readonly ChannelService _channels;
     private readonly StreamSessionService _streams;
@@ -35,7 +40,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     private readonly ActivityLogger _activity;
     private readonly ILogger<LiveChannelsTvService> _logger;
 
-    private readonly string _streamRoot = Path.Combine(Path.GetTempPath(), "livechannels-streams");
+    private readonly string _streamRoot;
     private readonly string _logoRoot = Path.Combine(Path.GetTempPath(), "livechannels-logos");
     private readonly ConcurrentDictionary<string, LiveSession> _live = new(StringComparer.Ordinal);
     private readonly Timer _reaper;
@@ -47,14 +52,23 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     /// <param name="streams">The stream session service, used to produce each channel's ffmpeg feed.</param>
     /// <param name="defaultLogo">The generated fallback-logo service.</param>
     /// <param name="activity">The activity logger, used to record channel start/stop in Jellyfin's activity log.</param>
+    /// <param name="appPaths">The application paths, used to default the stream directory under Jellyfin's cache.</param>
     /// <param name="logger">The logger.</param>
-    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, ILogger<LiveChannelsTvService> logger)
+    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
     {
         _channels = channels;
         _streams = streams;
         _defaultLogo = defaultLogo;
         _activity = activity;
         _logger = logger;
+
+        // Where each channel's growing stream file is written. Configurable, since the file lives for the whole
+        // watch and the system temp is often small or RAM-backed; defaults to a livechannels folder in Jellyfin's
+        // cache. A change takes effect on the next restart (active streams keep using the directory they started in).
+        var configured = Plugin.Instance?.ReadConfiguration(c => c.StreamDirectory);
+        _streamRoot = string.IsNullOrWhiteSpace(configured)
+            ? Path.Combine(appPaths.CachePath, "livechannels")
+            : configured;
 
         // A fresh process owns no live streams, so anything left in the stream root is an orphan from a previous
         // run that ended without CloseLiveStream (a crash). Sweep it now, then periodically reap sessions whose
@@ -162,27 +176,32 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             ?? throw new InvalidOperationException("No enabled channel matches id " + channelId);
 
         _logger.LogInformation("Live Channels: opening live stream for {Name}", channel.Name);
-        Directory.CreateDirectory(_streamRoot);
         var liveStreamId = "lc_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-        var path = Path.Combine(_streamRoot, liveStreamId + ".ts");
+
+        // Each session gets its own directory holding the live playlist and its rolling segments; the whole
+        // directory is removed on close. The session tracks the directory (for cleanup); Jellyfin is handed the
+        // playlist inside it.
+        var dir = Path.Combine(_streamRoot, liveStreamId);
+        Directory.CreateDirectory(dir);
+        var playlist = Path.Combine(dir, "stream.m3u8");
 
         var cts = new CancellationTokenSource();
 
-        var worker = StartFileProducer(channel, path, cts);
+        var worker = StartProducer(channel, dir, cts);
 
-        _live[liveStreamId] = new LiveSession(cts, worker, path, channel.Name, channelId);
+        _live[liveStreamId] = new LiveSession(cts, worker, dir, channel.Name, channelId);
 
         // Jellyfin shares one live stream per channel, so any earlier session still open for this channel was
         // abandoned (a re-tune Jellyfin never closed). Tear those down now so producers and their downstream
         // transcodes do not pile up and saturate the box. Also sweep any finished sessions while we are here.
         EvictStaleSessions(channelId, keep: liveStreamId);
 
-        // Jellyfin opens the temp file immediately, so wait until the producer has buffered enough to play and,
-        // if it dies with nothing, tear the session down and surface a clear failure rather than handing over an
-        // empty file.
+        // Jellyfin opens the playlist immediately, so wait until the segmenter has written it and a first segment,
+        // and if the producer dies with nothing, tear the session down and surface a clear failure rather than
+        // handing over an empty playlist.
         try
         {
-            await WaitForBytesAsync(path, worker, cancellationToken).ConfigureAwait(false);
+            await WaitForPlaylistAsync(playlist, worker, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -209,20 +228,19 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             "LiveChannels.ChannelStarted",
             overview: "This channel is now being encoded.");
 
-        return BuildSource(liveStreamId, path);
+        return BuildSource(liveStreamId, playlist);
     }
 
-    // Starts the file-backed producer: opens a temp file the producer appends to and Jellyfin reads, disposing it
-    // when the producer stops (it is deleted on close).
-    private Task StartFileProducer(Channel channel, string path, CancellationTokenSource cts)
+    // Starts the producer for a session: the stream session runs the HLS segmenter and feeds it, writing the live
+    // playlist and its rolling segments into the session directory. The directory is removed when the session ends.
+    private Task StartProducer(Channel channel, string dir, CancellationTokenSource cts)
     {
-        var output = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, BufferSize, useAsync: true);
-        return Task.Run(() => RunProducerAsync(() => _streams.StreamToAsync(channel, output, cts.Token), channel.Name, output), CancellationToken.None);
+        return Task.Run(() => RunProducerAsync(() => _streams.StreamToHlsAsync(channel, dir, cts.Token), channel.Name), CancellationToken.None);
     }
 
-    // Runs a producer delegate with the standard lifecycle: swallow cancellation, log any real failure, and
-    // dispose the output file.
-    private async Task RunProducerAsync(Func<Task> produce, string channelName, FileStream? output)
+    // Runs a producer delegate with the standard lifecycle: swallow cancellation and log any real failure. The
+    // segmenter owns its own output files, so there is nothing to dispose here.
+    private async Task RunProducerAsync(Func<Task> produce, string channelName)
     {
         try
         {
@@ -235,20 +253,6 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Live channel {Name}: stream producer failed", channelName);
-        }
-        finally
-        {
-            if (output is not null)
-            {
-                try
-                {
-                    await output.DisposeAsync().ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Could not dispose stream file for {Name}", channelName);
-                }
-            }
         }
     }
 
@@ -318,6 +322,12 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         {
             if (Directory.Exists(_streamRoot))
             {
+                foreach (var sessionDir in Directory.EnumerateDirectories(_streamRoot))
+                {
+                    TryDeleteDirectory(sessionDir);
+                }
+
+                // Tidy any stray loose files from older (single-file) versions.
                 foreach (var file in Directory.EnumerateFiles(_streamRoot))
                 {
                     TryDeleteFile(file);
@@ -376,9 +386,49 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
     }
 
+    /// <summary>
+    /// Reaps finished sessions, then deletes any stream file in the stream directory that is not tied to a live
+    /// session. Safe to run at any time: a file an active session is still writing is skipped, so it can never
+    /// interrupt playback. Backs the scheduled cleanup task and the manual "run now" in Scheduled Tasks.
+    /// </summary>
+    /// <returns>The number of orphaned stream files removed.</returns>
+    public int CleanupOrphanStreams()
+    {
+        ReapCompletedSessions();
+
+        var active = new HashSet<string>(_live.Values.Select(s => s.Path), StringComparer.Ordinal);
+        var removed = 0;
+        try
+        {
+            if (Directory.Exists(_streamRoot))
+            {
+                foreach (var sessionDir in Directory.EnumerateDirectories(_streamRoot))
+                {
+                    if (active.Contains(sessionDir))
+                    {
+                        continue;
+                    }
+
+                    TryDeleteDirectory(sessionDir);
+                    if (!Directory.Exists(sessionDir))
+                    {
+                        removed++;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Live Channels: stream cleanup sweep failed");
+        }
+
+        _logger.LogInformation("Live Channels: stream cleanup removed {Count} orphaned stream directory(ies)", removed);
+        return removed;
+    }
+
     // Tears down every session except the one just opened: any other session for the same channel is an abandoned
     // re-tune Jellyfin never closed, and any finished session anywhere is dead weight. Each producer's CTS is
-    // cancelled (which ends its ffmpeg and lets the file be deleted) without blocking the caller.
+    // cancelled (which ends its ffmpeg) without blocking the caller, since this runs on the tune-in path.
     private void EvictStaleSessions(string channelId, string keep)
     {
         foreach (var (id, session) in _live)
@@ -406,7 +456,10 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
                     // Already finished.
                 }
 
-                DisposeSession(removed);
+                // Delete the session directory only once the producer has fully stopped (its segmenter is killed in
+                // StreamToHlsAsync's finally), so the recursive delete cannot race the segmenter still writing
+                // segments into it. Fire-and-forget so an incoming re-tune is never blocked draining the old one.
+                _ = removed.Worker.ContinueWith(_ => DisposeSession(removed), TaskScheduler.Default);
             }
         }
     }
@@ -422,7 +475,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             // Already disposed.
         }
 
-        TryDeleteFile(session.Path);
+        TryDeleteDirectory(session.Path);
     }
 
     private void TryDeleteFile(string path)
@@ -437,6 +490,22 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Live Channels: could not delete temp file {Path}", path);
+        }
+    }
+
+    // Removes a session directory and everything in it (the playlist plus its segments).
+    private void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Live Channels: could not delete stream directory {Path}", path);
         }
     }
 
@@ -475,8 +544,8 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     /// <inheritdoc />
     public Task CancelSeriesTimerAsync(string timerId, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    // Builds the live MPEG-TS source descriptor. With no path it is the "menu" entry Jellyfin opens via
-    // GetChannelStream; with a path it is the opened stream Jellyfin reads and later closes by its Id.
+    // Builds the live HLS source descriptor. With no path it is the "menu" entry Jellyfin opens via
+    // GetChannelStream; with a path (the .m3u8) it is the opened stream Jellyfin reads and later closes by its Id.
     // We produce the stream ourselves at a known resolution/codec, so we advertise concrete video/audio
     // streams (and skip probing): without them, a client that needs transcoding crashes Jellyfin's scale
     // filter on the null source dimensions.
@@ -520,12 +589,14 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             Id = id,
             Path = path,
             Protocol = MediaProtocol.File,
-            Container = "ts",
+            Container = "hls",
             IsInfiniteStream = true,
-            // Read the stream at native frame rate so Jellyfin's transcoder paces itself to realtime instead of
-            // racing through our growing file to EOF and ending the stream after a few seconds (a regular file
-            // returns EOF the moment the reader catches the producer's write head).
+            // Read the stream at native frame rate so Jellyfin's transcoder paces itself to realtime. The live
+            // playlist (no end tag) already paces it to segment availability; this keeps the transcoder honest.
             ReadAtNativeFramerate = true,
+            // Pre-roll the configured number of seconds on the client so playback starts on a full buffer instead
+            // of stuttering while it fills (the declarative form of pausing briefly then resuming on tune-in).
+            BufferMs = Math.Max(0, Plugin.Instance?.ReadConfiguration(c => c.BufferSeconds) ?? DefaultBufferSeconds) * 1000,
             RequiresOpening = path is null,
             RequiresClosing = true,
             SupportsDirectPlay = false,
@@ -535,26 +606,19 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         };
     }
 
-    private static async Task WaitForBytesAsync(string path, Task worker, CancellationToken cancellationToken)
+    private static async Task WaitForPlaylistAsync(string playlist, Task worker, CancellationToken cancellationToken)
     {
-        // Hand Jellyfin the path only once the producer is a few seconds ahead: enough for ffmpeg to find
-        // codec parameters, and a head-start buffer so the brief gap between items (the per-item path spawns
-        // a fresh ffmpeg per item) is absorbed by the buffered temp file and never reaches the player.
-        var bitrateKbps = Plugin.Instance?.ReadConfiguration(c => c.TranscodeVideoBitrateKbps) ?? 4000;
-        var minReadyBytes = Math.Max(2_000_000L, (long)bitrateKbps * 1000L / 8L * 4L);
+        // Hand Jellyfin the playlist only once the segmenter has written it and buffered a few segments, so
+        // playback starts on a small cushion (the per-item path spawns a fresh ffmpeg per item, and these
+        // buffered segments ride over the brief gap between items). The initial burst fills them fast.
+        const int MinSegments = 3;
+        var dir = Path.GetDirectoryName(playlist) ?? string.Empty;
         var deadline = DateTime.UtcNow.AddSeconds(20);
         while (DateTime.UtcNow < deadline && !worker.IsCompleted)
         {
-            try
+            if (File.Exists(playlist) && CountSegments(dir) >= MinSegments)
             {
-                if (new FileInfo(path).Length >= minReadyBytes)
-                {
-                    return;
-                }
-            }
-            catch (IOException)
-            {
-                // The file may not exist yet; keep waiting.
+                return;
             }
 
             try
@@ -567,25 +631,25 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             }
         }
 
-        // The loop ended either because the producer is alive but still buffering (deadline hit — hand over the
-        // partial file, it has data) or because the producer finished. If it finished without buffering the
-        // minimum, it produced nothing playable: fail loudly so the caller can tear the dead session down.
-        if (worker.IsCompleted)
+        // The loop ended either because the segmenter is alive but still filling (deadline hit — hand over the
+        // playlist, it has segments and will keep growing) or because the producer finished. If it finished
+        // without producing a playable playlist, it produced nothing: fail loudly so the caller tears it down.
+        if (worker.IsCompleted && !(File.Exists(playlist) && CountSegments(dir) >= 1))
         {
-            long length = 0;
-            try
-            {
-                length = new FileInfo(path).Length;
-            }
-            catch (IOException)
-            {
-                // Treat an unreadable/absent file as empty.
-            }
+            throw new InvalidOperationException("The channel produced no playable output.");
+        }
+    }
 
-            if (length < minReadyBytes)
-            {
-                throw new InvalidOperationException("The channel produced no playable output.");
-            }
+    // Counts the current HLS segments in a session directory (the rolling window the segmenter keeps on disk).
+    private static int CountSegments(string dir)
+    {
+        try
+        {
+            return Directory.Exists(dir) ? Directory.GetFiles(dir, "*.ts").Length : 0;
+        }
+        catch (IOException)
+        {
+            return 0;
         }
     }
 

@@ -90,8 +90,13 @@ export default function (view) {
 
         var wrap = document.createElement('div');
         wrap.className = 'jpk-chip-select';
-        var picker = document.createElement('select');
-        picker.className = 'jpk-selector-dropdown';
+        // Build the emby-select through innerHTML (exactly how the source cards do it) so the customized built-in
+        // upgrades to the styled component. Do NOT use document.createElement('select', { is: 'emby-select' }) here:
+        // that path throws "toLowerCase is not a function" inside Jellyfin's webcomponents polyfill and takes the
+        // whole editor down with it.
+        var pickerHost = document.createElement('div');
+        pickerHost.innerHTML = '<select is="emby-select" class="jpk-selector-dropdown"></select>';
+        var picker = pickerHost.querySelector('select');
         var chips = document.createElement('div');
         chips.className = 'jpk-tags';
         // Selected chips sit above the picker (like UserManagement's tags).
@@ -305,7 +310,7 @@ export default function (view) {
     }
 
     function newSource(libraryId) {
-        return { LibraryId: libraryId || '', LibraryName: libraryId ? libraryName(libraryId) : '', Genres: [], MatchAllGenres: false, Selection: 'AllContent', ItemIds: [], __items: [] };
+        return { LibraryId: libraryId || '', LibraryName: libraryId ? libraryName(libraryId) : '', Genres: [], ExcludeGenres: [], MatchAllGenres: false, Selection: 'AllContent', ItemIds: [], __items: [] };
     }
 
     function renderSources() {
@@ -343,9 +348,13 @@ export default function (view) {
             '</div>' +
             '<div class="filterSection lc-genres">' +
                 '<h3 class="jpk-subsection-title">Genres</h3>' +
+                '<label class="inputLabel">Include</label>' +
                 '<div class="lc-genre-mount"></div>' +
                 '<label class="emby-checkbox-label lc-matchall-label"><input type="checkbox" is="emby-checkbox" class="lc-matchall" /><span class="checkboxLabel">Match all genres</span></label>' +
-                '<div class="fieldDescription">Content needs to contain all genres to be included in this channel.</div>' +
+                '<div class="fieldDescription">On, content must carry every included genre. Off, any one is enough.</div>' +
+                '<label class="inputLabel">Exclude</label>' +
+                '<div class="lc-exclude-mount"></div>' +
+                '<div class="fieldDescription">Content carrying any of these genres is never included, even if it matched above. Series level genres apply to their episodes.</div>' +
             '</div>' +
             '<div class="filterSection lc-items">' +
                 '<input is="emby-input" type="text" class="lc-search" placeholder="Search this library…" />' +
@@ -369,12 +378,16 @@ export default function (view) {
         var selection = card.querySelector('.lc-selection');
         selection.value = source.Selection || 'AllContent';
 
-        // Genres (shown for the genre selection)
+        // Genres (shown for the genre selection): an include list and an exclude (blacklist) list, both fed the
+        // same available genres for the library.
         var genresSection = card.querySelector('.lc-genres');
         var chip = createChipSelect({ placeholder: 'Add a genre…', onChange: function (vals) { source.Genres = vals; } });
         chip.setValue(source.Genres || []);
         card.querySelector('.lc-genre-mount').appendChild(chip.element);
-        function reloadGenres() { loadCardGenres(source.LibraryId).then(function (names) { chip.setAvailable(names); }); }
+        var excludeChip = createChipSelect({ placeholder: 'Add a genre to exclude…', onChange: function (vals) { source.ExcludeGenres = vals; } });
+        excludeChip.setValue(source.ExcludeGenres || []);
+        card.querySelector('.lc-exclude-mount').appendChild(excludeChip.element);
+        function reloadGenres() { loadCardGenres(source.LibraryId).then(function (names) { chip.setAvailable(names); excludeChip.setAvailable(names); }); }
         reloadGenres();
         var matchAll = card.querySelector('.lc-matchall');
         matchAll.checked = !!source.MatchAllGenres;
@@ -568,7 +581,7 @@ export default function (view) {
 
     function loadCardGenres(libraryId) {
         if (!libraryId) return Promise.resolve([]);
-        return ApiClient.getJSON(ApiClient.getUrl('Genres', { ParentId: libraryId, IncludeItemTypes: 'Movie,Episode', Recursive: true, Limit: 500, SortBy: 'SortName' }))
+        return ApiClient.getJSON(ApiClient.getUrl('Genres', { ParentId: libraryId, IncludeItemTypes: 'Movie,Series,Episode', Recursive: true, Limit: 500, SortBy: 'SortName' }))
             .then(function (result) { return ((result && result.Items) || []).map(function (g) { return g.Name; }); })
             .catch(function () { return []; });
     }
@@ -593,6 +606,26 @@ export default function (view) {
             el('minRating').innerHTML = '<option value="">No minimum</option>';
             el('maxRating').innerHTML = '<option value="">No limit</option>';
             el('kidsRating').innerHTML = '<option value="">None</option>';
+        });
+    }
+
+    // Populates the per-channel audio-language dropdown from the server's known cultures. The value stored is the
+    // three-letter ISO code, matched against each item's default audio track on the server.
+    function loadLanguages() {
+        var allOption = '<option value="">Allow all languages</option>';
+        return ApiClient.getJSON(ApiClient.getUrl('Localization/Cultures')).then(function (list) {
+            var seen = {};
+            var opts = (list || []).filter(function (c) {
+                var code = c && c.ThreeLetterISOLanguageName;
+                if (!code || seen[code]) return false;
+                seen[code] = true; return true;
+            }).sort(function (a, b) { return (a.DisplayName || a.Name || '').localeCompare(b.DisplayName || b.Name || ''); })
+              .map(function (c) {
+                return '<option value="' + Shared.escapeHtml(c.ThreeLetterISOLanguageName) + '">' + Shared.escapeHtml(c.DisplayName || c.Name) + '</option>';
+            }).join('');
+            el('audioLanguage').innerHTML = allOption + opts;
+        }).catch(function () {
+            el('audioLanguage').innerHTML = allOption;
         });
     }
 
@@ -634,6 +667,7 @@ export default function (view) {
 
         renderSources();
 
+        el('audioLanguage').value = ch.AudioLanguage || '';
         el('minRating').value = ch.MinOfficialRating || '';
         el('maxRating').value = ch.MaxOfficialRating || '';
         el('includeUnrated').checked = ch.IncludeUnrated !== false;
@@ -660,6 +694,7 @@ export default function (view) {
         ch.LogoStyle = el('logoStyle').value;
         ch.LogoSymbol = el('logoSymbol').value.trim();
         ch.LogoShowName = el('logoShowName').checked;
+        ch.AudioLanguage = el('audioLanguage').value;
         ch.MinOfficialRating = el('minRating').value;
         ch.MaxOfficialRating = el('maxRating').value;
         ch.IncludeUnrated = el('includeUnrated').checked;
@@ -735,7 +770,7 @@ export default function (view) {
         channels.push({
             Id: newId(), Name: '', Number: nextNumber(), LogoData: '', LogoContentType: '',
             LogoStyle: 'Number', LogoSymbol: '', LogoShowName: true,
-            Sources: [], MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, KidsRatingThreshold: 'G',
+            Sources: [], AudioLanguage: '', MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, KidsRatingThreshold: 'G',
             EpisodesPerBlock: 1, KeepMultiPartTogether: true,
             IncludeSpecials: false, Shuffle: true, ShuffleEpisodes: false,
             FavorKind: 'None', FavorStrength: 'Moderate', SubtitleBurnIn: 'Never', Enabled: true
@@ -818,7 +853,7 @@ export default function (view) {
     }
 
     function load() {
-        Promise.all([loadLibraries(), loadRatings()]).then(function () {
+        Promise.all([loadLibraries(), loadRatings(), loadLanguages()]).then(function () {
             return Shared.getConfig();
         }).then(function (cfg) {
             config = cfg;

@@ -40,6 +40,8 @@ export default function (view) {
         el('videoCodec').value = config.VideoCodec || 'H264';
         el('audioCodec').value = config.AudioCodec || 'Aac';
         el('videoBitrate').value = config.TranscodeVideoBitrateKbps || 4000;
+        el('bufferSeconds').value = config.BufferSeconds == null ? 3 : config.BufferSeconds;
+        el('streamDirectory').value = config.StreamDirectory || '';
         el('disableHwa').checked = !!config.DisableHardwareAcceleration;
         renderAcceleration();
     }
@@ -59,6 +61,9 @@ export default function (view) {
             fresh.VideoCodec = el('videoCodec').value;
             fresh.AudioCodec = el('audioCodec').value;
             fresh.TranscodeVideoBitrateKbps = Math.max(500, parseInt(el('videoBitrate').value, 10) || 4000);
+            var buf = parseInt(el('bufferSeconds').value, 10);
+            fresh.BufferSeconds = isNaN(buf) ? 3 : Math.min(30, Math.max(0, buf));
+            fresh.StreamDirectory = (el('streamDirectory').value || '').trim();
             fresh.DisableHardwareAcceleration = el('disableHwa').checked;
             return Shared.saveConfig(fresh);
         }).then(function () {

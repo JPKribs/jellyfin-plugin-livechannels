@@ -36,6 +36,9 @@ public class Channel
     /// <summary>Gets or sets the libraries (with optional genre or item filters) the channel pulls from. Content is the union of all sources.</summary>
     public List<LibrarySource> Sources { get; set; } = new();
 
+    /// <summary>Gets or sets the required default-audio-track language, as a three-letter ISO code (e.g. <c>eng</c>, <c>jpn</c>). Empty means all languages are allowed; otherwise only content whose default audio track is this language is included.</summary>
+    public string AudioLanguage { get; set; } = string.Empty;
+
     /// <summary>Gets or sets the minimum official/parental rating allowed, by name (e.g. <c>TV-MA</c>). Empty means no floor.</summary>
     public string MinOfficialRating { get; set; } = string.Empty;
 

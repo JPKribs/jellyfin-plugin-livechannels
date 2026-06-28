@@ -27,4 +27,10 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>Gets or sets a value indicating whether to force software encoding and decoding for channel streams, ignoring Jellyfin's hardware acceleration. Slower, but universally compatible across systems, codecs, and media types.</summary>
     public bool DisableHardwareAcceleration { get; set; }
+
+    /// <summary>Gets or sets how many seconds the client buffers before playback starts. A larger buffer rides out hiccups on tune-in at the cost of a longer wait before the picture appears.</summary>
+    public int BufferSeconds { get; set; } = 3;
+
+    /// <summary>Gets or sets the directory each channel's live playlist and its rolling stream segments are written to while playing. Empty (the default) uses a <c>livechannels</c> folder inside Jellyfin's cache. Only a short rolling window of segments is kept on disk at a time, so this stays small regardless of how long the channel runs.</summary>
+    public string StreamDirectory { get; set; } = string.Empty;
 }

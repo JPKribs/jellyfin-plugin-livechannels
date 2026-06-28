@@ -53,6 +53,25 @@ public class StreamArgumentsTests
     }
 
     [Fact]
+    public void LaterItems_RunAtRealtime_WithNoBurst()
+    {
+        // A burst on anything but the first item shoves its content into the HLS playlist faster than realtime,
+        // lurching the live edge forward until the player falls off the back of the delete window. Every item
+        // after the first must pace at exactly realtime with no burst.
+        var a = Build();
+        Assert.True(Pair(a, "-readrate", "1.0"));
+        Assert.DoesNotContain("-readrate_initial_burst", a);
+    }
+
+    [Fact]
+    public void FirstItem_BurstsATuneInHeadStart()
+    {
+        // The first item of a session fills the head start before the player has tuned in, so its burst is safe.
+        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, false, null, true);
+        Assert.Contains("-readrate_initial_burst", a);
+    }
+
+    [Fact]
     public void SignalsProgressiveFieldOrder_OnBothPaths()
     {
         // The encoder must tag the output progressive so Jellyfin remuxes instead of adding a deinterlace pass

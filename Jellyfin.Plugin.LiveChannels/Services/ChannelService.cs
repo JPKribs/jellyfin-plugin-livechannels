@@ -110,6 +110,29 @@ public class ChannelService
         return (ordinal, audio[ordinal]);
     }
 
+    // Whether the item's default audio track is in the channel's required language (a three-letter ISO code).
+    // An empty language allows everything and skips the lookup entirely, so only language-filtered channels pay
+    // the per-item media-stream read. Strict by design ("MUST be this language"): an item whose default track is
+    // another language, is untagged, or cannot be read is excluded.
+    private bool AudioLanguageAllows(string language, Guid itemId)
+    {
+        if (string.IsNullOrWhiteSpace(language))
+        {
+            return true;
+        }
+
+        try
+        {
+            var def = DefaultAudio(_mediaSourceManager.GetMediaStreams(itemId));
+            return def is not null && string.Equals(def.Value.Stream.Language, language, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read media streams for audio language check on {ItemId}", itemId);
+            return false;
+        }
+    }
+
     // ISO 639 English codes, the only language treated as needing no subtitles for non-English-audio burn-in.
     private static bool IsEnglish(string? language)
         => string.Equals(language, "eng", StringComparison.OrdinalIgnoreCase)
@@ -358,6 +381,11 @@ public class ChannelService
                 continue;
             }
 
+            if (!AudioLanguageAllows(channel.AudioLanguage, item.Id))
+            {
+                continue;
+            }
+
             var entry = ToEntry(item, kidsScore);
             if (entry is not null)
             {
@@ -388,25 +416,93 @@ public class ChannelService
             _ => QueryLibrary(libraryId, Array.Empty<string>(), ratings, kinds)
         };
 
-    // The library filtered to the configured genres. With no genres this is the whole library.
+    // The library narrowed by genre, matched against each item's own genres and, for an episode, its series'
+    // genres too (so a series-level tag like "Anime" matches its episodes even when the episodes are untagged).
+    // Included genres match any (OR) or every (AND) genre; excluded genres drop any item that carries one. With
+    // no genres at all this is the whole library.
     private IEnumerable<BaseItem> GenreItems(Guid libraryId, LibrarySource source, RatingFilter ratings, BaseItemKind[] kinds)
     {
-        var genres = source.Genres.Where(g => !string.IsNullOrWhiteSpace(g)).ToArray();
-        return MatchGenres(QueryLibrary(libraryId, genres, ratings, kinds), genres, source.MatchAllGenres);
-    }
-
-    // Narrows items to those matching the genres: any genre (OR) by default, or every genre (AND) when
-    // requested. A no-op when no genres are configured.
-    private static IEnumerable<BaseItem> MatchGenres(IEnumerable<BaseItem> items, string[] genres, bool matchAll)
-    {
-        if (genres.Length == 0)
+        var include = source.Genres.Where(g => !string.IsNullOrWhiteSpace(g)).ToArray();
+        var exclude = source.ExcludeGenres.Where(g => !string.IsNullOrWhiteSpace(g)).ToArray();
+        if (include.Length == 0 && exclude.Length == 0)
         {
-            return items;
+            return QueryLibrary(libraryId, Array.Empty<string>(), ratings, kinds);
         }
 
-        return matchAll
-            ? items.Where(i => genres.All(g => i.Genres.Any(have => string.Equals(have, g, StringComparison.OrdinalIgnoreCase))))
-            : items.Where(i => genres.Any(g => i.Genres.Any(have => string.Equals(have, g, StringComparison.OrdinalIgnoreCase))));
+        // Series genres apply to their episodes, so build a seriesId -> genres lookup once and use it to compute
+        // each item's effective genres below.
+        var seriesGenres = SeriesGenreMap(libraryId);
+
+        // Candidates: the whole library when only excluding, else items whose own genres match (database-filtered)
+        // unioned with the episodes of series whose genres match (so a series-level tag is honoured).
+        IEnumerable<BaseItem> items;
+        if (include.Length == 0)
+        {
+            items = QueryLibrary(libraryId, Array.Empty<string>(), ratings, kinds);
+        }
+        else
+        {
+            var direct = QueryLibrary(libraryId, include, ratings, kinds);
+            var viaSeries = SeriesMatching(libraryId, include)
+                .SelectMany(EpisodesOf)
+                .Where(e => KindAllowed(e, kinds) && ratings.Allows(e));
+            items = direct.Concat(viaSeries).DistinctBy(i => i.Id);
+        }
+
+        // Refine the OR-union candidates by the requested match mode, then drop anything carrying an excluded
+        // genre. Both checks run against effective (own + series) genres.
+        return items.Where(i =>
+        {
+            var eff = EffectiveGenres(i, seriesGenres);
+            var includeOk = include.Length == 0
+                || (source.MatchAllGenres ? include.All(eff.Contains) : include.Any(eff.Contains));
+            var excludeOk = exclude.Length == 0 || !exclude.Any(eff.Contains);
+            return includeOk && excludeOk;
+        });
+    }
+
+    // A seriesId -> genres lookup for every series in the library, so episode genre matching can include the
+    // parent series' genres. One indexed query, far smaller than enumerating episodes.
+    private Dictionary<Guid, HashSet<string>> SeriesGenreMap(Guid libraryId)
+    {
+        var map = new Dictionary<Guid, HashSet<string>>();
+        var series = _libraryManager.GetItemList(new InternalItemsQuery
+        {
+            IncludeItemTypes = new[] { BaseItemKind.Series },
+            AncestorIds = new[] { libraryId },
+            Recursive = true,
+            IsVirtualItem = false
+        });
+
+        foreach (var s in series)
+        {
+            map[s.Id] = new HashSet<string>(s.Genres ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+        }
+
+        return map;
+    }
+
+    // The ids of series in the library carrying any of the genres (database-filtered: one indexed query).
+    private List<Guid> SeriesMatching(Guid libraryId, string[] genres)
+        => _libraryManager.GetItemList(new InternalItemsQuery
+        {
+            IncludeItemTypes = new[] { BaseItemKind.Series },
+            AncestorIds = new[] { libraryId },
+            Genres = genres,
+            Recursive = true,
+            IsVirtualItem = false
+        }).Select(s => s.Id).ToList();
+
+    // An item's effective genres for matching: its own, plus its series' when it is an episode.
+    private static HashSet<string> EffectiveGenres(BaseItem item, Dictionary<Guid, HashSet<string>> seriesGenres)
+    {
+        var set = new HashSet<string>(item.Genres ?? (IReadOnlyList<string>)Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+        if (item is Episode ep && ep.SeriesId != Guid.Empty && seriesGenres.TryGetValue(ep.SeriesId, out var sg))
+        {
+            set.UnionWith(sg);
+        }
+
+        return set;
     }
 
     // The explicitly chosen shows and movies (series expand to their episodes), kept to playable kinds

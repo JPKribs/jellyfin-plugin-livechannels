@@ -103,6 +103,83 @@ public class StreamSessionService
         }
     }
 
+    /// <summary>
+    /// Streams the channel as a self-trimming HLS playlist in <paramref name="hlsDir"/>. A long-lived segmenter
+    /// ffmpeg copies the producer's continuous MPEG-TS into a rolling window of small segments plus a live
+    /// playlist, so on-disk size stays bounded for any watch length. The producer (per-item or concat, plus the
+    /// standby slate) feeds the segmenter's stdin through the existing <see cref="StreamToAsync"/> path.
+    /// </summary>
+    /// <param name="channel">The channel to stream.</param>
+    /// <param name="hlsDir">The directory the playlist and segments are written to.</param>
+    /// <param name="cancellationToken">Cancelled when the live stream is closed.</param>
+    /// <returns>A task that completes when streaming stops.</returns>
+    public async Task StreamToHlsAsync(Channel channel, string hlsDir, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(hlsDir);
+
+        var ffmpeg = _encoder.EncoderPath;
+        if (string.IsNullOrEmpty(ffmpeg))
+        {
+            _logger.LogError("No ffmpeg encoder is configured; cannot stream channel {Name}", channel.Name);
+            return;
+        }
+
+        var args = StreamArguments.BuildHlsSegmenter(Path.Combine(hlsDir, "seg%d.ts"), Path.Combine(hlsDir, "stream.m3u8"));
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = ffmpeg,
+            RedirectStandardInput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        _logger.LogInformation("Live Channels: HLS segmenter [{Name}]: {Ffmpeg} {Args}", channel.Name, ffmpeg, string.Join(' ', args));
+
+        using var segmenter = new Process { StartInfo = startInfo };
+        try
+        {
+            segmenter.Start();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to start the HLS segmenter for {Name}", channel.Name);
+            return;
+        }
+
+        var stderrTask = ReadStandardErrorAsync(segmenter, cancellationToken);
+        try
+        {
+            // The per-item/concat producer and the slate all write to this one stream, so the segmenter receives
+            // a single unbroken TS feed it can package into the playlist.
+            await StreamToAsync(channel, segmenter.StandardInput.BaseStream, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            try
+            {
+                segmenter.StandardInput.Close();
+            }
+            catch (Exception)
+            {
+                // The segmenter may already have exited; nothing to flush.
+            }
+
+            await KillAndWaitAsync(segmenter).ConfigureAwait(false);
+            var stderr = await stderrTask.ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(stderr))
+            {
+                _logger.LogDebug("Live Channels: HLS segmenter ({Name}): {Error}", channel.Name, stderr.Trim());
+            }
+        }
+    }
+
     // Streams the channel as ONE continuous ffmpeg using the concat demuxer, so item boundaries are seamless
     // (no timestamp or continuity reset). Software decode (hardware decoders fail on the per-segment resolution
     // changes a playlist produces) with the hardware encoder.
@@ -219,7 +296,12 @@ public class StreamSessionService
         {
             var program = programs[index];
             _logger.LogDebug("Channel {Name}: item {Index}/{Count} \"{Title}\"", channel.Name, index + 1, programs.Count, program.Title);
-            var streamed = await StreamItemAsync(ffmpeg, channel, program, startOffset, timeline, output, cancellationToken).ConfigureAwait(false);
+
+            // Only the first item that actually plays bursts a tune-in head start; every later item runs at
+            // realtime so its segments enter the playlist no faster than the player drains them (a mid-stream
+            // burst would lurch the live edge past the player). Items that fail before then produce nothing, so
+            // letting them carry the burst flag is harmless.
+            var streamed = await StreamItemAsync(ffmpeg, channel, program, startOffset, timeline, output, initialBurst: itemsPlayed == 0, cancellationToken).ConfigureAwait(false);
 
             if (streamed)
             {
@@ -295,7 +377,7 @@ public class StreamSessionService
             itemCount);
     }
 
-    private async Task<bool> StreamItemAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan timeline, Stream output, CancellationToken cancellationToken)
+    private async Task<bool> StreamItemAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan timeline, Stream output, bool initialBurst, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(program.Path) || !File.Exists(program.Path))
         {
@@ -323,7 +405,7 @@ public class StreamSessionService
 
         var isHdr = _channels.IsHdrSource(program.ItemId);
         var audioOrdinal = _channels.GetDefaultAudioOrdinal(program.ItemId);
-        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, isHdr, audioOrdinal);
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, isHdr, audioOrdinal, initialBurst);
         var total = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
@@ -331,7 +413,7 @@ public class StreamSessionService
         if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
-            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, isHdr, audioOrdinal);
+            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, isHdr, audioOrdinal, initialBurst);
             total = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken).ConfigureAwait(false);
         }
 
@@ -453,7 +535,7 @@ public class StreamSessionService
         return total;
     }
 
-    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal)
+    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal, bool initialBurst)
     {
         // Read just the scalars we need inside the config lock, rather than holding a reference to the live
         // (mutable, shared) configuration object after the lock releases.
@@ -478,7 +560,7 @@ public class StreamSessionService
         // The HDR VAAPI path runs on hardware, so a failure should fall back to software exactly like a hardware
         // decode does (StreamItemAsync retries with softwareDecode).
         var hardwareDecode = usesHdrVaapi || (!forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel));
-        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal);
+        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurst);
         return (args, hardwareDecode);
     }
 

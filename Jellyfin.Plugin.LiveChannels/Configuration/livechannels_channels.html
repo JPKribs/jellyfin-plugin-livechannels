@@ -135,6 +135,11 @@
                                     <div class="fieldDescription">Burns subtitles into the picture, where Forced only shows the forced track or the default track when the audio is not English, and Always shows subtitles on everything.</div>
                                 </div>
                                 <div class="selectContainer">
+                                    <label class="selectLabel" for="audioLanguage">Audio language</label>
+                                    <select is="emby-select" id="audioLanguage" class="jpk-selector-dropdown"></select>
+                                    <div class="fieldDescription">Only include content whose default audio track is this language, like English only or Japanese only. Allow all languages keeps everything.</div>
+                                </div>
+                                <div class="selectContainer">
                                     <label class="selectLabel" for="minRating">Minimum age rating</label>
                                     <select id="minRating" class="jpk-selector-dropdown"></select>
                                     <div class="fieldDescription">Content at or above this rating. Use this with a maximum to make an adults-only or a single-band channel.</div>
@@ -189,7 +194,7 @@
                                     </label>
                                     <div class="fieldDescription">Disable to play everything alphabetically.</div>
                                 </div>
-                                <div id="favorGroup" class="jpk-indent hidden">
+                                <div id="favorGroup" class="hidden">
                                     <div class="selectContainer">
                                         <label class="selectLabel" for="favorKind">Favor content type</label>
                                         <select is="emby-select" id="favorKind" class="jpk-selector-dropdown">
