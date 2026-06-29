@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.6.6",
+        "changelog": "## Features\r\n- Start channels quickly even right after a restart by saving each item's video details with the schedule, so tune-in no longer re-scans the library\r\n- Keep each channel's schedule in its own file and release it from memory once the channel stops, so large setups use less memory\r\n- Add a pre-render setting to control how early the next item starts encoding, which can be lowered or turned off to save CPU on low-power hardware",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.6/jellyfin-plugin-livechannels-10.11.6.6.zip",
+        "checksum": "4bde071db60e74acb5b516c95487507f",
+        "timestamp": "2026-06-29T22:13:59Z"
+      },
+      {
         "version": "10.11.6.5",
         "changelog": "## Features\r\n- Build each channel schedule once and reuse it so large channels start quickly instead of failing to load",
         "targetAbi": "10.11.9.0",
