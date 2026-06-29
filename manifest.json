@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.6.0",
+        "changelog": "## Features\r\n- Add a Sessions tab that lists every active stream with its channel, start time, run time, and live encode speed, and a button to stop it\r\n- Warm up the next item while the current one is still playing so per-item channels switch files without a gap\r\n- Cap how many channels stream at once so a client that never disconnects cannot pile up encoders and overload the server\r\n- Add a stream time limit that closes any channel left running too long as a backstop for clients that never send a stop\r\n- Organise the Settings tab into collapsible sections",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.0/jellyfin-plugin-livechannels-10.11.6.0.zip",
+        "checksum": "92fd29b1b779c12b81884ce2f971c1d5",
+        "timestamp": "2026-06-29T07:03:56Z"
+      },
+      {
         "version": "10.11.5.0",
         "changelog": "## Features\r\n- Give the Popular channel its own tab to set its name, icon, rating limit, subtitle rule, and loop behaviour\r\n- Build the Popular channel from your recent, top rated, and most watched movies and shows\r\n- Measure most watched across the whole server by combining every user's play counts\r\n- Choose a default language in Settings that decides when Forced subtitles burn in",
         "targetAbi": "10.11.9.0",
