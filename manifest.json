@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.3.3",
+        "changelog": "## Features\r\n- Exclude genres from a channel, with series level genres applied across their episodes\r\n- Limit a channel to a single audio language by its default audio track\r\n- Set the playback buffer length and the stream file location in Settings\r\n- Clean up leftover stream files with a scheduled task in Live TV\r\n\r\n## Fixes\r\n- Stream channels as a rolling playlist of small segments so disk use stays bounded no matter how long they run\r\n- Pre-roll a few seconds on tune-in so playback starts on a full buffer\r\n- Tidy the channel editor genre dropdown and favor layout",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.3.3/jellyfin-plugin-livechannels-10.11.3.3.zip",
+        "checksum": "bcb278ce600751528f95e32856cbb44a",
+        "timestamp": "2026-06-29T00:57:47Z"
+      },
+      {
         "version": "10.11.3.2",
         "changelog": "## Fixes\r\n- Remove the trim and zero disk settings that could cause stutter",
         "targetAbi": "10.11.9.0",
