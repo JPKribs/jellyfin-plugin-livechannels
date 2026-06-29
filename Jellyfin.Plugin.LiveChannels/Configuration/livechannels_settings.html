@@ -96,6 +96,12 @@
                                 <input is="emby-input" type="number" id="bufferSeconds" min="0" max="30" step="1" autocomplete="off" />
                                 <div class="fieldDescription">How long a channel buffers before it starts playing. Raise it to ride out stutter when tuning in, lower it for a faster start.</div>
                             </div>
+
+                            <div class="inputContainer">
+                                <label for="preRenderSeconds">Pre-render next item (seconds)</label>
+                                <input is="emby-input" type="number" id="preRenderSeconds" min="0" max="30" step="1" autocomplete="off" />
+                                <div class="fieldDescription">How many seconds before an item ends to start encoding the next one, so transitions are seamless. Higher is smoother but briefly runs two encoders at once (more CPU on low-power hardware). 0 turns it off. Applies only to channels that encode item by item (subtitle burn-in, high-resolution, HDR, or QSV/VAAPI).</div>
+                            </div>
                         </div>
                     </div>
 

@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.6.5"
+version: "10.11.6.6"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV, with a ready-made Popular channel out of the box."
@@ -16,4 +16,6 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   features:
-  - Build each channel schedule once and reuse it so large channels start quickly instead of failing to load
+  - Start channels quickly even right after a restart by saving each item's video details with the schedule, so tune-in no longer re-scans the library
+  - Keep each channel's schedule in its own file and release it from memory once the channel stops, so large setups use less memory
+  - Add a pre-render setting to control how early the next item starts encoding, which can be lowered or turned off to save CPU on low-power hardware

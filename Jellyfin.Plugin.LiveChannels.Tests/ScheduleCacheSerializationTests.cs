@@ -34,7 +34,17 @@ public class ScheduleCacheSerializationTests
             SourceHeight = 1080,
             DateAdded = new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc),
             CommunityRating = 7.3f,
-            PremiereDate = new DateTime(2005, 2, 6, 0, 0, 0, DateTimeKind.Utc)
+            PremiereDate = new DateTime(2005, 2, 6, 0, 0, 0, DateTimeKind.Utc),
+            IsHdr = true,
+            IsInterlaced = true,
+            IsTenBit = true,
+            DefaultAudioOrdinal = 2,
+            DefaultAudioLanguage = "jpn",
+            Subtitles = new[]
+            {
+                new SubtitleStreamInfo { RelativeIndex = 0, AbsoluteIndex = 3, IsForced = true, IsDefault = false, IsText = true },
+                new SubtitleStreamInfo { RelativeIndex = 1, AbsoluteIndex = 4, IsForced = false, IsDefault = true, IsText = false }
+            }
         };
 
         var json = JsonSerializer.Serialize(new List<ProgramEntry> { original }, Options);
@@ -62,31 +72,38 @@ public class ScheduleCacheSerializationTests
         Assert.Equal(original.DateAdded, entry.DateAdded);
         Assert.Equal(original.CommunityRating, entry.CommunityRating);
         Assert.Equal(original.PremiereDate, entry.PremiereDate);
+        Assert.True(entry.IsHdr);
+        Assert.True(entry.IsInterlaced);
+        Assert.True(entry.IsTenBit);
+        Assert.Equal(2, entry.DefaultAudioOrdinal);
+        Assert.Equal("jpn", entry.DefaultAudioLanguage);
+        Assert.Equal(2, entry.Subtitles.Count);
+        Assert.True(entry.Subtitles[0].IsForced);
+        Assert.True(entry.Subtitles[0].IsText);
+        Assert.Equal(3, entry.Subtitles[0].AbsoluteIndex);
+        Assert.True(entry.Subtitles[1].IsDefault);
+        Assert.False(entry.Subtitles[1].IsText);
+        Assert.Equal(1, entry.Subtitles[1].RelativeIndex);
     }
 
     [Fact]
-    public void ScheduleMap_RoundTrips_PerChannel()
+    public void ChannelLoop_RoundTrips_AsList()
     {
-        // The on-disk schedule.json is a channel-id -> program-loop map; prove it round-trips so a tune-in reads
-        // back the right channel's schedule.
-        var map = new Dictionary<string, List<ProgramEntry>>
+        // Each channel's schedule file holds just that channel's program loop as a List<ProgramEntry> (named by
+        // channel number, e.g. schedule/0.json); prove the ordered loop round-trips so a tune-in reads it back.
+        var loop = new List<ProgramEntry>
         {
-            ["livechannels-popular"] = new() { new ProgramEntry(Guid.NewGuid(), "A", null, 1000, "/a.mkv") },
-            ["3f2504e0-4f89-41d3-9a0c-0305e82c3301"] = new()
-            {
-                new ProgramEntry(Guid.NewGuid(), "B", null, 2000, "/b.mkv"),
-                new ProgramEntry(Guid.NewGuid(), "C", null, 3000, "/c.mkv")
-            }
+            new(Guid.NewGuid(), "B", null, 2000, "/b.mkv"),
+            new(Guid.NewGuid(), "C", null, 3000, "/c.mkv")
         };
 
-        var json = JsonSerializer.Serialize(map, Options);
-        var restored = JsonSerializer.Deserialize<Dictionary<string, List<ProgramEntry>>>(json, Options);
+        var json = JsonSerializer.Serialize(loop, Options);
+        var restored = JsonSerializer.Deserialize<List<ProgramEntry>>(json, Options);
 
         Assert.NotNull(restored);
         Assert.Equal(2, restored!.Count);
-        Assert.Single(restored["livechannels-popular"]);
-        Assert.Equal(2, restored["3f2504e0-4f89-41d3-9a0c-0305e82c3301"].Count);
-        Assert.Equal("C", restored["3f2504e0-4f89-41d3-9a0c-0305e82c3301"][1].Title);
+        Assert.Equal("B", restored[0].Title);
+        Assert.Equal("C", restored[1].Title);
     }
 
     [Fact]
@@ -104,5 +121,11 @@ public class ScheduleCacheSerializationTests
         Assert.Null(entry.CommunityRating);
         Assert.Null(entry.PremiereDate);
         Assert.Empty(entry.Genres);
+        Assert.False(entry.IsHdr);
+        Assert.False(entry.IsInterlaced);
+        Assert.False(entry.IsTenBit);
+        Assert.Null(entry.DefaultAudioOrdinal);
+        Assert.Null(entry.DefaultAudioLanguage);
+        Assert.Empty(entry.Subtitles);
     }
 }

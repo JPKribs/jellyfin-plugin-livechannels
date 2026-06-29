@@ -83,6 +83,46 @@ public sealed class ProgramEntry
 
     /// <summary>Gets the original release/air date, surfaced as the guide's original air date. <c>null</c> when unknown.</summary>
     public DateTime? PremiereDate { get; init; }
+
+    /// <summary>Gets a value indicating whether the source video carries an HDR (PQ/HLG) transfer, so the stream pipeline tone-maps it to SDR. Probed once at guide refresh and cached here, so the live stream never re-queries the media streams to decide its decode pipeline.</summary>
+    public bool IsHdr { get; init; }
+
+    /// <summary>Gets a value indicating whether the source video stream is interlaced, used to keep it off the Intel hardware-decode path. Probed once at guide refresh and cached here.</summary>
+    public bool IsInterlaced { get; init; }
+
+    /// <summary>Gets a value indicating whether the source video stream is 10-bit (or deeper), used to keep it off the Intel hardware-decode path. Probed once at guide refresh and cached here.</summary>
+    public bool IsTenBit { get; init; }
+
+    /// <summary>Gets the position, among the item's audio streams ordered by index, of the track Jellyfin marks as default (0 when none, <c>null</c> when unknown), so the stream pipeline maps the same audio Jellyfin would play. Probed once at guide refresh and cached here.</summary>
+    public int? DefaultAudioOrdinal { get; init; }
+
+    /// <summary>Gets the three-letter language of the default audio track, or <c>null</c>, used by the Forced-only subtitle rule to burn in subtitles for foreign-language audio. Probed once at guide refresh and cached here.</summary>
+    public string? DefaultAudioLanguage { get; init; }
+
+    /// <summary>Gets the item's subtitle streams (in index order), enough to pick a burn-in track without re-reading the media streams at tune-in.</summary>
+    public IReadOnlyList<SubtitleStreamInfo> Subtitles { get; init; } = Array.Empty<SubtitleStreamInfo>();
+}
+
+/// <summary>
+/// The minimal description of one subtitle stream needed to choose a burn-in track, cached on the
+/// <see cref="ProgramEntry"/> at guide refresh so the live stream never re-reads the media streams.
+/// </summary>
+public sealed class SubtitleStreamInfo
+{
+    /// <summary>Gets the stream's index among the item's subtitle streams (ordered by absolute index), which ffmpeg's <c>s:N</c> / <c>si=N</c> specifiers use.</summary>
+    public int RelativeIndex { get; init; }
+
+    /// <summary>Gets the stream's absolute index among all of the item's media streams, used when extracting the subtitle for a deep tune-in.</summary>
+    public int AbsoluteIndex { get; init; }
+
+    /// <summary>Gets a value indicating whether the stream is flagged forced.</summary>
+    public bool IsForced { get; init; }
+
+    /// <summary>Gets a value indicating whether the stream is flagged default.</summary>
+    public bool IsDefault { get; init; }
+
+    /// <summary>Gets a value indicating whether the stream is text-based (libass) rather than bitmap (PGS/VOBSUB).</summary>
+    public bool IsText { get; init; }
 }
 
 /// <summary>

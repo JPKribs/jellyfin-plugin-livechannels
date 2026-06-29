@@ -90,12 +90,12 @@ public class StreamSessionService
         var usesHwUpload = _encoders.ResolveVideo(videoCodec, allowHardware: true).PixelStage.Contains("hwupload", StringComparison.Ordinal);
         var highRes = programs.Any(p => p.SourceHeight > 1080);
 
-        // HDR detection is a per-item media-stream query, so scanning a whole channel for it is the slowest part of
-        // a large channel's start-up (a 3000+ item channel stalled for over a minute on an N100). It only matters
-        // when it could flip an otherwise-concat channel to per-item, so skip the entire scan when the channel is
-        // already per-item for another reason: subtitle burn-in, a >1080p item, or a GPU-upload encoder (QSV/VAAPI).
+        // Whether any item is HDR (which forces the per-item tone-map path). Each item's HDR flag is probed once at
+        // guide refresh and cached on the schedule entry, so this is a pure in-memory scan with no media-stream
+        // queries -- it no longer stalls a large channel's start-up. The short-circuit still skips it when the
+        // channel is already per-item for another reason (burn-in, a >1080p item, or a GPU-upload encoder).
         var alreadyPerItem = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never || highRes || usesHwUpload;
-        var hasHdr = !alreadyPerItem && programs.Any(p => _channels.IsHdrSource(p.ItemId));
+        var hasHdr = !alreadyPerItem && programs.Any(p => p.IsHdr);
         var perItem = alreadyPerItem || hasHdr;
         var uniform = programs.Count > 0 && programs[0].SourceHeight > 0 && programs.All(p => p.SourceHeight == programs[0].SourceHeight);
         LogEncodePlan(channel, programs.Count, index, perItem, uniform, hasHdr);
@@ -294,11 +294,13 @@ public class StreamSessionService
         return seek;
     }
 
-    // How long before a full item finishes to warm up the next item's ffmpeg, so its cold start (open input,
-    // init the decoder/encoder/HW context, decode the first frames) overlaps the tail of the current item and
-    // the boundary has no gap. The warmed process blocks on its full stdout pipe after priming, so it cannot run
-    // ahead of realtime and lurch the live edge.
-    private static readonly TimeSpan WarmLead = TimeSpan.FromSeconds(3);
+    // The default lead used when the configured PreRenderSeconds is unreadable: how long before a full item
+    // finishes to warm up the next item's ffmpeg, so its cold start (open input, init the decoder/encoder/HW
+    // context, decode the first frames) overlaps the tail of the current item and the boundary has no gap. The
+    // warmed process blocks on its full stdout pipe after priming, so it cannot run ahead of realtime and lurch
+    // the live edge. Configurable (and disable-able) via PreRenderSeconds, since the overlap briefly runs two
+    // encoders at once, which matters on low-power hardware.
+    private const int DefaultPreRenderSeconds = 3;
 
     // A next item whose ffmpeg is already started and primed (its stdout held closed by pipe backpressure),
     // ready to splice the instant the current item ends. Tied to the schedule position it was built for so a
@@ -315,6 +317,10 @@ public class StreamSessionService
         var timeline = TimeSpan.Zero;
         var itemsPlayed = 0;
         WarmItem? warm = null;
+
+        // How early to pre-render (warm) the next item. Read once for the session. Zero disables pre-rendering, so
+        // each item cold-starts at its boundary instead of overlapping two encoders.
+        var warmLead = TimeSpan.FromSeconds(Math.Max(0, Plugin.Instance?.ReadConfiguration(c => c.PreRenderSeconds) ?? DefaultPreRenderSeconds));
 
         try
         {
@@ -361,7 +367,7 @@ public class StreamSessionService
                     var nextTimeline = timeline + (contentDuration > TimeSpan.Zero ? contentDuration : TimeSpan.Zero);
 
                     var result = await PlayFullItemAsync(
-                        ffmpeg, channel, program, timeline, contentDuration, ready, itemsPlayed == 0,
+                        ffmpeg, channel, program, timeline, contentDuration, ready, itemsPlayed == 0, warmLead,
                         () => TryWarmNext(ffmpeg, channel, nextProgram, nextIndex, nextTimeline, stats, cancellationToken),
                         output, stats, cancellationToken).ConfigureAwait(false);
                     streamed = result.Streamed;
@@ -464,7 +470,7 @@ public class StreamSessionService
             return false;
         }
 
-        var subtitle = _channels.FindBurnInSubtitle(program.ItemId, channel.SubtitleBurnIn);
+        var subtitle = ChannelService.FindBurnInSubtitle(program, channel.SubtitleBurnIn);
 
         // Burning a text subtitle uses the libass `subtitles` filter, which reads the media file from the start
         // to reach the current position -- fatal on a deep tune-in seek into a multi-GB file (it scans gigabytes
@@ -482,11 +488,7 @@ public class StreamSessionService
             }
         }
 
-        var isHdr = _channels.IsHdrSource(program.ItemId);
-        var isInterlaced = _channels.IsInterlacedSource(program.ItemId);
-        var isTenBit = _channels.Is10BitSource(program.ItemId);
-        var audioOrdinal = _channels.GetDefaultAudioOrdinal(program.ItemId);
-        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, isHdr, isInterlaced, isTenBit, audioOrdinal, initialBurst);
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, program.IsHdr, program.IsInterlaced, program.IsTenBit, program.DefaultAudioOrdinal, initialBurst);
         var total = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
@@ -494,7 +496,7 @@ public class StreamSessionService
         if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
-            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, isHdr, isInterlaced, isTenBit, audioOrdinal, initialBurst);
+            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.IsInterlaced, program.IsTenBit, program.DefaultAudioOrdinal, initialBurst);
             total = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
         }
 
@@ -506,12 +508,8 @@ public class StreamSessionService
     // warmed without awaiting. Returns whether the args hardware-decode, so a no-output result can retry in software.
     private (List<string> Args, bool HardwareDecode) BuildItemArgs(Channel channel, ProgramEntry program, TimeSpan timeline, bool softwareDecode, bool initialBurst)
     {
-        var subtitle = _channels.FindBurnInSubtitle(program.ItemId, channel.SubtitleBurnIn);
-        var isHdr = _channels.IsHdrSource(program.ItemId);
-        var isInterlaced = _channels.IsInterlacedSource(program.ItemId);
-        var isTenBit = _channels.Is10BitSource(program.ItemId);
-        var audioOrdinal = _channels.GetDefaultAudioOrdinal(program.ItemId);
-        return BuildArguments(program.Path!, TimeSpan.Zero, timeline, subtitle, program.SourceHeight, null, softwareDecode, isHdr, isInterlaced, isTenBit, audioOrdinal, initialBurst);
+        var subtitle = ChannelService.FindBurnInSubtitle(program, channel.SubtitleBurnIn);
+        return BuildArguments(program.Path!, TimeSpan.Zero, timeline, subtitle, program.SourceHeight, null, softwareDecode, program.IsHdr, program.IsInterlaced, program.IsTenBit, program.DefaultAudioOrdinal, initialBurst);
     }
 
     // Starts and primes the next full item so it is ready to splice with no cold-start gap. A missing file cannot
@@ -538,11 +536,12 @@ public class StreamSessionService
     }
 
     // Plays one full item to the output: pumps the warmed producer (or cold-starts it), and once the item is
-    // within WarmLead of finishing, warms the next item so the boundary is seamless. Retries a no-output hardware
-    // decode in software, exactly like the cold path. Returns whether anything played and the warmed next item.
+    // within warmLead of finishing, warms the next item so the boundary is seamless (skipped when warmLead is zero,
+    // i.e. pre-rendering is off). Retries a no-output hardware decode in software, exactly like the cold path.
+    // Returns whether anything played and the warmed next item.
     private async Task<(bool Streamed, WarmItem? Warmed)> PlayFullItemAsync(
         string ffmpeg, Channel channel, ProgramEntry program, TimeSpan timeline, TimeSpan contentDuration,
-        WarmItem? ready, bool initialBurst, Func<WarmItem?> warmNext, Stream output, SessionStats? stats, CancellationToken cancellationToken)
+        WarmItem? ready, bool initialBurst, TimeSpan warmLead, Func<WarmItem?> warmNext, Stream output, SessionStats? stats, CancellationToken cancellationToken)
     {
         Process process;
         Task<string> stderr;
@@ -576,13 +575,14 @@ public class StreamSessionService
             hardwareDecode = hw;
         }
 
-        // Warm the next item once this one is within WarmLead of its end. The linked token cancels the wait if
-        // this item ends early (a failure), so the loop is never held up by the timer. Items shorter than the lead
-        // are not warmed: there is no tail to overlap, and warming at once would cold-start two producers together.
+        // Warm the next item once this one is within warmLead of its end. The linked token cancels the wait if
+        // this item ends early (a failure), so the loop is never held up by the timer. Warming is skipped when
+        // pre-rendering is disabled (warmLead is zero), or when the item is shorter than the lead: there is no tail
+        // to overlap, and warming at once would cold-start two producers together.
         using var warmCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         WarmItem? warmed = null;
-        var warmDelay = contentDuration - WarmLead;
-        var warmTask = warmDelay <= TimeSpan.Zero
+        var warmDelay = contentDuration - warmLead;
+        var warmTask = warmLead <= TimeSpan.Zero || warmDelay <= TimeSpan.Zero
             ? Task.CompletedTask
             : Task.Run(
                 async () =>

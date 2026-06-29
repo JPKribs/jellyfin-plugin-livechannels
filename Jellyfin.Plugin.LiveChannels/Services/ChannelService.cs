@@ -45,33 +45,27 @@ public class ChannelService
     // second whole-file extraction onto the producer's critical path.
     private readonly ConcurrentDictionary<string, byte> _subtitleExtractions = new(StringComparer.Ordinal);
 
-    // Memoised HDR result per item: the check is a media-stream query and is asked repeatedly (channel start-up,
-    // per-item playback, re-tunes). An item's HDR-ness does not change, so caching it removes thousands of repeat
-    // queries on large channels. Bounded by the library size (one bool per item ever checked).
-    private readonly ConcurrentDictionary<Guid, bool> _hdrCache = new();
+    // Decoded schedules held in memory while a channel is being watched, keyed by channel number. Populated on
+    // tune-in (so repeat reads skip the disk read and JSON parse) and released the moment a channel's last session
+    // closes, so an idle channel holds nothing. The on-disk per-channel file is the source of truth; this is just
+    // a hot copy. The schedule already carries every item's probed media metadata (HDR, interlace, bit depth,
+    // audio, subtitles), so a tune-in served from here makes no media-stream queries at all.
+    private readonly ConcurrentDictionary<int, IReadOnlyList<ProgramEntry>> _memorySchedules = new();
 
-    // Memoised interlaced result per item, for the same reasons as the HDR cache. Used to keep interlaced sources
-    // off the Intel hardware-decode path, whose deinterlace + hwdownload chain fails on QSV/VAAPI (exit 234).
-    private readonly ConcurrentDictionary<Guid, bool> _interlacedCache = new();
-
-    // Memoised 10-bit result per item. Used to keep 10-bit sources off the Intel hardware-decode path: that path
-    // downloads decoded frames with hwdownload,format=nv12, which fails on a 10-bit (p010) surface ("Invalid output
-    // format nv12 for hwframe download", exit 234) regardless of whether the source is interlaced or progressive.
-    private readonly ConcurrentDictionary<Guid, bool> _tenBitCache = new();
-
-    // Resolved schedules cached on disk so the expensive library resolve runs once -- on guide refresh -- and every
-    // tune-in reads the result instead of rebuilding it on the stream's start-up critical path (a large channel's
-    // rebuild took ~40s, past the live-playlist deadline, and the client reported "Failed to load"). One file holds
-    // every channel's loop, stored in the stream root (default <cache>/livechannels) as schedule.json -- a loose
-    // file, not a session directory, so the stream cleanup task (which only removes directories) never deletes it.
-    // Cleared when the plugin configuration changes so channel edits take effect on the next guide refresh or tune-in.
+    // Resolved schedules cached on disk so the expensive library resolve (and per-item media probe) runs once -- on
+    // guide refresh -- and every tune-in reads the result instead of rebuilding it on the stream's start-up critical
+    // path (a large channel's rebuild took ~40s, past the live-playlist deadline, and the client reported "Failed to
+    // load"). One file per channel lives under the stream root in a `schedule` subdirectory, named by channel number
+    // (e.g. <cache>/livechannels/schedule/0.json), so a tune-in reads and parses only the one channel it needs, and a
+    // guide refresh rewrites only the channel that changed. Cleared when the plugin configuration changes so channel
+    // edits take effect on the next guide refresh or tune-in.
     private static readonly JsonSerializerOptions ScheduleCacheJson = new() { PropertyNameCaseInsensitive = true };
     private static readonly object ScheduleLock = new();
 
-    /// <summary>The file name of the persistent schedule cache, kept in the stream root.</summary>
-    public const string ScheduleFileName = "schedule.json";
+    /// <summary>The name of the directory, under the stream root, that holds the per-channel schedule files.</summary>
+    public const string ScheduleDirName = "schedule";
 
-    private readonly string _scheduleFile;
+    private readonly string _scheduleDir;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ChannelService"/> class.
@@ -92,118 +86,55 @@ public class ChannelService
         _localization = localization;
         _userManager = userManager;
         _userDataManager = userDataManager;
-        _scheduleFile = ScheduleFile(appPaths);
+        _scheduleDir = ScheduleDir(appPaths);
         _logger = logger;
     }
 
-    /// <summary>
-    /// Whether the item's video is HDR (PQ or HLG), so the stream pipeline can tone-map it to SDR. Keyed off the
-    /// colour transfer like every mature pseudo-TV pipeline does (ErsatzTV/Tunarr): <c>smpte2084</c> = HDR10/PQ,
-    /// <c>arib-std-b67</c> = HLG.
-    /// </summary>
-    /// <param name="itemId">The item id.</param>
-    /// <returns><c>true</c> when the item's video stream carries an HDR transfer function.</returns>
-    public bool IsHdrSource(Guid itemId) => _hdrCache.GetOrAdd(itemId, ComputeIsHdrSource);
-
-    private bool ComputeIsHdrSource(Guid itemId)
+    // Reads an item's media streams once, returning an empty list (never throwing) when they cannot be read, so
+    // the guide-refresh build can probe every item's metadata with a single query per item and tolerate gaps.
+    private IReadOnlyList<MediaStream> SafeGetMediaStreams(Guid itemId)
     {
         try
         {
-            var transfer = _mediaSourceManager.GetMediaStreams(itemId)
-                .FirstOrDefault(s => s.Type == MediaStreamType.Video)?.ColorTransfer;
-            return string.Equals(transfer, "smpte2084", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(transfer, "arib-std-b67", StringComparison.OrdinalIgnoreCase);
+            return _mediaSourceManager.GetMediaStreams(itemId);
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Could not read media streams for HDR check on {ItemId}", itemId);
-            return false;
+            _logger.LogDebug(ex, "Could not read media streams for {ItemId}", itemId);
+            return Array.Empty<MediaStream>();
         }
     }
 
-    /// <summary>
-    /// Whether the item's video stream is interlaced. Cached, because the per-item pipeline asks once per item and
-    /// an item's field type does not change. Interlaced sources are kept off the Intel hardware-decode path, whose
-    /// deinterlace step downloads frames to system memory and fails to reconfigure on QSV/VAAPI.
-    /// </summary>
-    /// <param name="itemId">The item id.</param>
-    /// <returns><c>true</c> when the item's video stream is flagged interlaced.</returns>
-    public bool IsInterlacedSource(Guid itemId) => _interlacedCache.GetOrAdd(itemId, ComputeIsInterlaced);
-
-    private bool ComputeIsInterlaced(Guid itemId)
+    // Whether the video is HDR (PQ or HLG), keyed off the colour transfer like every mature pseudo-TV pipeline
+    // does (ErsatzTV/Tunarr): smpte2084 = HDR10/PQ, arib-std-b67 = HLG.
+    private static bool ComputeIsHdr(MediaStream? video)
     {
-        try
-        {
-            return _mediaSourceManager.GetMediaStreams(itemId)
-                .FirstOrDefault(s => s.Type == MediaStreamType.Video)?.IsInterlaced ?? false;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not read media streams for interlace check on {ItemId}", itemId);
-            return false;
-        }
+        var transfer = video?.ColorTransfer;
+        return string.Equals(transfer, "smpte2084", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(transfer, "arib-std-b67", StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>
-    /// Whether the item's video stream is 10-bit (or deeper). Cached, like the HDR and interlaced checks. 10-bit
-    /// sources are kept off the Intel hardware-decode path, whose <c>hwdownload,format=nv12</c> step fails to
-    /// download a 10-bit (p010) GPU surface (exit 234); software-decoding them instead avoids the failure.
-    /// </summary>
-    /// <param name="itemId">The item id.</param>
-    /// <returns><c>true</c> when the item's video stream carries 10 or more bits per sample.</returns>
-    public bool Is10BitSource(Guid itemId) => _tenBitCache.GetOrAdd(itemId, Compute10Bit);
-
-    private bool Compute10Bit(Guid itemId)
+    // Whether the video stream is 10-bit (or deeper). Prefers the explicit bit depth; falls back to the pixel
+    // format name when the probe did not populate BitDepth, matching only true depth suffixes (e.g. yuv420p10le,
+    // yuv444p12le, p010le) so common 8-bit formats are NOT misread: a loose Contains("10")/Contains("12") would
+    // wrongly match nv12 (8-bit, contains "12") and yuv410p (contains "10"), needlessly software-decoding 8-bit.
+    private static bool ComputeIsTenBit(MediaStream? video)
     {
-        try
+        if (video is null)
         {
-            var video = _mediaSourceManager.GetMediaStreams(itemId)
-                .FirstOrDefault(s => s.Type == MediaStreamType.Video);
-            if (video is null)
-            {
-                return false;
-            }
-
-            // Prefer the explicit bit-depth; fall back to the pixel format name when the probe did not populate
-            // BitDepth. Match only true depth suffixes (e.g. yuv420p10le, yuv444p12le, p010le) so common 8-bit
-            // formats are NOT misread: a loose Contains("10")/Contains("12") would wrongly match nv12 (the standard
-            // 8-bit format, contains "12") and yuv410p (contains "10"), needlessly software-decoding 8-bit content.
-            if (video.BitDepth is int depth)
-            {
-                return depth >= 10;
-            }
-
-            var pix = video.PixelFormat;
-            return !string.IsNullOrEmpty(pix)
-                && (pix.Contains("10le", StringComparison.Ordinal) || pix.Contains("10be", StringComparison.Ordinal)
-                    || pix.Contains("12le", StringComparison.Ordinal) || pix.Contains("12be", StringComparison.Ordinal)
-                    || pix.Contains("p010", StringComparison.OrdinalIgnoreCase) || pix.Contains("p012", StringComparison.OrdinalIgnoreCase));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not read media streams for bit-depth check on {ItemId}", itemId);
             return false;
         }
-    }
 
-    /// <summary>
-    /// The position, among an item's audio streams ordered by index, of the track Jellyfin marks as default, or
-    /// 0 when none is flagged, so the stream pipeline maps the same audio track Jellyfin itself would play
-    /// instead of letting ffmpeg pick by channel count. Returns <c>null</c> when the streams cannot be read.
-    /// </summary>
-    /// <param name="itemId">The item id.</param>
-    /// <returns>The default audio track's ordinal among the item's audio streams, or <c>null</c>.</returns>
-    public int? GetDefaultAudioOrdinal(Guid itemId)
-    {
-        try
+        if (video.BitDepth is int depth)
         {
-            return DefaultAudio(_mediaSourceManager.GetMediaStreams(itemId))?.Ordinal ?? 0;
+            return depth >= 10;
         }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not read media streams for audio selection on {ItemId}", itemId);
-            return null;
-        }
+
+        var pix = video.PixelFormat;
+        return !string.IsNullOrEmpty(pix)
+            && (pix.Contains("10le", StringComparison.Ordinal) || pix.Contains("10be", StringComparison.Ordinal)
+                || pix.Contains("12le", StringComparison.Ordinal) || pix.Contains("12be", StringComparison.Ordinal)
+                || pix.Contains("p010", StringComparison.OrdinalIgnoreCase) || pix.Contains("p012", StringComparison.OrdinalIgnoreCase));
     }
 
     // The default audio track (the one Jellyfin would play) and its ordinal among the item's audio streams, or
@@ -221,27 +152,45 @@ public class ChannelService
         return (ordinal, audio[ordinal]);
     }
 
-    // Whether the item's default audio track is in the channel's required language (a three-letter ISO code).
-    // An empty language allows everything and skips the lookup entirely, so only language-filtered channels pay
-    // the per-item media-stream read. Strict by design ("MUST be this language"): an item whose default track is
-    // another language, is untagged, or cannot be read is excluded.
-    private bool AudioLanguageAllows(string language, Guid itemId)
+    // The item's subtitle streams (ordered by absolute index) as the minimal burn-in descriptors cached on the
+    // schedule, so the live stream picks a burn-in track without re-reading the media streams.
+    private static SubtitleStreamInfo[] BuildSubtitleInfos(IReadOnlyList<MediaStream> streams)
+    {
+        var subtitles = streams.Where(s => s.Type == MediaStreamType.Subtitle).OrderBy(s => s.Index).ToList();
+        if (subtitles.Count == 0)
+        {
+            return Array.Empty<SubtitleStreamInfo>();
+        }
+
+        var infos = new SubtitleStreamInfo[subtitles.Count];
+        for (var i = 0; i < subtitles.Count; i++)
+        {
+            var s = subtitles[i];
+            infos[i] = new SubtitleStreamInfo
+            {
+                RelativeIndex = i,
+                AbsoluteIndex = s.Index,
+                IsForced = s.IsForced,
+                IsDefault = s.IsDefault,
+                IsText = s.IsTextSubtitleStream
+            };
+        }
+
+        return infos;
+    }
+
+    // Whether the default audio track is in the channel's required language (a three-letter ISO code). An empty
+    // language allows everything. Strict by design ("MUST be this language"): an item whose default track is
+    // another language, is untagged, or cannot be read is excluded. Operates on the already-read streams.
+    private static bool AudioLanguageAllows(string language, IReadOnlyList<MediaStream> streams)
     {
         if (string.IsNullOrWhiteSpace(language))
         {
             return true;
         }
 
-        try
-        {
-            var def = DefaultAudio(_mediaSourceManager.GetMediaStreams(itemId));
-            return def is not null && string.Equals(def.Value.Stream.Language, language, StringComparison.OrdinalIgnoreCase);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not read media streams for audio language check on {ItemId}", itemId);
-            return false;
-        }
+        var def = DefaultAudio(streams);
+        return def is not null && string.Equals(def.Value.Stream.Language, language, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -250,35 +199,25 @@ public class ChannelService
     /// it behaves like <see cref="SubtitleBurnInMode.Always"/> so foreign-language content stays followable.
     /// <see cref="SubtitleBurnInMode.Always"/> burns the forced track when present, otherwise the default or first.
     /// </summary>
-    /// <param name="itemId">The item id.</param>
+    /// <param name="program">The program, carrying its subtitle streams and default-audio language probed at refresh.</param>
     /// <param name="mode">The channel's subtitle burn-in mode.</param>
     /// <returns>The chosen subtitle's index among the item's subtitle streams and whether it is text-based, or <c>null</c> when nothing should be burned in.</returns>
-    public (int RelativeIndex, bool IsText)? FindBurnInSubtitle(Guid itemId, SubtitleBurnInMode mode)
+    public static (int RelativeIndex, bool IsText)? FindBurnInSubtitle(ProgramEntry program, SubtitleBurnInMode mode)
     {
+        ArgumentNullException.ThrowIfNull(program);
         if (mode == SubtitleBurnInMode.Never)
         {
             return null;
         }
 
-        IReadOnlyList<MediaStream> streams;
-        try
-        {
-            streams = _mediaSourceManager.GetMediaStreams(itemId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not read media streams for {ItemId}", itemId);
-            return null;
-        }
-
-        var subtitles = streams.Where(s => s.Type == MediaStreamType.Subtitle).OrderBy(s => s.Index).ToList();
+        var subtitles = program.Subtitles;
 
         // Forced always wins when present, in either mode.
         for (var i = 0; i < subtitles.Count; i++)
         {
             if (subtitles[i].IsForced)
             {
-                return (i, subtitles[i].IsTextSubtitleStream);
+                return (subtitles[i].RelativeIndex, subtitles[i].IsText);
             }
         }
 
@@ -286,7 +225,7 @@ public class ChannelService
         // foreign-language content stays followable. Audio in the default language, or untagged audio, shows
         // nothing without a forced track, so ordinary content is never subtitled by surprise.
         var defaultLanguage = Plugin.Instance?.ReadConfiguration(c => c.DefaultSubtitleLanguage) ?? string.Empty;
-        var audioLanguage = DefaultAudio(streams)?.Stream.Language;
+        var audioLanguage = program.DefaultAudioLanguage;
         var forcedForForeignAudio = mode == SubtitleBurnInMode.Forced
             && !string.IsNullOrEmpty(audioLanguage)
             && !string.IsNullOrEmpty(defaultLanguage)
@@ -296,9 +235,17 @@ public class ChannelService
         {
             // Both "Always" and non-English-audio "Forced only" burn the same track "Always" picks: the default
             // subtitle, or the first one when none is flagged default.
-            var defaultIndex = subtitles.FindIndex(s => s.IsDefault);
-            var chosen = defaultIndex >= 0 ? defaultIndex : 0;
-            return (chosen, subtitles[chosen].IsTextSubtitleStream);
+            var chosen = 0;
+            for (var i = 0; i < subtitles.Count; i++)
+            {
+                if (subtitles[i].IsDefault)
+                {
+                    chosen = i;
+                    break;
+                }
+            }
+
+            return (subtitles[chosen].RelativeIndex, subtitles[chosen].IsText);
         }
 
         return null;
@@ -462,19 +409,29 @@ public class ChannelService
 
     /// <summary>
     /// Returns a channel's ordered program loop, reading the on-disk cache the guide refresh writes so a tune-in
-    /// never pays the full library resolve. Builds (and caches) it only when no cache exists yet.
+    /// never pays the full library resolve or per-item media probe. Builds (and caches) it only when no cache
+    /// exists yet. The decoded loop is held in memory until the channel's last session closes (see
+    /// <see cref="ReleaseFromMemory"/>), so repeat tune-ins skip even the disk read and JSON parse.
     /// </summary>
     /// <param name="channel">The channel to resolve.</param>
     /// <returns>The ordered program loop.</returns>
     public IReadOnlyList<ProgramEntry> ResolvePrograms(Channel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        return TryReadScheduleCache(channel) ?? RefreshPrograms(channel);
+        if (_memorySchedules.TryGetValue(channel.Number, out var hot))
+        {
+            return hot;
+        }
+
+        var programs = TryReadScheduleCache(channel) ?? RefreshPrograms(channel);
+        _memorySchedules[channel.Number] = programs;
+        return programs;
     }
 
     /// <summary>
     /// Builds a channel's program loop and overwrites its on-disk cache. Called on guide refresh so the schedule
-    /// is built once and every tune-in until the next refresh reuses it instead of re-resolving the library.
+    /// is built once (probing each item's media metadata off the tune-in path) and every tune-in until the next
+    /// refresh reuses it. Drops any in-memory copy so the next tune-in reloads the freshly written schedule.
     /// </summary>
     /// <param name="channel">The channel to resolve.</param>
     /// <returns>The freshly built, ordered program loop.</returns>
@@ -483,8 +440,18 @@ public class ChannelService
         ArgumentNullException.ThrowIfNull(channel);
         var programs = BuildPrograms(channel);
         WriteScheduleCache(channel, programs);
+        // Invalidate the hot copy: a channel being watched while its guide refreshes will reload the fresh schedule
+        // on its next resolve, and an idle channel never gets an entry added here (only ResolvePrograms populates).
+        _memorySchedules.TryRemove(channel.Number, out _);
         return programs;
     }
+
+    /// <summary>
+    /// Releases a channel's in-memory schedule once it has no more active sessions, so an unwatched channel holds
+    /// nothing in memory. The on-disk cache remains, so the next tune-in reloads it. A no-op when nothing is cached.
+    /// </summary>
+    /// <param name="channelNumber">The channel number whose hot schedule should be dropped.</param>
+    public void ReleaseFromMemory(int channelNumber) => _memorySchedules.TryRemove(channelNumber, out _);
 
     /// <summary>
     /// Deletes the cached schedule. Called when the plugin configuration changes so a channel edit is never served
@@ -497,10 +464,10 @@ public class ChannelService
         {
             lock (ScheduleLock)
             {
-                var file = ScheduleFile(paths);
-                if (File.Exists(file))
+                var dir = ScheduleDir(paths);
+                if (Directory.Exists(dir))
                 {
-                    File.Delete(file);
+                    Directory.Delete(dir, recursive: true);
                 }
             }
         }
@@ -513,7 +480,7 @@ public class ChannelService
     /// <summary>
     /// Resolves the directory the live streams (and the schedule cache) are written to: the configured stream
     /// directory, or a livechannels folder under Jellyfin's cache by default. Shared with the live-TV service so
-    /// both agree on where schedule.json lives.
+    /// both agree on where the schedule cache lives.
     /// </summary>
     /// <param name="paths">The application paths.</param>
     /// <returns>The stream root directory.</returns>
@@ -525,13 +492,28 @@ public class ChannelService
             : configured;
     }
 
-    private static string ScheduleFile(IApplicationPaths paths) => Path.Combine(ResolveStreamRoot(paths), ScheduleFileName);
+    /// <summary>The directory, under the stream root, that holds the per-channel schedule files.</summary>
+    /// <param name="paths">The application paths.</param>
+    /// <returns>The schedule cache directory.</returns>
+    public static string ScheduleDir(IApplicationPaths paths) => Path.Combine(ResolveStreamRoot(paths), ScheduleDirName);
+
+    // The on-disk path of one channel's schedule file, named by channel number (e.g. .../schedule/0.json).
+    private string ScheduleFileFor(Channel channel)
+        => Path.Combine(_scheduleDir, channel.Number.ToString(CultureInfo.InvariantCulture) + ".json");
 
     private List<ProgramEntry>? TryReadScheduleCache(Channel channel)
     {
         try
         {
-            return ReadSchedules().TryGetValue(channel.Id, out var programs) && programs.Count > 0 ? programs : null;
+            var file = ScheduleFileFor(channel);
+            if (!File.Exists(file))
+            {
+                return null;
+            }
+
+            using var stream = File.OpenRead(file);
+            var programs = JsonSerializer.Deserialize<List<ProgramEntry>>(stream, ScheduleCacheJson);
+            return programs is { Count: > 0 } ? programs : null;
         }
         catch (Exception ex)
         {
@@ -544,43 +526,27 @@ public class ChannelService
     {
         try
         {
-            // The whole channel->schedule map lives in one file, so read-modify-write it under a lock: the guide
-            // refresh updates one channel at a time and must not clobber the others' entries.
+            // Each channel owns its own file, so a write touches only this channel. The lock still serialises writes
+            // so two refreshes cannot interleave their temp-file moves, and the atomic move keeps a concurrent
+            // reader from ever seeing a half-written file.
             lock (ScheduleLock)
             {
-                var all = ReadSchedules();
-                all[channel.Id] = programs as List<ProgramEntry> ?? programs.ToList();
+                var file = ScheduleFileFor(channel);
+                Directory.CreateDirectory(_scheduleDir);
 
-                Directory.CreateDirectory(Path.GetDirectoryName(_scheduleFile)!);
-
-                // Write to a unique temp file then move it into place so a concurrent reader never sees a
-                // half-written cache.
-                var temp = _scheduleFile + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
+                var temp = file + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
                 using (var stream = File.Create(temp))
                 {
-                    JsonSerializer.Serialize(stream, all, ScheduleCacheJson);
+                    JsonSerializer.Serialize(stream, programs, ScheduleCacheJson);
                 }
 
-                File.Move(temp, _scheduleFile, overwrite: true);
+                File.Move(temp, file, overwrite: true);
             }
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Could not write the schedule cache for channel {Name}", channel.Name);
         }
-    }
-
-    // The whole channel id -> schedule map read from schedule.json, or an empty map when there is no cache yet.
-    private Dictionary<string, List<ProgramEntry>> ReadSchedules()
-    {
-        if (!File.Exists(_scheduleFile))
-        {
-            return new Dictionary<string, List<ProgramEntry>>(StringComparer.Ordinal);
-        }
-
-        using var stream = File.OpenRead(_scheduleFile);
-        return JsonSerializer.Deserialize<Dictionary<string, List<ProgramEntry>>>(stream, ScheduleCacheJson)
-            ?? new Dictionary<string, List<ProgramEntry>>(StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -626,12 +592,16 @@ public class ChannelService
                 continue;
             }
 
-            if (!AudioLanguageAllows(channel.AudioLanguage, item.Id))
+            // Read the item's media streams once and reuse them for both the audio-language filter and the entry's
+            // probed metadata, so the whole channel is probed with a single query per item -- here, off the tune-in
+            // path -- instead of repeatedly at playback.
+            var streams = SafeGetMediaStreams(item.Id);
+            if (!AudioLanguageAllows(channel.AudioLanguage, streams))
             {
                 continue;
             }
 
-            var entry = ToEntry(item, kidsScore);
+            var entry = ToEntry(item, kidsScore, streams);
             if (entry is not null)
             {
                 entries.Add(entry);
@@ -778,7 +748,7 @@ public class ChannelService
                 continue;
             }
 
-            var entry = ToEntry(item, kidsScore);
+            var entry = ToEntry(item, kidsScore, SafeGetMediaStreams(item.Id));
             if (entry is not null)
             {
                 entries.Add(entry);
@@ -1171,7 +1141,7 @@ public class ChannelService
         }
     }
 
-    private static ProgramEntry? ToEntry(BaseItem? item, int? kidsScore)
+    private static ProgramEntry? ToEntry(BaseItem? item, int? kidsScore, IReadOnlyList<MediaStream> streams)
     {
         if (item is null)
         {
@@ -1195,6 +1165,12 @@ public class ChannelService
         var ratingValue = item.InheritedParentalRatingValue;
         var isKids = kidsScore is not null && ratingValue is not null && ratingValue.Value <= kidsScore.Value;
 
+        // Probe the media metadata the live stream needs to choose its decode pipeline and burn-in track, once,
+        // here at refresh, from the streams already read. The stream pipeline reads these off the cached entry and
+        // never queries the media streams itself.
+        var video = streams.FirstOrDefault(s => s.Type == MediaStreamType.Video);
+        var defaultAudio = DefaultAudio(streams);
+
         return new ProgramEntry(item.Id, title, item.Overview, ticks, item.Path)
         {
             Year = item.ProductionYear,
@@ -1211,7 +1187,13 @@ public class ChannelService
             SourceHeight = item.Height,
             DateAdded = item.DateCreated,
             CommunityRating = item.CommunityRating,
-            PremiereDate = item.PremiereDate
+            PremiereDate = item.PremiereDate,
+            IsHdr = ComputeIsHdr(video),
+            IsInterlaced = video?.IsInterlaced ?? false,
+            IsTenBit = ComputeIsTenBit(video),
+            DefaultAudioOrdinal = defaultAudio?.Ordinal ?? 0,
+            DefaultAudioLanguage = defaultAudio?.Stream.Language,
+            Subtitles = BuildSubtitleInfos(streams)
         };
     }
 

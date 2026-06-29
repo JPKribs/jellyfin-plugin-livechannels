@@ -43,6 +43,7 @@ export default function (view) {
         el('audioCodec').value = config.AudioCodec || 'Aac';
         el('videoBitrate').value = config.TranscodeVideoBitrateKbps || 4000;
         el('bufferSeconds').value = config.BufferSeconds == null ? 3 : config.BufferSeconds;
+        el('preRenderSeconds').value = config.PreRenderSeconds == null ? 3 : config.PreRenderSeconds;
         el('maxSessions').value = config.MaxConcurrentSessions == null ? 3 : config.MaxConcurrentSessions;
         el('sessionTimeout').value = config.SessionTimeoutMinutes == null ? 0 : config.SessionTimeoutMinutes;
         el('streamWindow').value = config.StreamWindowMinutes == null ? 5 : config.StreamWindowMinutes;
@@ -88,6 +89,8 @@ export default function (view) {
             fresh.TranscodeVideoBitrateKbps = Math.max(500, parseInt(el('videoBitrate').value, 10) || 4000);
             var buf = parseInt(el('bufferSeconds').value, 10);
             fresh.BufferSeconds = isNaN(buf) ? 3 : Math.min(30, Math.max(0, buf));
+            var preRender = parseInt(el('preRenderSeconds').value, 10);
+            fresh.PreRenderSeconds = isNaN(preRender) ? 3 : Math.min(30, Math.max(0, preRender));
             var maxSessions = parseInt(el('maxSessions').value, 10);
             fresh.MaxConcurrentSessions = isNaN(maxSessions) ? 3 : Math.max(0, maxSessions);
             var timeout = parseInt(el('sessionTimeout').value, 10);

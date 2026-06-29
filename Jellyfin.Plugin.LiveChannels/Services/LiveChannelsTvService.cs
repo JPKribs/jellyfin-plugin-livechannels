@@ -365,18 +365,20 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             {
                 foreach (var sessionDir in Directory.EnumerateDirectories(_streamRoot))
                 {
-                    TryDeleteDirectory(sessionDir);
-                }
-
-                // Tidy any stray loose files from older (single-file) versions, but keep the persistent schedule
-                // cache: it is a long-lived file in this root, not an orphaned stream artifact.
-                foreach (var file in Directory.EnumerateFiles(_streamRoot))
-                {
-                    if (string.Equals(Path.GetFileName(file), ChannelService.ScheduleFileName, StringComparison.Ordinal))
+                    // The schedule cache is a long-lived directory of per-channel files in this root, not an
+                    // orphaned session, so never reap it.
+                    if (IsScheduleDir(sessionDir))
                     {
                         continue;
                     }
 
+                    TryDeleteDirectory(sessionDir);
+                }
+
+                // Tidy any stray loose files, including a leftover schedule.json from an older (single-file)
+                // version, which the per-channel cache replaces.
+                foreach (var file in Directory.EnumerateFiles(_streamRoot))
+                {
                     TryDeleteFile(file);
                 }
             }
@@ -480,7 +482,8 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             {
                 foreach (var sessionDir in Directory.EnumerateDirectories(_streamRoot))
                 {
-                    if (active.Contains(sessionDir))
+                    // Never delete the schedule cache directory; it is not a session.
+                    if (active.Contains(sessionDir) || IsScheduleDir(sessionDir))
                     {
                         continue;
                     }
@@ -605,7 +608,26 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
 
         TryDeleteDirectory(session.Path);
+
+        // This session has been removed from _live by the caller, so if no other session is watching this channel,
+        // drop its decoded schedule from memory. The on-disk cache remains for the next tune-in.
+        ReleaseScheduleIfIdle(session.Number);
     }
+
+    // Releases a channel's in-memory schedule when it has no remaining live sessions, so an unwatched channel holds
+    // nothing. Called after a session has already been removed from _live.
+    private void ReleaseScheduleIfIdle(int channelNumber)
+    {
+        if (!_live.Values.Any(s => s.Number == channelNumber))
+        {
+            _channels.ReleaseFromMemory(channelNumber);
+        }
+    }
+
+    // Whether a directory under the stream root is the schedule cache (a long-lived directory of per-channel
+    // schedule files), which the orphan and cleanup sweeps must never delete.
+    private static bool IsScheduleDir(string path)
+        => string.Equals(Path.GetFileName(path), ChannelService.ScheduleDirName, StringComparison.Ordinal);
 
     private void TryDeleteFile(string path)
     {
