@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Models;
@@ -53,7 +54,7 @@ public class StreamSessionService
     /// <param name="output">The destination stream (the temp file Jellyfin reads).</param>
     /// <param name="cancellationToken">Cancelled when the live stream is closed.</param>
     /// <returns>A task that completes when streaming stops.</returns>
-    public async Task StreamToAsync(Channel channel, Stream output, CancellationToken cancellationToken)
+    public async Task StreamToAsync(Channel channel, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(output);
@@ -95,11 +96,11 @@ public class StreamSessionService
 
         if (perItem)
         {
-            await StreamPerItemLoopAsync(ffmpeg, channel, programs, index, offset, output, cancellationToken).ConfigureAwait(false);
+            await StreamPerItemLoopAsync(ffmpeg, channel, programs, index, offset, output, cancellationToken, stats).ConfigureAwait(false);
         }
         else
         {
-            await StreamConcatAsync(ffmpeg, channel, programs, output, cancellationToken).ConfigureAwait(false);
+            await StreamConcatAsync(ffmpeg, channel, programs, output, cancellationToken, stats).ConfigureAwait(false);
         }
     }
 
@@ -113,7 +114,7 @@ public class StreamSessionService
     /// <param name="hlsDir">The directory the playlist and segments are written to.</param>
     /// <param name="cancellationToken">Cancelled when the live stream is closed.</param>
     /// <returns>A task that completes when streaming stops.</returns>
-    public async Task StreamToHlsAsync(Channel channel, string hlsDir, CancellationToken cancellationToken)
+    public async Task StreamToHlsAsync(Channel channel, string hlsDir, CancellationToken cancellationToken, SessionStats? stats = null)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(hlsDir);
@@ -153,12 +154,13 @@ public class StreamSessionService
             return;
         }
 
-        var stderrTask = ReadStandardErrorAsync(segmenter, cancellationToken);
+        // The segmenter only copies; its speed is never the bottleneck, so it needs no stats sink or speed gate.
+        var stderrTask = ReadStandardErrorAsync(segmenter, null, null, cancellationToken);
         try
         {
             // The per-item/concat producer and the slate all write to this one stream, so the segmenter receives
             // a single unbroken TS feed it can package into the playlist.
-            await StreamToAsync(channel, segmenter.StandardInput.BaseStream, cancellationToken).ConfigureAwait(false);
+            await StreamToAsync(channel, segmenter.StandardInput.BaseStream, cancellationToken, stats).ConfigureAwait(false);
         }
         finally
         {
@@ -183,7 +185,7 @@ public class StreamSessionService
     // Streams the channel as ONE continuous ffmpeg using the concat demuxer, so item boundaries are seamless
     // (no timestamp or continuity reset). Software decode (hardware decoders fail on the per-segment resolution
     // changes a playlist produces) with the hardware encoder.
-    private async Task StreamConcatAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, Stream output, CancellationToken cancellationToken)
+    private async Task StreamConcatAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
     {
         var playable = programs.Where(p => !string.IsNullOrEmpty(p.Path) && File.Exists(p.Path)).ToList();
         if (playable.Count == 0)
@@ -225,7 +227,7 @@ public class StreamSessionService
                 var args = StreamArguments.BuildConcat(listFile, seek, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel);
 
                 var started = DateTime.UtcNow;
-                var total = await RunFfmpegAsync(ffmpeg, args, channel.Name, output, cancellationToken).ConfigureAwait(false);
+                var total = await RunFfmpegAsync(ffmpeg, args, channel.Name, output, cancellationToken, stats).ConfigureAwait(false);
                 if (cancellationToken.IsCancellationRequested)
                 {
                     break;
@@ -283,55 +285,123 @@ public class StreamSessionService
         return seek;
     }
 
+    // How long before a full item finishes to warm up the next item's ffmpeg, so its cold start (open input,
+    // init the decoder/encoder/HW context, decode the first frames) overlaps the tail of the current item and
+    // the boundary has no gap. The warmed process blocks on its full stdout pipe after priming, so it cannot run
+    // ahead of realtime and lurch the live edge.
+    private static readonly TimeSpan WarmLead = TimeSpan.FromSeconds(3);
+
+    // A next item whose ffmpeg is already started and primed (its stdout held closed by pipe backpressure),
+    // ready to splice the instant the current item ends. Tied to the schedule position it was built for so a
+    // failed or skipped current item never splices a mismatched warm item.
+    private sealed record WarmItem(Process Process, Task<string> Stderr, int Index, TimeSpan Timeline, bool HardwareDecode, SpeedGate Gate, ProgramEntry Program);
+
     // Streams item-by-item (one ffmpeg per item, timestamps stitched with -output_ts_offset). Used only for
-    // subtitle burn-in, which needs a per-item filter graph the concat pipeline cannot provide.
-    private async Task StreamPerItemLoopAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, int index, TimeSpan offset, Stream output, CancellationToken cancellationToken)
+    // subtitle burn-in, high-resolution, HDR, or GPU-upload encoders, which need a per-item pipeline the concat
+    // path cannot provide. Each full item warms the next one while it plays, so boundaries are seamless.
+    private async Task StreamPerItemLoopAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, int index, TimeSpan offset, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
     {
         var startOffset = offset;
         var consecutiveFailures = 0;
         var timeline = TimeSpan.Zero;
         var itemsPlayed = 0;
+        WarmItem? warm = null;
 
-        while (!cancellationToken.IsCancellationRequested)
+        try
         {
-            var program = programs[index];
-            _logger.LogDebug("Channel {Name}: item {Index}/{Count} \"{Title}\"", channel.Name, index + 1, programs.Count, program.Title);
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var program = programs[index];
+                _logger.LogDebug("Channel {Name}: item {Index}/{Count} \"{Title}\"", channel.Name, index + 1, programs.Count, program.Title);
 
-            // Only the first item that actually plays bursts a tune-in head start; every later item runs at
-            // realtime so its segments enter the playlist no faster than the player drains them (a mid-stream
-            // burst would lurch the live edge past the player). Items that fail before then produce nothing, so
-            // letting them carry the burst flag is harmless.
-            var streamed = await StreamItemAsync(ffmpeg, channel, program, startOffset, timeline, output, initialBurst: itemsPlayed == 0, cancellationToken).ConfigureAwait(false);
-
-            if (streamed)
-            {
-                // Advance the timeline only by what actually played, so skipped items don't desync the offset.
-                var played = TimeSpan.FromTicks(program.DurationTicks) - startOffset;
-                timeline += played > TimeSpan.Zero ? played : TimeSpan.Zero;
-                itemsPlayed++;
-                consecutiveFailures = 0;
-            }
-            else if (++consecutiveFailures >= programs.Count)
-            {
-                _logger.LogWarning("Every item on channel {Name} failed to play; showing standby", channel.Name);
-                await StreamSlateAsync(ffmpeg, output, cancellationToken).ConfigureAwait(false);
-                break;
-            }
-            else
-            {
-                // A missing item returns instantly; pause briefly so a run of them can't busy-spin the CPU.
-                try
+                bool streamed;
+                if (startOffset > TimeSpan.Zero)
                 {
-                    await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken).ConfigureAwait(false);
+                    // A partial tune-in item seeks into the file and may extract a subtitle first, so it runs cold
+                    // through the existing path. Any warm item was built for a different position; drop it.
+                    if (warm is not null)
+                    {
+                        await DiscardProducerAsync(warm.Process, warm.Stderr).ConfigureAwait(false);
+                        warm = null;
+                    }
+
+                    streamed = await StreamItemAsync(ffmpeg, channel, program, startOffset, timeline, output, initialBurst: itemsPlayed == 0, cancellationToken, stats).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException)
+                else
                 {
+                    // A full item: splice the warmed producer if it matches where we actually are, and warm the
+                    // next one as this plays.
+                    WarmItem? ready = null;
+                    if (warm is not null)
+                    {
+                        if (warm.Index == index && warm.Timeline == timeline)
+                        {
+                            ready = warm;
+                        }
+                        else
+                        {
+                            await DiscardProducerAsync(warm.Process, warm.Stderr).ConfigureAwait(false);
+                        }
+
+                        warm = null;
+                    }
+
+                    var contentDuration = TimeSpan.FromTicks(program.DurationTicks);
+                    var nextIndex = (index + 1) % programs.Count;
+                    var nextProgram = programs[nextIndex];
+                    var nextTimeline = timeline + (contentDuration > TimeSpan.Zero ? contentDuration : TimeSpan.Zero);
+
+                    var result = await PlayFullItemAsync(
+                        ffmpeg, channel, program, timeline, contentDuration, ready, itemsPlayed == 0,
+                        () => TryWarmNext(ffmpeg, channel, nextProgram, nextIndex, nextTimeline, stats, cancellationToken),
+                        output, stats, cancellationToken).ConfigureAwait(false);
+                    streamed = result.Streamed;
+                    warm = result.Warmed;
+                }
+
+                if (streamed)
+                {
+                    // Advance the timeline only by what actually played, so skipped items don't desync the offset.
+                    var played = TimeSpan.FromTicks(program.DurationTicks) - startOffset;
+                    timeline += played > TimeSpan.Zero ? played : TimeSpan.Zero;
+                    itemsPlayed++;
+                    consecutiveFailures = 0;
+                }
+                else if (++consecutiveFailures >= programs.Count)
+                {
+                    if (warm is not null)
+                    {
+                        await DiscardProducerAsync(warm.Process, warm.Stderr).ConfigureAwait(false);
+                        warm = null;
+                    }
+
+                    _logger.LogWarning("Every item on channel {Name} failed to play; showing standby", channel.Name);
+                    await StreamSlateAsync(ffmpeg, output, cancellationToken).ConfigureAwait(false);
                     break;
                 }
-            }
+                else
+                {
+                    // A missing item returns instantly; pause briefly so a run of them can't busy-spin the CPU.
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                }
 
-            startOffset = TimeSpan.Zero;
-            index = (index + 1) % programs.Count;
+                startOffset = TimeSpan.Zero;
+                index = (index + 1) % programs.Count;
+            }
+        }
+        finally
+        {
+            if (warm is not null)
+            {
+                await DiscardProducerAsync(warm.Process, warm.Stderr).ConfigureAwait(false);
+            }
         }
 
         _logger.LogDebug("Channel {Name}: stream ended after {Items} item(s)", channel.Name, itemsPlayed);
@@ -377,7 +447,7 @@ public class StreamSessionService
             itemCount);
     }
 
-    private async Task<bool> StreamItemAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan timeline, Stream output, bool initialBurst, CancellationToken cancellationToken)
+    private async Task<bool> StreamItemAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan timeline, Stream output, bool initialBurst, CancellationToken cancellationToken, SessionStats? stats = null)
     {
         if (string.IsNullOrEmpty(program.Path) || !File.Exists(program.Path))
         {
@@ -406,7 +476,7 @@ public class StreamSessionService
         var isHdr = _channels.IsHdrSource(program.ItemId);
         var audioOrdinal = _channels.GetDefaultAudioOrdinal(program.ItemId);
         var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, isHdr, audioOrdinal, initialBurst);
-        var total = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken).ConfigureAwait(false);
+        var total = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
         // nothing (e.g. a codec the GPU can't decode) once in software, so one bad item can't blank the channel.
@@ -414,10 +484,138 @@ public class StreamSessionService
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
             var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, isHdr, audioOrdinal, initialBurst);
-            total = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken).ConfigureAwait(false);
+            total = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
         }
 
         return total > 0;
+    }
+
+    // Builds the producer arguments for a full (offset 0) item. Burn-in subtitles are resolved synchronously
+    // here -- the async tune-in subtitle extraction only applies to a partial seek -- so the next item can be
+    // warmed without awaiting. Returns whether the args hardware-decode, so a no-output result can retry in software.
+    private (List<string> Args, bool HardwareDecode) BuildItemArgs(Channel channel, ProgramEntry program, TimeSpan timeline, bool softwareDecode, bool initialBurst)
+    {
+        var subtitle = _channels.FindBurnInSubtitle(program.ItemId, channel.SubtitleBurnIn);
+        var isHdr = _channels.IsHdrSource(program.ItemId);
+        var audioOrdinal = _channels.GetDefaultAudioOrdinal(program.ItemId);
+        return BuildArguments(program.Path!, TimeSpan.Zero, timeline, subtitle, program.SourceHeight, null, softwareDecode, isHdr, audioOrdinal, initialBurst);
+    }
+
+    // Starts and primes the next full item so it is ready to splice with no cold-start gap. A missing file cannot
+    // be warmed (the cold loop will skip it); returns null then, or if ffmpeg could not start.
+    private WarmItem? TryWarmNext(string ffmpeg, Channel channel, ProgramEntry program, int index, TimeSpan timeline, SessionStats? stats, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested || string.IsNullOrEmpty(program.Path) || !File.Exists(program.Path))
+        {
+            return null;
+        }
+
+        var (args, hardwareDecode) = BuildItemArgs(channel, program, timeline, softwareDecode: false, initialBurst: false);
+        // The gate starts closed so this warming producer does not write the shared speed while the current item
+        // is still the one on screen; it opens when this item is spliced in.
+        var gate = new SpeedGate();
+        var (process, stderr) = StartProducer(ffmpeg, args, program.Title, stats, gate, cancellationToken);
+        if (process is null)
+        {
+            return null;
+        }
+
+        _logger.LogDebug("Channel {Name}: warming next item \"{Title}\"", channel.Name, program.Title);
+        return new WarmItem(process, stderr, index, timeline, hardwareDecode, gate, program);
+    }
+
+    // Plays one full item to the output: pumps the warmed producer (or cold-starts it), and once the item is
+    // within WarmLead of finishing, warms the next item so the boundary is seamless. Retries a no-output hardware
+    // decode in software, exactly like the cold path. Returns whether anything played and the warmed next item.
+    private async Task<(bool Streamed, WarmItem? Warmed)> PlayFullItemAsync(
+        string ffmpeg, Channel channel, ProgramEntry program, TimeSpan timeline, TimeSpan contentDuration,
+        WarmItem? ready, bool initialBurst, Func<WarmItem?> warmNext, Stream output, SessionStats? stats, CancellationToken cancellationToken)
+    {
+        Process process;
+        Task<string> stderr;
+        bool hardwareDecode;
+        if (ready is not null)
+        {
+            process = ready.Process;
+            stderr = ready.Stderr;
+            hardwareDecode = ready.HardwareDecode;
+            // This warmed item is now the current one, so let its producer publish the live speed.
+            ready.Gate.Active = true;
+        }
+        else
+        {
+            if (string.IsNullOrEmpty(program.Path) || !File.Exists(program.Path))
+            {
+                _logger.LogWarning("Skipping missing media for {Title}", program.Title);
+                return (false, null);
+            }
+
+            var (args, hw) = BuildItemArgs(channel, program, timeline, softwareDecode: false, initialBurst);
+            // A cold-started item is the current one immediately, so it publishes speed with no gate.
+            var started = StartProducer(ffmpeg, args, program.Title, stats, speedGate: null, cancellationToken);
+            if (started.Process is null)
+            {
+                return (false, null);
+            }
+
+            process = started.Process;
+            stderr = started.Stderr;
+            hardwareDecode = hw;
+        }
+
+        // Warm the next item once this one is within WarmLead of its end. The linked token cancels the wait if
+        // this item ends early (a failure), so the loop is never held up by the timer. Items shorter than the lead
+        // are not warmed: there is no tail to overlap, and warming at once would cold-start two producers together.
+        using var warmCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        WarmItem? warmed = null;
+        var warmDelay = contentDuration - WarmLead;
+        var warmTask = warmDelay <= TimeSpan.Zero
+            ? Task.CompletedTask
+            : Task.Run(
+                async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(warmDelay, warmCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+
+                    try
+                    {
+                        // Best effort: a failure to warm the next item must never bubble up and kill the stream;
+                        // the boundary just falls back to a cold start.
+                        warmed = warmNext();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Live Channels: warming the next item failed");
+                    }
+                },
+                CancellationToken.None);
+
+        var total = await PumpProducerAsync(process, stderr, program.Title, output, cancellationToken).ConfigureAwait(false);
+        await warmCts.CancelAsync().ConfigureAwait(false);
+        await warmTask.ConfigureAwait(false);
+
+        if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
+        {
+            // Hardware decode produced nothing. Drop any warm item (its timeline assumption no longer holds) and
+            // retry this item in software so one bad item cannot blank the channel.
+            if (warmed is not null)
+            {
+                await DiscardProducerAsync(warmed.Process, warmed.Stderr).ConfigureAwait(false);
+                warmed = null;
+            }
+
+            _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
+            var (swArgs, _) = BuildItemArgs(channel, program, timeline, softwareDecode: true, initialBurst);
+            total = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
+        }
+
+        return (total > 0, warmed);
     }
 
     // Streams a standby slate (colour bars + silence), looped, until the client disconnects. Shown when a
@@ -460,7 +658,23 @@ public class StreamSessionService
 
     // Runs ffmpeg with the given arguments, pumping its stdout to the output stream. Returns the bytes
     // written; zero means the item produced nothing (a real failure), which is logged with ffmpeg's stderr.
-    private async Task<long> RunFfmpegAsync(string ffmpeg, IReadOnlyList<string> args, string label, Stream output, CancellationToken cancellationToken)
+    private async Task<long> RunFfmpegAsync(string ffmpeg, IReadOnlyList<string> args, string label, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
+    {
+        var (process, stderrTask) = StartProducer(ffmpeg, args, label, stats, speedGate: null, cancellationToken);
+        if (process is null)
+        {
+            return 0;
+        }
+
+        return await PumpProducerAsync(process, stderrTask, label, output, cancellationToken).ConfigureAwait(false);
+    }
+
+    // Starts a producer ffmpeg and immediately begins draining its stderr (so it can never block on a full stderr
+    // pipe), but does NOT read its stdout. A warmed next item is left in exactly this state: ffmpeg pays its
+    // cold-start cost (open input, init the decoder/encoder/HW context, decode the first frames) and then blocks
+    // on its full stdout pipe, so it is primed to splice into the live feed the instant the current item ends.
+    // Returns a null process if it could not start.
+    private (Process? Process, Task<string> Stderr) StartProducer(string ffmpeg, IReadOnlyList<string> args, string label, SessionStats? stats, SpeedGate? speedGate, CancellationToken cancellationToken)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -480,7 +694,7 @@ public class StreamSessionService
         // failure on a specific source (the downstream transcoder error only ever says the temp file was empty).
         _logger.LogDebug("Live Channels: producer ffmpeg [{Label}]: {Ffmpeg} {Args}", label, ffmpeg, string.Join(' ', args));
 
-        using var process = new Process { StartInfo = startInfo };
+        var process = new Process { StartInfo = startInfo };
         try
         {
             process.Start();
@@ -488,51 +702,84 @@ public class StreamSessionService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to start ffmpeg for {Label}", label);
-            return 0;
+            process.Dispose();
+            return (null, Task.FromResult(string.Empty));
         }
 
-        var stderrTask = ReadStandardErrorAsync(process, cancellationToken);
+        return (process, ReadStandardErrorAsync(process, stats, speedGate, cancellationToken));
+    }
 
+    // Pumps a started producer's stdout into the output stream until it ends, then kills and disposes it. Pairs
+    // with StartProducer: the split lets the per-item loop start the next item early (warm it) and only begin
+    // pumping it once the current item finishes.
+    private async Task<long> PumpProducerAsync(Process process, Task<string> stderrTask, string label, Stream output, CancellationToken cancellationToken)
+    {
         long total = 0;
         var buffer = new byte[BufferSize];
         try
         {
-            var stdout = process.StandardOutput.BaseStream;
-            int read;
-            while ((read = await stdout.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+            try
             {
-                await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                total += read;
+                var stdout = process.StandardOutput.BaseStream;
+                int read;
+                while ((read = await stdout.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+                {
+                    await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                    total += read;
+                }
+
+                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Client went away; stop quietly.
+            }
+            catch (IOException ex)
+            {
+                _logger.LogDebug(ex, "Stream write ended for {Label}", label);
+            }
+            finally
+            {
+                await KillAndWaitAsync(process).ConfigureAwait(false);
             }
 
-            await output.FlushAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Client went away; stop quietly.
-        }
-        catch (IOException ex)
-        {
-            _logger.LogDebug(ex, "Stream write ended for {Label}", label);
+            var stderr = await stderrTask.ConfigureAwait(false);
+            var exitCode = process.HasExited ? process.ExitCode : -1;
+            if (total == 0 && !cancellationToken.IsCancellationRequested)
+            {
+                // Output of nothing is a real failure (e.g. ffmpeg rejected a stream); surface its error and code.
+                _logger.LogWarning("ffmpeg produced no output for {Label} (exit {Exit}): {Error}", label, exitCode, stderr.Trim());
+            }
+            else if (!string.IsNullOrWhiteSpace(stderr))
+            {
+                _logger.LogDebug("ffmpeg ({Label}, {Bytes} bytes, exit {Exit}): {Error}", label, total, exitCode, stderr.Trim());
+            }
         }
         finally
         {
-            await KillAndWaitAsync(process).ConfigureAwait(false);
-        }
-
-        var stderr = await stderrTask.ConfigureAwait(false);
-        var exitCode = process.HasExited ? process.ExitCode : -1;
-        if (total == 0 && !cancellationToken.IsCancellationRequested)
-        {
-            // Output of nothing is a real failure (e.g. ffmpeg rejected a stream); surface its error and code.
-            _logger.LogWarning("ffmpeg produced no output for {Label} (exit {Exit}): {Error}", label, exitCode, stderr.Trim());
-        }
-        else if (!string.IsNullOrWhiteSpace(stderr))
-        {
-            _logger.LogDebug("ffmpeg ({Label}, {Bytes} bytes, exit {Exit}): {Error}", label, total, exitCode, stderr.Trim());
+            process.Dispose();
         }
 
         return total;
+    }
+
+    // Kills, drains, and disposes a warmed producer that will not be used (the current item failed, the schedule
+    // moved on, or the stream is closing), so a primed-but-unspliced ffmpeg never lingers.
+    private async Task DiscardProducerAsync(Process process, Task<string> stderrTask)
+    {
+        try
+        {
+            await KillAndWaitAsync(process).ConfigureAwait(false);
+            await stderrTask.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Live Channels: discarding a warmed producer failed");
+        }
+        finally
+        {
+            process.Dispose();
+        }
     }
 
     private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal, bool initialBurst)
@@ -564,19 +811,144 @@ public class StreamSessionService
         return (args, hardwareDecode);
     }
 
-    private static async Task<string> ReadStandardErrorAsync(Process process, CancellationToken cancellationToken)
+    private static async Task<string> ReadStandardErrorAsync(Process process, SessionStats? stats, SpeedGate? speedGate, CancellationToken cancellationToken)
     {
+        // Without a stats sink, the whole of stderr is only needed once, at exit, for diagnostics.
+        if (stats is null)
+        {
+            try
+            {
+                return await process.StandardError.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return string.Empty;
+            }
+            catch (IOException)
+            {
+                return string.Empty;
+            }
+        }
+
+        // With a stats sink, read incrementally so the live encode speed can be parsed from ffmpeg's progress
+        // lines (each terminated by a carriage return) while a long-running producer is still going. Only a
+        // bounded tail of stderr is kept for diagnostics, so memory stays flat over a multi-hour stream.
+        var tail = new StringBuilder();
+        var line = new StringBuilder();
+        var buffer = new char[512];
+        var tracker = new SpeedTracker(speedGate);
         try
         {
-            return await process.StandardError.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            int read;
+            while ((read = await process.StandardError.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+            {
+                for (var i = 0; i < read; i++)
+                {
+                    var c = buffer[i];
+                    if (c == '\r' || c == '\n')
+                    {
+                        FlushStderrLine(line, tail, stats, tracker);
+                    }
+                    else
+                    {
+                        line.Append(c);
+                    }
+                }
+            }
+
+            FlushStderrLine(line, tail, stats, tracker);
         }
         catch (OperationCanceledException)
         {
-            return string.Empty;
+            // Cancelled on close; the tail collected so far is enough.
         }
         catch (IOException)
         {
-            return string.Empty;
+            // The pipe closed as ffmpeg exited; the tail collected so far is enough.
+        }
+
+        return tail.ToString();
+    }
+
+    // Completes one stderr line: feeds it to the speed tracker, appends it to a bounded diagnostic tail, and
+    // resets the line builder. The tail is trimmed from the front so it never grows past a few progress lines.
+    private static void FlushStderrLine(StringBuilder line, StringBuilder tail, SessionStats stats, SpeedTracker tracker)
+    {
+        if (line.Length == 0)
+        {
+            return;
+        }
+
+        var text = line.ToString();
+        line.Clear();
+        tracker.Observe(text, stats);
+
+        tail.Append(text).Append('\n');
+        const int MaxTail = 4096;
+        if (tail.Length > MaxTail)
+        {
+            tail.Remove(0, tail.Length - MaxTail);
+        }
+    }
+
+    // Computes a live encode speed from ffmpeg's -progress output. ffmpeg's own "speed=" field is a cumulative
+    // average since the stream began, so it barely moves once a stream has run a while (and the concat path's
+    // start-up burst skews it for a long time). Instead this measures the content time advanced (out_time_us)
+    // between progress blocks against wall-clock, giving an instantaneous rate that actually tracks whether the
+    // box keeps up. One instance per producer process, lightly smoothed so the reading stays steady.
+    // Withholds speed updates from a warmed producer until it is spliced in as the current item. Without it the
+    // warming and current producers would both write the one shared SessionStats during the warm-up overlap, and
+    // the read-modify-write smoothing would blend the current item's true speed with the warming item's
+    // primed-then-stalled rate, dipping the Sessions-tab reading well below realtime even when the box keeps up.
+    private sealed class SpeedGate
+    {
+        public volatile bool Active;
+    }
+
+    private sealed class SpeedTracker
+    {
+        private readonly SpeedGate? _gate;
+        private double _prevContentSeconds = -1;
+        private long _prevStamp;
+
+        public SpeedTracker(SpeedGate? gate) => _gate = gate;
+
+        public void Observe(string line, SessionStats stats)
+        {
+            const string key = "out_time_us=";
+            if (!line.StartsWith(key, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var value = line.AsSpan(key.Length).Trim();
+            if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var micros) || micros < 0)
+            {
+                // "out_time_us=N/A" before the first frame, or a malformed block: keep the previous reading.
+                return;
+            }
+
+            var contentSeconds = micros / 1_000_000.0;
+            // A monotonic timestamp, so an NTP/VM clock step cannot skew the elapsed time into a false speed.
+            var nowStamp = Stopwatch.GetTimestamp();
+
+            // Track timestamps even while gated, so the first reading after a splice is measured over one real
+            // interval; only the write to the shared stats is withheld until this producer is the current one.
+            if (_prevContentSeconds >= 0 && (_gate is null || _gate.Active))
+            {
+                var elapsed = (nowStamp - _prevStamp) / (double)Stopwatch.Frequency;
+                var advanced = contentSeconds - _prevContentSeconds;
+                if (elapsed >= 0.05 && advanced >= 0)
+                {
+                    var instant = advanced / elapsed;
+                    var previous = stats.Speed;
+                    // Exponential smoothing keeps the number from flickering between progress blocks.
+                    stats.Speed = previous > 0 ? (previous * 0.6) + (instant * 0.4) : instant;
+                }
+            }
+
+            _prevContentSeconds = contentSeconds;
+            _prevStamp = nowStamp;
         }
     }
 

@@ -72,9 +72,10 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
 
         // A fresh process owns no live streams, so anything left in the stream root is an orphan from a previous
         // run that ended without CloseLiveStream (a crash). Sweep it now, then periodically reap sessions whose
-        // producer has stopped but that Jellyfin never closed, so neither files nor encoders pile up.
+        // producer has stopped, or that have run past the configured time limit, but that Jellyfin never closed,
+        // so neither files nor encoders pile up.
         ReapOrphanFiles();
-        _reaper = new Timer(_ => ReapCompletedSessions(), state: null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+        _reaper = new Timer(_ => ReapSessions(), state: null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
     }
 
     /// <inheritdoc />
@@ -200,15 +201,26 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         var playlist = Path.Combine(dir, "stream.m3u8");
 
         var cts = new CancellationTokenSource();
+        var stats = new SessionStats();
 
-        var worker = StartProducer(channel, dir, cts);
+        // Resolve the channel logo (uploaded or generated, cached on disk, usually already written at guide time)
+        // up front so the Sessions tab can show it without re-resolving on every poll. Not tied to the request
+        // token: a client cancelling the tune must not leave the session with no logo for its whole life.
+        var logoPath = await EnsureLogoAsync(channel, CancellationToken.None).ConfigureAwait(false);
 
-        _live[liveStreamId] = new LiveSession(cts, worker, dir, channel.Name, channelId);
+        var worker = StartProducer(channel, dir, cts, stats);
+
+        _live[liveStreamId] = new LiveSession(cts, worker, dir, channel.Name, channelId, channel.Number, DateTime.UtcNow, logoPath, stats);
 
         // Jellyfin shares one live stream per channel, so any earlier session still open for this channel was
         // abandoned (a re-tune Jellyfin never closed). Tear those down now so producers and their downstream
         // transcodes do not pile up and saturate the box. Also sweep any finished sessions while we are here.
         EvictStaleSessions(channelId, keep: liveStreamId);
+
+        // Bound the total number of concurrent encoders. A client that never sends the close (Swiftfin on a
+        // force-quit, crash, or network drop) leaks a producer Jellyfin keeps reading, which is indistinguishable
+        // from a live one, so the only robust guard is a hard cap: over it, the oldest sessions are closed.
+        EnforceSessionCap(keep: liveStreamId);
 
         // Jellyfin opens the playlist immediately, so wait until the segmenter has written it and a first segment,
         // and if the producer dies with nothing, tear the session down and surface a clear failure rather than
@@ -221,16 +233,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         {
             if (_live.TryRemove(liveStreamId, out var failed))
             {
-                try
-                {
-                    await failed.Cts.CancelAsync().ConfigureAwait(false);
-                }
-                catch (ObjectDisposedException)
-                {
-                    // Already finished.
-                }
-
-                DisposeSession(failed);
+                CancelAndDispose(failed);
             }
 
             _logger.LogWarning(ex, "Live Channels: {Name} produced no playable output", channel.Name);
@@ -247,9 +250,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
 
     // Starts the producer for a session: the stream session runs the HLS segmenter and feeds it, writing the live
     // playlist and its rolling segments into the session directory. The directory is removed when the session ends.
-    private Task StartProducer(Channel channel, string dir, CancellationTokenSource cts)
+    private Task StartProducer(Channel channel, string dir, CancellationTokenSource cts, SessionStats stats)
     {
-        return Task.Run(() => RunProducerAsync(() => _streams.StreamToHlsAsync(channel, dir, cts.Token), channel.Name), CancellationToken.None);
+        return Task.Run(() => RunProducerAsync(() => _streams.StreamToHlsAsync(channel, dir, cts.Token, stats), channel.Name), CancellationToken.None);
     }
 
     // Runs a producer delegate with the standard lifecycle: swallow cancellation and log any real failure. The
@@ -303,6 +306,30 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
 
         DisposeSession(session);
     }
+
+    /// <summary>
+    /// Snapshots every active channel stream for the configuration page's Sessions tab: its id, channel number
+    /// and name, when it started (the page derives run time from this), and the latest encode speed.
+    /// </summary>
+    /// <returns>The active sessions, ordered by channel number.</returns>
+    public IReadOnlyList<ActiveSession> GetActiveSessions()
+    {
+        return _live
+            .Select(kv => new ActiveSession(
+                kv.Key,
+                kv.Value.Number,
+                kv.Value.ChannelName,
+                kv.Value.StartedUtc,
+                Math.Round(kv.Value.Stats.Speed, 2)))
+            .OrderBy(s => s.Number)
+            .ThenBy(s => s.StartedUtc)
+            .ToList();
+    }
+
+    /// <summary>Returns the on-disk logo path for an active session, or <c>null</c> if the session is gone.</summary>
+    /// <param name="id">The live stream id.</param>
+    /// <returns>The logo file path, or <c>null</c>.</returns>
+    public string? GetSessionLogoPath(string id) => _live.TryGetValue(id, out var session) ? session.LogoPath : null;
 
     /// <inheritdoc />
     public void Dispose()
@@ -377,6 +404,35 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             if (file.EndsWith(".tmp", StringComparison.Ordinal) || File.GetLastWriteTimeUtc(file) < cutoff)
             {
                 TryDeleteFile(file);
+            }
+        }
+    }
+
+    // The periodic reaper: collects sessions whose producer has finished, then closes any still-running session
+    // that has passed the configured time limit. Both cases are streams Jellyfin never closed, so without this they
+    // would hold their encoder and files for the life of the process.
+    private void ReapSessions()
+    {
+        ReapCompletedSessions();
+
+        var timeoutMinutes = Plugin.Instance?.ReadConfiguration(c => c.SessionTimeoutMinutes) ?? 0;
+        if (timeoutMinutes <= 0)
+        {
+            return;
+        }
+
+        var cutoff = DateTime.UtcNow - TimeSpan.FromMinutes(timeoutMinutes);
+        foreach (var (id, session) in _live)
+        {
+            if (session.StartedUtc > cutoff)
+            {
+                continue;
+            }
+
+            if (_live.TryRemove(id, out var removed))
+            {
+                _logger.LogInformation("Live Channels: closing session {Id} ({Name}) after reaching the {Minutes}-minute time limit", id, removed.ChannelName, timeoutMinutes);
+                CancelAndDispose(removed);
             }
         }
     }
@@ -461,21 +517,74 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             if (_live.TryRemove(id, out var removed))
             {
                 _logger.LogInformation("Live Channels: evicting stale session {Id} ({Name})", id, removed.ChannelName);
-                try
-                {
-                    removed.Cts.Cancel();
-                }
-                catch (ObjectDisposedException)
-                {
-                    // Already finished.
-                }
-
-                // Delete the session directory only once the producer has fully stopped (its segmenter is killed in
-                // StreamToHlsAsync's finally), so the recursive delete cannot race the segmenter still writing
-                // segments into it. Fire-and-forget so an incoming re-tune is never blocked draining the old one.
-                _ = removed.Worker.ContinueWith(_ => DisposeSession(removed), TaskScheduler.Default);
+                CancelAndDispose(removed);
             }
         }
+    }
+
+    // Bounds the number of concurrent encoders to the configured cap by closing the oldest sessions. A client that
+    // never sends the close leaks a producer Jellyfin keeps reading off disk, which is indistinguishable from a
+    // live one, so a hard count is the only robust guard. The just-opened session is always kept. Zero is unlimited.
+    private void EnforceSessionCap(string keep)
+    {
+        var cap = Plugin.Instance?.ReadConfiguration(c => c.MaxConcurrentSessions) ?? 0;
+        if (cap <= 0)
+        {
+            return;
+        }
+
+        var victims = SelectCapVictims(_live.Select(kv => (kv.Key, kv.Value.StartedUtc)), keep, cap);
+        foreach (var id in victims)
+        {
+            if (_live.TryRemove(id, out var removed))
+            {
+                _logger.LogInformation("Live Channels: closing session {Id} ({Name}) to stay within the {Cap}-session cap", id, removed.ChannelName, cap);
+                CancelAndDispose(removed);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Chooses which sessions to close so the live count fits the cap. Returns the oldest sessions first, never the
+    /// one just opened (<paramref name="keep"/>), and only as many as the overflow above the cap. A cap of zero or
+    /// less is unlimited and selects nothing. Pure and deterministic so it can be unit tested without a live host.
+    /// </summary>
+    /// <param name="sessions">Every live session as an id and its start time.</param>
+    /// <param name="keep">The just-opened session that must never be evicted.</param>
+    /// <param name="cap">The maximum number of concurrent sessions; zero or less means unlimited.</param>
+    /// <returns>The ids to close, oldest first.</returns>
+    public static List<string> SelectCapVictims(IEnumerable<(string Id, DateTime StartedUtc)> sessions, string keep, int cap)
+    {
+        var all = sessions.ToList();
+        var overflow = all.Count - cap;
+        if (cap <= 0 || overflow <= 0)
+        {
+            return new List<string>();
+        }
+
+        return all
+            .Where(s => !string.Equals(s.Id, keep, StringComparison.Ordinal))
+            .OrderBy(s => s.StartedUtc)
+            .Take(overflow)
+            .Select(s => s.Id)
+            .ToList();
+    }
+
+    // Cancels a session's producer and removes its directory once the producer has fully stopped (its segmenter is
+    // killed in StreamToHlsAsync's finally), so the recursive delete cannot race the segmenter still writing
+    // segments into it. Fire-and-forget so the caller (a tune-in or the reaper) is never blocked draining the old one.
+    private void CancelAndDispose(LiveSession session)
+    {
+        try
+        {
+            session.Cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Already finished.
+        }
+
+        _ = session.Worker.ContinueWith(_ => DisposeSession(session), TaskScheduler.Default);
     }
 
     private void DisposeSession(LiveSession session)
@@ -734,5 +843,5 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
     }
 
-    private sealed record LiveSession(CancellationTokenSource Cts, Task Worker, string Path, string ChannelName, string ChannelId);
+    private sealed record LiveSession(CancellationTokenSource Cts, Task Worker, string Path, string ChannelName, string ChannelId, int Number, DateTime StartedUtc, string? LogoPath, SessionStats Stats);
 }

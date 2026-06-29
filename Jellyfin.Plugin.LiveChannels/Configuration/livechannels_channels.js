@@ -5,6 +5,7 @@ export default function (view) {
     var TABS = [
         { href: 'configurationpage?name=livechannels_channels', name: 'Channels' },
         { href: 'configurationpage?name=livechannels_popular', name: 'Popular' },
+        { href: 'configurationpage?name=livechannels_sessions', name: 'Sessions' },
         { href: 'configurationpage?name=livechannels_settings', name: 'Settings' }
     ];
 
@@ -96,7 +97,7 @@ export default function (view) {
         // that path throws "toLowerCase is not a function" inside Jellyfin's webcomponents polyfill and takes the
         // whole editor down with it.
         var pickerHost = document.createElement('div');
-        pickerHost.innerHTML = '<select is="emby-select" class="jpk-selector-dropdown"></select>';
+        pickerHost.innerHTML = '<select class="jpk-selector-dropdown"></select>';
         var picker = pickerHost.querySelector('select');
         var chips = document.createElement('div');
         chips.className = 'jpk-tags';
@@ -335,12 +336,12 @@ export default function (view) {
         card.innerHTML =
             '<div class="lc-source-header">' +
                 '<span class="material-icons lc-source-icon" aria-hidden="true">folder</span>' +
-                '<select is="emby-select" class="lc-source-library jpk-selector-dropdown"></select>' +
+                '<select class="lc-source-library jpk-selector-dropdown"></select>' +
                 '<button is="emby-button" type="button" class="lc-remove raised jpk-button-destructive jpk-button-small"><span>Remove</span></button>' +
             '</div>' +
             '<div class="inputContainer">' +
                 '<label class="inputLabel">Selection</label>' +
-                '<select is="emby-select" class="lc-selection">' +
+                '<select class="lc-selection jpk-selector-dropdown">' +
                     '<option value="AllContent">All content</option>' +
                     '<option value="Genre">Genre</option>' +
                     '<option value="Whitelist">Whitelist</option>' +

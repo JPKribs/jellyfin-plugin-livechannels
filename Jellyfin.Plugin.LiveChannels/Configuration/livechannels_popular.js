@@ -5,6 +5,7 @@ export default function (view) {
     var TABS = [
         { href: 'configurationpage?name=livechannels_channels', name: 'Channels' },
         { href: 'configurationpage?name=livechannels_popular', name: 'Popular' },
+        { href: 'configurationpage?name=livechannels_sessions', name: 'Sessions' },
         { href: 'configurationpage?name=livechannels_settings', name: 'Settings' }
     ];
 

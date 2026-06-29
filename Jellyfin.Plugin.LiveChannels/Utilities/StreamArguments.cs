@@ -69,7 +69,9 @@ public static class StreamArguments
 
         // +genpts fills in any missing presentation timestamps so each item starts from a clean, monotonic
         // timeline before the offset is applied.
-        var args = new List<string> { "-hide_banner", "-loglevel", "error", "-fflags", "+genpts" };
+        // -progress writes machine-readable key=value progress (including speed=) to stderr even at loglevel
+        // error, so the Sessions tab can report the live encode speed without the noisy human stats line.
+        var args = new List<string> { "-hide_banner", "-loglevel", "error", "-progress", "pipe:2", "-fflags", "+genpts" };
 
         // Hardware device initialisation goes before the input. The HDR path needs a VAAPI device with a QSV
         // device derived from it (so VAAPI filters and the QSV encoder share frames); everything else uses the
@@ -275,7 +277,9 @@ public static class StreamArguments
         ArgumentNullException.ThrowIfNull(video);
         ArgumentNullException.ThrowIfNull(audioEncoder);
 
-        var args = new List<string> { "-hide_banner", "-loglevel", "error", "-fflags", "+genpts" };
+        // -progress writes machine-readable key=value progress (including speed=) to stderr even at loglevel
+        // error, so the Sessions tab can report the live encode speed without the noisy human stats line.
+        var args = new List<string> { "-hide_banner", "-loglevel", "error", "-progress", "pipe:2", "-fflags", "+genpts" };
 
         // Hardware encode device init (VAAPI/QSV) applies.
         foreach (var init in video.InitArgs)

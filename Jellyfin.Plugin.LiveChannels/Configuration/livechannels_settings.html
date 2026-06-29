@@ -11,70 +11,118 @@
                         <h1 class="sectionTitle">Settings</h1>
                     </div>
 
-                    <div class="jpk-record-card">
-                        <div class="jpk-record-row">
-                            <span class="jpk-record-label">Hardware acceleration</span>
-                            <span id="accelValue" class="jpk-mono">Checking&hellip;</span>
+                    <div class="fieldDescription">
+                        Output and playback options that apply to every channel, including the Popular one. Set the resolution, codecs, and bitrate, then open a section to adjust hardware, playback, and session limits.
+                    </div>
+
+                    <div class="jpk-collapsible-section">
+                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionEncoding">
+                            <span class="jpk-collapsible-title">Encoding</span>
+                            <span class="jpk-collapsible-icon">&#9660;</span>
+                        </button>
+                        <div id="sectionEncoding" class="jpk-collapsible-content collapsed">
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="resolution">Resolution</label>
+                                <select id="resolution" class="jpk-selector-dropdown">
+                                    <option value="1280">720p</option>
+                                    <option value="1920">1080p</option>
+                                    <option value="2560">1440p</option>
+                                    <option value="3840">4K</option>
+                                </select>
+                                <div class="fieldDescription">Every item is scaled to this one fixed size.</div>
+                            </div>
+
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="videoCodec">Video codec</label>
+                                <select id="videoCodec" class="jpk-selector-dropdown">
+                                    <option value="H264">H.264</option>
+                                    <option value="Hevc">HEVC / H.265</option>
+                                </select>
+                                <div class="fieldDescription">HEVC is smaller but less compatible. The encoder follows your Jellyfin hardware acceleration.</div>
+                            </div>
+
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="audioCodec">Audio codec</label>
+                                <select id="audioCodec" class="jpk-selector-dropdown">
+                                    <option value="Aac">AAC</option>
+                                    <option value="Ac3">AC3</option>
+                                    <option value="Eac3">E-AC3</option>
+                                </select>
+                                <div class="fieldDescription">AC3 and E-AC3 are Dolby Digital. AAC is universal.</div>
+                            </div>
+
+                            <div class="inputContainer">
+                                <label for="videoBitrate">Video bitrate (kbps)</label>
+                                <input is="emby-input" type="number" id="videoBitrate" min="500" step="100" autocomplete="off" />
+                            </div>
                         </div>
                     </div>
 
-                    <label class="emby-checkbox-label">
-                        <input type="checkbox" is="emby-checkbox" id="disableHwa" />
-                        <span class="checkboxLabel">Disable hardware acceleration</span>
-                    </label>
-                    <div class="fieldDescription">Forces software encoding and decoding. Turn this on if channels fail to play with hardware acceleration.</div>
+                    <div class="jpk-collapsible-section">
+                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionHardware">
+                            <span class="jpk-collapsible-title">Hardware acceleration</span>
+                            <span class="jpk-collapsible-icon">&#9660;</span>
+                        </button>
+                        <div id="sectionHardware" class="jpk-collapsible-content collapsed">
+                            <div class="jpk-record-card">
+                                <div class="jpk-record-row">
+                                    <span class="jpk-record-label">Hardware acceleration</span>
+                                    <span id="accelValue" class="jpk-mono">Checking&hellip;</span>
+                                </div>
+                            </div>
 
-                    <div class="selectContainer">
-                        <label class="selectLabel" for="subtitleLanguage">Default language</label>
-                        <select is="emby-select" id="subtitleLanguage" class="jpk-selector-dropdown"></select>
-                        <div class="fieldDescription">Your native language. With a channel's subtitle rule set to Forced only, content whose default audio track is not in this language burns in subtitles so it stays followable.</div>
+                            <label class="emby-checkbox-label">
+                                <input type="checkbox" is="emby-checkbox" id="disableHwa" />
+                                <span class="checkboxLabel">Disable hardware acceleration</span>
+                            </label>
+                            <div class="fieldDescription">Forces software encoding and decoding. Turn this on if channels fail to play with hardware acceleration.</div>
+                        </div>
                     </div>
 
-                    <div class="selectContainer">
-                        <label class="selectLabel" for="resolution">Resolution</label>
-                        <select is="emby-select" id="resolution" class="jpk-selector-dropdown">
-                            <option value="1280">720p</option>
-                            <option value="1920">1080p</option>
-                            <option value="2560">1440p</option>
-                            <option value="3840">4K</option>
-                        </select>
-                        <div class="fieldDescription">Every item is scaled to this one fixed size.</div>
+                    <div class="jpk-collapsible-section">
+                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionPlayback">
+                            <span class="jpk-collapsible-title">Playback</span>
+                            <span class="jpk-collapsible-icon">&#9660;</span>
+                        </button>
+                        <div id="sectionPlayback" class="jpk-collapsible-content collapsed">
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="subtitleLanguage">Default language</label>
+                                <select id="subtitleLanguage" class="jpk-selector-dropdown"></select>
+                                <div class="fieldDescription">Your native language. A channel set to Forced only burns in subtitles when its audio is in another language, so foreign content stays followable.</div>
+                            </div>
+
+                            <div class="inputContainer">
+                                <label for="bufferSeconds">Playback buffer (seconds)</label>
+                                <input is="emby-input" type="number" id="bufferSeconds" min="0" max="30" step="1" autocomplete="off" />
+                                <div class="fieldDescription">How long a channel buffers before it starts playing. Raise it to ride out stutter when tuning in, lower it for a faster start.</div>
+                            </div>
+                        </div>
                     </div>
 
-                    <div class="selectContainer">
-                        <label class="selectLabel" for="videoCodec">Video codec</label>
-                        <select is="emby-select" id="videoCodec" class="jpk-selector-dropdown">
-                            <option value="H264">H.264</option>
-                            <option value="Hevc">HEVC / H.265</option>
-                        </select>
-                        <div class="fieldDescription">HEVC is smaller but less compatible. The encoder follows your Jellyfin hardware acceleration.</div>
-                    </div>
+                    <div class="jpk-collapsible-section">
+                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionSessions">
+                            <span class="jpk-collapsible-title">Sessions</span>
+                            <span class="jpk-collapsible-icon">&#9660;</span>
+                        </button>
+                        <div id="sectionSessions" class="jpk-collapsible-content collapsed">
+                            <div class="inputContainer">
+                                <label for="maxSessions">Maximum concurrent streams</label>
+                                <input is="emby-input" type="number" id="maxSessions" min="0" step="1" autocomplete="off" />
+                                <div class="fieldDescription">Most channels that may encode at once. The oldest is closed to make room, and 0 means no limit.</div>
+                            </div>
 
-                    <div class="selectContainer">
-                        <label class="selectLabel" for="audioCodec">Audio codec</label>
-                        <select is="emby-select" id="audioCodec" class="jpk-selector-dropdown">
-                            <option value="Aac">AAC</option>
-                            <option value="Ac3">AC3</option>
-                            <option value="Eac3">E-AC3</option>
-                        </select>
-                        <div class="fieldDescription">AC3 and E-AC3 are Dolby Digital. AAC is universal.</div>
-                    </div>
+                            <div class="inputContainer">
+                                <label for="sessionTimeout">Stream time limit (minutes)</label>
+                                <input is="emby-input" type="number" id="sessionTimeout" min="0" step="5" autocomplete="off" />
+                                <div class="fieldDescription">Closes any stream open longer than this, even one you are watching. 0 turns it off.</div>
+                            </div>
 
-                    <div class="inputContainer">
-                        <label for="videoBitrate">Video bitrate (kbps)</label>
-                        <input is="emby-input" type="number" id="videoBitrate" min="500" step="100" autocomplete="off" />
-                    </div>
-
-                    <div class="inputContainer">
-                        <label for="bufferSeconds">Playback buffer (seconds)</label>
-                        <input is="emby-input" type="number" id="bufferSeconds" min="0" max="30" step="1" autocomplete="off" />
-                        <div class="fieldDescription">How long a channel buffers before it starts playing. Raise it to ride out stutter on tune-in, lower it for a faster start.</div>
-                    </div>
-
-                    <div class="inputContainer">
-                        <label for="streamDirectory">Stream file location</label>
-                        <input is="emby-input" type="text" id="streamDirectory" autocomplete="off" placeholder="Leave blank for the Jellyfin cache" />
-                        <div class="fieldDescription">Where each channel's playlist and segments are written while it plays; blank uses a livechannels folder in Jellyfin's cache. Only a small rolling window is kept on disk, and changes take effect on the next restart.</div>
+                            <div class="inputContainer">
+                                <label for="streamDirectory">Stream file location</label>
+                                <input is="emby-input" type="text" id="streamDirectory" autocomplete="off" placeholder="Leave blank for the Jellyfin cache" />
+                                <div class="fieldDescription">Where playlists and segments are written while playing, taking effect on restart. Blank uses Jellyfin's cache.</div>
+                            </div>
+                        </div>
                     </div>
 
                     <button is="emby-button" type="button" id="btnSaveSettings" class="raised block jpk-button-submit">

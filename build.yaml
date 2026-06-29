@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.5.0"
+version: "10.11.6.0"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV, with a ready-made Popular channel out of the box."
@@ -10,9 +10,10 @@ description: >
   ratings or from a hand-picked list of items. A built-in Popular channel, configurable on its own
   tab, loops your recent, top rated, and most watched movies and shows with no setup at all. Every
   channel's guide is filled out with descriptions, ratings, episode titles, original air dates, and
-  landscape artwork. Each channel, its guide, and its stream are served in-process through Jellyfin's
-  own Live TV, so the channels appear automatically with no tuner to add, no URLs to paste, and no
-  exposed endpoints.
+  landscape artwork. A Sessions tab shows every channel currently encoding with its run time and live
+  speed and a button to stop one, and limits cap how many channels run at once and how long any one
+  lasts. Each channel, its guide, and its stream are served in-process through Jellyfin's own Live TV,
+  so the channels appear automatically with no tuner to add, no URLs to paste, and no exposed endpoints.
 category: "Live TV"
 imageUrl: "https://raw.githubusercontent.com/JPKribs/jellyfin-plugin-livechannels/refs/heads/master/Jellyfin.Plugin.LiveChannels/Assets/Logo.png"
 owner: "JPKribs"
@@ -20,7 +21,8 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   features:
-  - Give the Popular channel its own tab to set its name, icon, rating limit, subtitle rule, and loop behaviour
-  - Build the Popular channel from your recent, top rated, and most watched movies and shows
-  - Measure most watched across the whole server by combining every user's play counts
-  - Choose a default language in Settings that decides when Forced subtitles burn in
+  - Add a Sessions tab that lists every active stream with its channel, start time, run time, and live encode speed, and a button to stop it
+  - Warm up the next item while the current one is still playing so per-item channels switch files without a gap
+  - Cap how many channels stream at once so a client that never disconnects cannot pile up encoders and overload the server
+  - Add a stream time limit that closes any channel left running too long as a backstop for clients that never send a stop
+  - Organise the Settings tab into collapsible sections

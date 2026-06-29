@@ -5,6 +5,7 @@ export default function (view) {
     var TABS = [
         { href: 'configurationpage?name=livechannels_channels', name: 'Channels' },
         { href: 'configurationpage?name=livechannels_popular', name: 'Popular' },
+        { href: 'configurationpage?name=livechannels_sessions', name: 'Sessions' },
         { href: 'configurationpage?name=livechannels_settings', name: 'Settings' }
     ];
 
@@ -42,6 +43,8 @@ export default function (view) {
         el('audioCodec').value = config.AudioCodec || 'Aac';
         el('videoBitrate').value = config.TranscodeVideoBitrateKbps || 4000;
         el('bufferSeconds').value = config.BufferSeconds == null ? 3 : config.BufferSeconds;
+        el('maxSessions').value = config.MaxConcurrentSessions == null ? 3 : config.MaxConcurrentSessions;
+        el('sessionTimeout').value = config.SessionTimeoutMinutes == null ? 0 : config.SessionTimeoutMinutes;
         el('streamDirectory').value = config.StreamDirectory || '';
         el('disableHwa').checked = !!config.DisableHardwareAcceleration;
         el('subtitleLanguage').value = config.DefaultSubtitleLanguage || 'eng';
@@ -83,6 +86,10 @@ export default function (view) {
             fresh.TranscodeVideoBitrateKbps = Math.max(500, parseInt(el('videoBitrate').value, 10) || 4000);
             var buf = parseInt(el('bufferSeconds').value, 10);
             fresh.BufferSeconds = isNaN(buf) ? 3 : Math.min(30, Math.max(0, buf));
+            var maxSessions = parseInt(el('maxSessions').value, 10);
+            fresh.MaxConcurrentSessions = isNaN(maxSessions) ? 3 : Math.max(0, maxSessions);
+            var timeout = parseInt(el('sessionTimeout').value, 10);
+            fresh.SessionTimeoutMinutes = isNaN(timeout) ? 0 : Math.max(0, timeout);
             fresh.StreamDirectory = (el('streamDirectory').value || '').trim();
             fresh.DisableHardwareAcceleration = el('disableHwa').checked;
             fresh.DefaultSubtitleLanguage = el('subtitleLanguage').value || 'eng';
@@ -119,7 +126,7 @@ export default function (view) {
 
     view.addEventListener('viewshow', function () {
         _sharedPromise.then(function () {
-            setTabs('livechannels', 2, TABS);
+            setTabs('livechannels', 3, TABS);
             if (!_bound) { bind(); _bound = true; }
             Shared.initCollapsibles();
             // Populate the language options before applying the saved value to the dropdown.

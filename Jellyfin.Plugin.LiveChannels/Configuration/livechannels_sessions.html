@@ -1,0 +1,43 @@
+<div id="LiveChannelsSessionsPage" data-role="page"
+     class="page type-interior pluginConfigurationPage withTabs"
+     data-require="emby-button"
+     data-controller="__plugin/livechannels_sessions.js">
+    <div data-role="content">
+        <div class="content-primary">
+            <div class="verticalSection verticalSection-extrabottompadding">
+
+                <div class="sectionTitleContainer flex align-items-center">
+                    <h1 class="sectionTitle">Sessions</h1>
+                </div>
+
+                <div class="fieldDescription">
+                    Every channel currently encoding on the server, refreshed as you watch. Each one shows when it started, how long it has run, and how fast it is transcoding, where 1.0x keeps up with realtime. Use Kill to stop a stream and free its encoder right away.
+                </div>
+
+                <div id="sessionsEmpty" class="jpk-empty-section hidden">No channels are streaming right now.</div>
+
+                <div id="sessionList" class="jpk-source-list"></div>
+
+                <span id="sessionsStatus" class="jpk-status-text"></span>
+
+            </div>
+        </div>
+    </div>
+
+    <style>
+        /* Layout glue only; surfaces, text, and buttons come from the base (jpkribs_shared). */
+        #sessionList { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+        .lc-session { padding: 14px 16px; }
+        .lc-session-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+        .lc-session-logo {
+            width: 56px; height: 56px; border-radius: 8px; object-fit: cover; flex: 0 0 auto;
+            background: rgba(255, 255, 255, 0.04);
+        }
+        .lc-session-title { flex: 1; min-width: 0; }
+        .lc-session-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .lc-session-number { color: rgba(255, 255, 255, 0.55); margin-right: 8px; }
+        .lc-session-rows .jpk-record-row { padding: 4px 0; }
+    </style>
+
+    <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">
+</div>

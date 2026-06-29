@@ -42,7 +42,13 @@ Per channel you can also set:
 
 ### Output
 
-Resolution, video codec, audio codec, and bitrate are set on the **Settings** tab and apply to every channel. The same tab holds the playback buffer length, where stream files are written, and your **Default language** (the language used to decide Forced subtitle burn in). Decoding and encoding both follow Jellyfin's own hardware acceleration, with a switch to force software when you want it. HDR sources are tone mapped to SDR so they never play washed out. 1080p is the practical sweet spot for a round the clock channel.
+Resolution, video codec, audio codec, and bitrate are set on the **Settings** tab and apply to every channel. The same tab, organised into collapsible sections, also holds the playback buffer length, where stream files are written, and your **Default language** (the language used to decide Forced subtitle burn in). Decoding and encoding both follow Jellyfin's own hardware acceleration, with a switch to force software when you want it. HDR sources are tone mapped to SDR so they never play washed out. 1080p is the practical sweet spot for a round the clock channel.
+
+A **Sessions** section bounds how much a channel can cost the server. The **maximum concurrent streams** cap limits how many channels encode at once, closing the oldest stream when a new viewer would exceed it, so a client that quits without telling the server cannot leave encoders piling up. An optional **stream time limit** is a blunter backstop that closes any stream open longer than you allow, after which the client simply re-tunes. Both default to sensible values and either can be turned off.
+
+### The Sessions tab
+
+The **Sessions** tab lists every channel currently encoding, refreshed as you watch. Each one shows its logo, channel number and name, when it started, how long it has run in hours and minutes, and how fast it is transcoding, where 1.0x means the box keeps up with realtime and lower means it is falling behind. A **Kill** button stops a stream and frees its encoder right away, which is handy when a client has wandered off and left one running.
 
 ### Guide
 

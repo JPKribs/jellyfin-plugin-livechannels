@@ -104,6 +104,18 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
 
         yield return new PluginPageInfo
         {
+            Name = "livechannels_sessions",
+            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_sessions.html"
+        };
+
+        yield return new PluginPageInfo
+        {
+            Name = "livechannels_sessions.js",
+            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_sessions.js"
+        };
+
+        yield return new PluginPageInfo
+        {
             Name = "livechannels_symbols.ttf",
             EmbeddedResourcePath = $"{ns}.Assets.MaterialSymbolsOutlined.ttf"
         };

@@ -37,6 +37,12 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Gets or sets the directory each channel's live playlist and its rolling stream segments are written to while playing. Empty (the default) uses a <c>livechannels</c> folder inside Jellyfin's cache. Only a short rolling window of segments is kept on disk at a time, so this stays small regardless of how long the channel runs.</summary>
     public string StreamDirectory { get; set; } = string.Empty;
 
+    /// <summary>Gets or sets the maximum number of channel streams that may encode at once. When a new tune-in would exceed this, the oldest running session is closed to make room. This bounds CPU use when a client never sends the close (so abandoned sessions cannot pile up). Zero means unlimited.</summary>
+    public int MaxConcurrentSessions { get; set; } = 3;
+
+    /// <summary>Gets or sets the maximum number of minutes any one channel stream may encode before it is closed automatically. A backstop for clients that never send the close on stop. It is blunt: a genuinely watched channel is also closed at the limit, after which the client simply re-tunes. Zero turns the limit off.</summary>
+    public int SessionTimeoutMinutes { get; set; }
+
     /// <summary>Gets or sets the built-in "Popular" channel's settings. It always lives at channel 0 and draws its content from the recent, top-rated, and most-watched movies and shows on the server, so its number and content are fixed; everything else (name, icon, rating band, subtitle rule, loop behaviour, and whether it is enabled) is configurable here.</summary>
     public Channel PopularChannel { get; set; } = new()
     {
