@@ -37,8 +37,21 @@ export default function (view) {
         return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     }
 
-    function formatSpeed(speed) {
-        return (typeof speed === 'number' && speed > 0) ? speed.toFixed(1) + 'x' : '—';
+    // A status dot for the encode speed: green keeping up (1.0x and over), yellow slightly behind (0.95 to 1.0x),
+    // red falling behind (under 0.95x), and a muted dot until ffmpeg reports a first reading. The exact rate is
+    // shown on hover.
+    function speedDot(speed) {
+        var color, label;
+        if (typeof speed !== 'number' || speed <= 0) {
+            color = 'rgba(255,255,255,0.25)'; label = 'Waiting for a reading';
+        } else if (speed >= 1.0) {
+            color = '#3fb950'; label = speed.toFixed(2) + 'x, keeping up';
+        } else if (speed >= 0.95) {
+            color = '#d29922'; label = speed.toFixed(2) + 'x, slightly behind';
+        } else {
+            color = '#f85149'; label = speed.toFixed(2) + 'x, falling behind';
+        }
+        return '<span class="lc-speed-dot" style="color:' + color + '" title="' + label + '">●</span>';
     }
 
     function row(label, value) {
@@ -62,7 +75,7 @@ export default function (view) {
             '<div class="lc-session-rows">' +
                 row('Started', formatStarted(s.StartedUtc)) +
                 row('Streaming for', formatElapsed(s.StartedUtc)) +
-                row('Speed', formatSpeed(s.Speed)) +
+                row('Speed', speedDot(s.Speed)) +
             '</div>' +
         '</div>';
     }

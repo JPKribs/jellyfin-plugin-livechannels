@@ -132,7 +132,9 @@ public class StreamSessionService
             return;
         }
 
-        var args = StreamArguments.BuildHlsSegmenter(Path.Combine(hlsDir, "seg%d.ts"), Path.Combine(hlsDir, "stream.m3u8"));
+        var windowMinutes = Plugin.Instance?.ReadConfiguration(c => c.StreamWindowMinutes) ?? 5;
+        var listSize = StreamArguments.SegmentsForWindow(windowMinutes);
+        var args = StreamArguments.BuildHlsSegmenter(Path.Combine(hlsDir, "seg%d.ts"), Path.Combine(hlsDir, "stream.m3u8"), listSize);
         var startInfo = new ProcessStartInfo
         {
             FileName = ffmpeg,
@@ -480,8 +482,9 @@ public class StreamSessionService
         }
 
         var isHdr = _channels.IsHdrSource(program.ItemId);
+        var isInterlaced = _channels.IsInterlacedSource(program.ItemId);
         var audioOrdinal = _channels.GetDefaultAudioOrdinal(program.ItemId);
-        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, isHdr, audioOrdinal, initialBurst);
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, isHdr, isInterlaced, audioOrdinal, initialBurst);
         var total = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
@@ -489,7 +492,7 @@ public class StreamSessionService
         if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
-            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, isHdr, audioOrdinal, initialBurst);
+            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, isHdr, isInterlaced, audioOrdinal, initialBurst);
             total = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
         }
 
@@ -503,8 +506,9 @@ public class StreamSessionService
     {
         var subtitle = _channels.FindBurnInSubtitle(program.ItemId, channel.SubtitleBurnIn);
         var isHdr = _channels.IsHdrSource(program.ItemId);
+        var isInterlaced = _channels.IsInterlacedSource(program.ItemId);
         var audioOrdinal = _channels.GetDefaultAudioOrdinal(program.ItemId);
-        return BuildArguments(program.Path!, TimeSpan.Zero, timeline, subtitle, program.SourceHeight, null, softwareDecode, isHdr, audioOrdinal, initialBurst);
+        return BuildArguments(program.Path!, TimeSpan.Zero, timeline, subtitle, program.SourceHeight, null, softwareDecode, isHdr, isInterlaced, audioOrdinal, initialBurst);
     }
 
     // Starts and primes the next full item so it is ready to splice with no cold-start gap. A missing file cannot
@@ -788,7 +792,7 @@ public class StreamSessionService
         }
     }
 
-    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal, bool initialBurst)
+    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, bool isInterlaced, int? audioOrdinal, bool initialBurst)
     {
         // Read just the scalars we need inside the config lock, rather than holding a reference to the live
         // (mutable, shared) configuration object after the lock releases.
@@ -806,9 +810,16 @@ public class StreamSessionService
         // which needs software-decoded frames. Burn-in on a GPU-resident decoder also forces software (the overlay
         // needs system frames). The caller can force software for the per-item fallback.
         var intelHardware = video.Name.Contains("qsv", StringComparison.Ordinal) || video.Name.Contains("vaapi", StringComparison.Ordinal);
-        var usesHdrVaapi = isHdr && intelHardware && !forcedSubtitle.HasValue && !softwareDecode;
+
+        // Intel QSV/VAAPI cannot deinterlace on the hardware-decode path we use: the decode keeps frames on the GPU,
+        // the deinterlace needs them in system memory, and the hwdownload that bridges the two fails to reconfigure
+        // for interlaced QSV frames ("Invalid output format nv12 for hwframe download", exit 234), producing nothing.
+        // Software-decode interlaced sources instead. They are SD/HD broadcast captures, which decode cheaply, and
+        // the encoder still runs on the GPU.
+        var intelInterlaced = intelHardware && isInterlaced;
+        var usesHdrVaapi = isHdr && intelHardware && !forcedSubtitle.HasValue && !softwareDecode && !intelInterlaced;
         var hdrNeedsSoftware = isHdr && !usesHdrVaapi;
-        var forceSoftware = softwareDecode || hdrNeedsSoftware || (forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeDownload));
+        var forceSoftware = softwareDecode || hdrNeedsSoftware || intelInterlaced || (forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeDownload));
 
         // The HDR VAAPI path runs on hardware, so a failure should fall back to software exactly like a hardware
         // decode does (StreamItemAsync retries with softwareDecode).

@@ -48,6 +48,10 @@ public class ChannelService
     // queries on large channels. Bounded by the library size (one bool per item ever checked).
     private readonly ConcurrentDictionary<Guid, bool> _hdrCache = new();
 
+    // Memoised interlaced result per item, for the same reasons as the HDR cache. Used to keep interlaced sources
+    // off the Intel hardware-decode path, whose deinterlace + hwdownload chain fails on QSV/VAAPI (exit 234).
+    private readonly ConcurrentDictionary<Guid, bool> _interlacedCache = new();
+
     /// <summary>
     /// Initializes a new instance of the <see cref="ChannelService"/> class.
     /// </summary>
@@ -90,6 +94,29 @@ public class ChannelService
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Could not read media streams for HDR check on {ItemId}", itemId);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Whether the item's video stream is interlaced. Cached, because the per-item pipeline asks once per item and
+    /// an item's field type does not change. Interlaced sources are kept off the Intel hardware-decode path, whose
+    /// deinterlace step downloads frames to system memory and fails to reconfigure on QSV/VAAPI.
+    /// </summary>
+    /// <param name="itemId">The item id.</param>
+    /// <returns><c>true</c> when the item's video stream is flagged interlaced.</returns>
+    public bool IsInterlacedSource(Guid itemId) => _interlacedCache.GetOrAdd(itemId, ComputeIsInterlaced);
+
+    private bool ComputeIsInterlaced(Guid itemId)
+    {
+        try
+        {
+            return _mediaSourceManager.GetMediaStreams(itemId)
+                .FirstOrDefault(s => s.Type == MediaStreamType.Video)?.IsInterlaced ?? false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read media streams for interlace check on {ItemId}", itemId);
             return false;
         }
     }

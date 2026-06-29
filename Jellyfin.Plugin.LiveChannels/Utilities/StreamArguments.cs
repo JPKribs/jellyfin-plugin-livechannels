@@ -11,17 +11,25 @@ namespace Jellyfin.Plugin.LiveChannels.Utilities;
 /// </summary>
 public static class StreamArguments
 {
-    // The producer reads at realtime. Its output is packaged by an HLS segmenter into a rolling window of small
-    // segments (the playlist), and that window is the buffer the player draws from. Reading faster than realtime
-    // would push the window forward faster than the player consumes it, so the player would fall off the back as
-    // old segments are deleted. The burst is applied ONCE per session (the first item, or the single concat
-    // ffmpeg) to fill a head start before tune-in; it must never apply to a later item mid-stream (see Build).
-    private const string ReadRate = "1.0";
+    // The producer reads just above realtime. Its output is packaged by an HLS segmenter into a rolling window of
+    // small segments (the playlist), and that window is the buffer the player draws from. A small margin over
+    // realtime keeps the producer from ever being the bottleneck: it can recover the head start that a per-item
+    // boundary gap consumes instead of sitting exactly at the live edge. It must stay close to realtime, though,
+    // because reading much faster pushes the window forward faster than the player consumes it and the player
+    // falls off the back as old segments are deleted. The burst is applied ONCE per session (the first item, or
+    // the single concat ffmpeg) to fill a head start before tune-in; it must never apply to a later item mid-stream.
+    private const string ReadRate = "1.1";
     private const string ReadRateInitialBurst = "30";
 
-    // How the HLS segmenter packages the producer's continuous TS into a rolling, self-trimming playlist.
-    private const string HlsSegmentSeconds = "4";
-    private const string HlsListSize = "12";
+    // The HLS segmenter packages the producer's continuous TS into a rolling, self-trimming playlist of fixed
+    // length segments. How many segments are retained (the window) is configurable; see SegmentsForWindow. The
+    // window has to cover the drift the 1.1x ReadRate creates (the live edge advances ~0.1s per second faster than
+    // the player consumes), and it is also the upper bound on disk use, so it trades catch-up headroom for space.
+    private const int HlsSegmentSeconds = 4;
+
+    // Never keep fewer than this many segments, so even a tiny configured window leaves the player something to
+    // work with on tune-in.
+    private const int MinHlsSegments = 12;
 
     /// <summary>
     /// Builds the ffmpeg arguments for one item. Every item is re-encoded to one uniform MPEG-TS (in the
@@ -428,14 +436,24 @@ public static class StreamArguments
     }
 
     /// <summary>
+    /// Converts a configured window length in minutes into the number of HLS segments to retain, clamped to a
+    /// sensible floor. The window must cover the drift the above-realtime producer creates, and bounds disk use.
+    /// </summary>
+    /// <param name="windowMinutes">The desired on-disk window in minutes.</param>
+    /// <returns>The segment count for the playlist window.</returns>
+    public static int SegmentsForWindow(int windowMinutes) =>
+        Math.Max(MinHlsSegments, Math.Max(1, windowMinutes) * 60 / HlsSegmentSeconds);
+
+    /// <summary>
     /// Builds the ffmpeg arguments for the HLS segmenter: it reads the producer's continuous MPEG-TS on stdin and
     /// repackages it (no re-encode) into a rolling window of small segments plus a live playlist, deleting
     /// segments as they age out so on-disk size stays bounded no matter how long the channel runs.
     /// </summary>
     /// <param name="segmentPattern">The ffmpeg segment filename pattern (e.g. <c>.../seg%d.ts</c>).</param>
     /// <param name="playlistPath">The playlist (.m3u8) path Jellyfin reads.</param>
+    /// <param name="listSize">How many segments to retain in the playlist window (see <see cref="SegmentsForWindow"/>).</param>
     /// <returns>The ffmpeg argument list.</returns>
-    public static List<string> BuildHlsSegmenter(string segmentPattern, string playlistPath)
+    public static List<string> BuildHlsSegmenter(string segmentPattern, string playlistPath, int listSize)
     {
         ArgumentNullException.ThrowIfNull(segmentPattern);
         ArgumentNullException.ThrowIfNull(playlistPath);
@@ -448,8 +466,8 @@ public static class StreamArguments
         // is the player's buffer and also the upper bound on disk use.
         Add(args, "-fflags", "+genpts", "-i", "pipe:0", "-c", "copy",
             "-f", "hls",
-            "-hls_time", HlsSegmentSeconds,
-            "-hls_list_size", HlsListSize,
+            "-hls_time", HlsSegmentSeconds.ToString(CultureInfo.InvariantCulture),
+            "-hls_list_size", listSize.ToString(CultureInfo.InvariantCulture),
             "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments",
             "-hls_segment_type", "mpegts",
             "-hls_segment_filename", segmentPattern,

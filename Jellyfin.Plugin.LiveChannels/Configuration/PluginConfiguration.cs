@@ -43,6 +43,9 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Gets or sets the maximum number of minutes any one channel stream may encode before it is closed automatically. A backstop for clients that never send the close on stop. It is blunt: a genuinely watched channel is also closed at the limit, after which the client simply re-tunes. Zero turns the limit off.</summary>
     public int SessionTimeoutMinutes { get; set; }
 
+    /// <summary>Gets or sets how many minutes of segments each channel keeps on disk (the rolling HLS window). A larger window lets playback fall further behind the live edge without skipping (the producer runs slightly above realtime, so the edge drifts ahead over a long watch), at the cost of more disk per active channel. Defaults to 5 minutes.</summary>
+    public int StreamWindowMinutes { get; set; } = 5;
+
     /// <summary>Gets or sets the built-in "Popular" channel's settings. It always lives at channel 0 and draws its content from the recent, top-rated, and most-watched movies and shows on the server, so its number and content are fixed; everything else (name, icon, rating band, subtitle rule, loop behaviour, and whether it is enabled) is configurable here.</summary>
     public Channel PopularChannel { get; set; } = new()
     {

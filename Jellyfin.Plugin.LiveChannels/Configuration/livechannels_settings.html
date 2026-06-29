@@ -118,6 +118,12 @@
                             </div>
 
                             <div class="inputContainer">
+                                <label for="streamWindow">Stream window (minutes)</label>
+                                <input is="emby-input" type="number" id="streamWindow" min="1" step="1" autocomplete="off" />
+                                <div class="fieldDescription">How much each live channel keeps on disk. A larger window lets playback fall further behind without skipping, at the cost of more disk per channel. 5 minutes is plenty for normal viewing.</div>
+                            </div>
+
+                            <div class="inputContainer">
                                 <label for="streamDirectory">Stream file location</label>
                                 <input is="emby-input" type="text" id="streamDirectory" autocomplete="off" placeholder="Leave blank for the Jellyfin cache" />
                                 <div class="fieldDescription">Where playlists and segments are written while playing, taking effect on restart. Blank uses Jellyfin's cache.</div>

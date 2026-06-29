@@ -53,13 +53,14 @@ public class StreamArgumentsTests
     }
 
     [Fact]
-    public void LaterItems_RunAtRealtime_WithNoBurst()
+    public void LaterItems_PaceNearRealtime_WithNoBurst()
     {
-        // A burst on anything but the first item shoves its content into the HLS playlist faster than realtime,
-        // lurching the live edge forward until the player falls off the back of the delete window. Every item
-        // after the first must pace at exactly realtime with no burst.
+        // A burst on anything but the first item shoves its content into the HLS playlist far faster than realtime,
+        // lurching the live edge forward until the player falls off the back of the delete window. Every item after
+        // the first runs just above realtime (a small margin so the producer can recover a boundary gap and never
+        // be the bottleneck) but with NO burst, which is the part that would lurch the edge.
         var a = Build();
-        Assert.True(Pair(a, "-readrate", "1.0"));
+        Assert.True(Pair(a, "-readrate", "1.1"));
         Assert.DoesNotContain("-readrate_initial_burst", a);
     }
 
