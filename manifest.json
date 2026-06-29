@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.6.3",
+        "changelog": "## Features\r\n- Run the whole Intel QSV and VAAPI pipeline on the GPU the way Jellyfin does, so interlaced and 10-bit content plays instead of failing to start\r\n- Add a producer rate setting that feeds the player at realtime by default and can be raised to keep the server from falling behind\r\n- Limit the plugin API to administrators so only the dashboard can list or close live sessions\r\n- Close the encoder when a tune in is cancelled so an abandoned stream stops leaking",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.3/jellyfin-plugin-livechannels-10.11.6.3.zip",
+        "checksum": "aa06c5ec7a71655f16a400fc023525d4",
+        "timestamp": "2026-06-29T09:34:56Z"
+      },
+      {
         "version": "10.11.6.2",
         "changelog": "## Features\r\n- Play interlaced content on Intel QSV and VAAPI by decoding it in software for the whole file, so it no longer fails to start\r\n- Run the producer a little above realtime so it can recover a boundary gap and never become the bottleneck",
         "targetAbi": "10.11.9.0",
