@@ -28,8 +28,11 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
         : base(applicationPaths, xmlSerializer)
     {
         ArgumentNullException.ThrowIfNull(logger);
+        _applicationPaths = applicationPaths;
         logger.LogInformation("Live Channels plugin initialized");
     }
+
+    private readonly IApplicationPaths _applicationPaths;
 
     /// <inheritdoc />
     public override string Name => "Live Channels";
@@ -52,6 +55,10 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
         {
             ConfigurationValidator.Validate(config);
         }
+
+        // A channel edit must not be served from a stale schedule, so drop every cached schedule; the next guide
+        // refresh or tune-in rebuilds it from the new configuration.
+        ChannelService.ClearScheduleCache(_applicationPaths);
 
         base.UpdateConfiguration(configuration);
     }

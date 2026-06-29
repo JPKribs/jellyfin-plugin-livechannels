@@ -4,12 +4,14 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.LiveChannels.Models;
+using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
@@ -57,6 +59,20 @@ public class ChannelService
     // format nv12 for hwframe download", exit 234) regardless of whether the source is interlaced or progressive.
     private readonly ConcurrentDictionary<Guid, bool> _tenBitCache = new();
 
+    // Resolved schedules cached on disk so the expensive library resolve runs once -- on guide refresh -- and every
+    // tune-in reads the result instead of rebuilding it on the stream's start-up critical path (a large channel's
+    // rebuild took ~40s, past the live-playlist deadline, and the client reported "Failed to load"). One file holds
+    // every channel's loop, stored in the stream root (default <cache>/livechannels) as schedule.json -- a loose
+    // file, not a session directory, so the stream cleanup task (which only removes directories) never deletes it.
+    // Cleared when the plugin configuration changes so channel edits take effect on the next guide refresh or tune-in.
+    private static readonly JsonSerializerOptions ScheduleCacheJson = new() { PropertyNameCaseInsensitive = true };
+    private static readonly object ScheduleLock = new();
+
+    /// <summary>The file name of the persistent schedule cache, kept in the stream root.</summary>
+    public const string ScheduleFileName = "schedule.json";
+
+    private readonly string _scheduleFile;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="ChannelService"/> class.
     /// </summary>
@@ -66,8 +82,9 @@ public class ChannelService
     /// <param name="localization">The localization manager used to rank official ratings.</param>
     /// <param name="userManager">The user manager, used to read server-wide watch data for the Popular channel.</param>
     /// <param name="userDataManager">The user-data manager, used to read per-item play counts for the Popular channel.</param>
+    /// <param name="appPaths">The application paths, used to locate the stream root the schedule cache lives in.</param>
     /// <param name="logger">The logger.</param>
-    public ChannelService(ILibraryManager libraryManager, IMediaSourceManager mediaSourceManager, ISubtitleEncoder subtitleEncoder, ILocalizationManager localization, IUserManager userManager, IUserDataManager userDataManager, ILogger<ChannelService> logger)
+    public ChannelService(ILibraryManager libraryManager, IMediaSourceManager mediaSourceManager, ISubtitleEncoder subtitleEncoder, ILocalizationManager localization, IUserManager userManager, IUserDataManager userDataManager, IApplicationPaths appPaths, ILogger<ChannelService> logger)
     {
         _libraryManager = libraryManager;
         _mediaSourceManager = mediaSourceManager;
@@ -75,6 +92,7 @@ public class ChannelService
         _localization = localization;
         _userManager = userManager;
         _userDataManager = userDataManager;
+        _scheduleFile = ScheduleFile(appPaths);
         _logger = logger;
     }
 
@@ -443,16 +461,137 @@ public class ChannelService
     }
 
     /// <summary>
-    /// Resolves a channel's items into the ordered, schedulable loop it cycles through. Content is the union
-    /// of every library source; items without a playable file or a positive runtime are dropped because they
-    /// cannot be placed on the timeline.
+    /// Returns a channel's ordered program loop, reading the on-disk cache the guide refresh writes so a tune-in
+    /// never pays the full library resolve. Builds (and caches) it only when no cache exists yet.
     /// </summary>
     /// <param name="channel">The channel to resolve.</param>
     /// <returns>The ordered program loop.</returns>
     public IReadOnlyList<ProgramEntry> ResolvePrograms(Channel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
+        return TryReadScheduleCache(channel) ?? RefreshPrograms(channel);
+    }
 
+    /// <summary>
+    /// Builds a channel's program loop and overwrites its on-disk cache. Called on guide refresh so the schedule
+    /// is built once and every tune-in until the next refresh reuses it instead of re-resolving the library.
+    /// </summary>
+    /// <param name="channel">The channel to resolve.</param>
+    /// <returns>The freshly built, ordered program loop.</returns>
+    public IReadOnlyList<ProgramEntry> RefreshPrograms(Channel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        var programs = BuildPrograms(channel);
+        WriteScheduleCache(channel, programs);
+        return programs;
+    }
+
+    /// <summary>
+    /// Deletes the cached schedule. Called when the plugin configuration changes so a channel edit is never served
+    /// from a stale cache; the next guide refresh (or tune-in) rebuilds it.
+    /// </summary>
+    /// <param name="paths">The application paths, used to locate the stream root the cache lives in.</param>
+    public static void ClearScheduleCache(IApplicationPaths paths)
+    {
+        try
+        {
+            lock (ScheduleLock)
+            {
+                var file = ScheduleFile(paths);
+                if (File.Exists(file))
+                {
+                    File.Delete(file);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Best effort: a stale cache is overwritten on the next guide refresh regardless.
+        }
+    }
+
+    /// <summary>
+    /// Resolves the directory the live streams (and the schedule cache) are written to: the configured stream
+    /// directory, or a livechannels folder under Jellyfin's cache by default. Shared with the live-TV service so
+    /// both agree on where schedule.json lives.
+    /// </summary>
+    /// <param name="paths">The application paths.</param>
+    /// <returns>The stream root directory.</returns>
+    public static string ResolveStreamRoot(IApplicationPaths paths)
+    {
+        var configured = Plugin.Instance?.ReadConfiguration(c => c.StreamDirectory);
+        return string.IsNullOrWhiteSpace(configured)
+            ? Path.Combine(paths.CachePath, "livechannels")
+            : configured;
+    }
+
+    private static string ScheduleFile(IApplicationPaths paths) => Path.Combine(ResolveStreamRoot(paths), ScheduleFileName);
+
+    private List<ProgramEntry>? TryReadScheduleCache(Channel channel)
+    {
+        try
+        {
+            return ReadSchedules().TryGetValue(channel.Id, out var programs) && programs.Count > 0 ? programs : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read the cached schedule for channel {Name}; rebuilding it", channel.Name);
+            return null;
+        }
+    }
+
+    private void WriteScheduleCache(Channel channel, IReadOnlyList<ProgramEntry> programs)
+    {
+        try
+        {
+            // The whole channel->schedule map lives in one file, so read-modify-write it under a lock: the guide
+            // refresh updates one channel at a time and must not clobber the others' entries.
+            lock (ScheduleLock)
+            {
+                var all = ReadSchedules();
+                all[channel.Id] = programs as List<ProgramEntry> ?? programs.ToList();
+
+                Directory.CreateDirectory(Path.GetDirectoryName(_scheduleFile)!);
+
+                // Write to a unique temp file then move it into place so a concurrent reader never sees a
+                // half-written cache.
+                var temp = _scheduleFile + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
+                using (var stream = File.Create(temp))
+                {
+                    JsonSerializer.Serialize(stream, all, ScheduleCacheJson);
+                }
+
+                File.Move(temp, _scheduleFile, overwrite: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not write the schedule cache for channel {Name}", channel.Name);
+        }
+    }
+
+    // The whole channel id -> schedule map read from schedule.json, or an empty map when there is no cache yet.
+    private Dictionary<string, List<ProgramEntry>> ReadSchedules()
+    {
+        if (!File.Exists(_scheduleFile))
+        {
+            return new Dictionary<string, List<ProgramEntry>>(StringComparer.Ordinal);
+        }
+
+        using var stream = File.OpenRead(_scheduleFile);
+        return JsonSerializer.Deserialize<Dictionary<string, List<ProgramEntry>>>(stream, ScheduleCacheJson)
+            ?? new Dictionary<string, List<ProgramEntry>>(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Resolves a channel's items into the ordered, schedulable loop it cycles through. Content is the union
+    /// of every library source; items without a playable file or a positive runtime are dropped because they
+    /// cannot be placed on the timeline.
+    /// </summary>
+    /// <param name="channel">The channel to resolve.</param>
+    /// <returns>The ordered program loop.</returns>
+    private IReadOnlyList<ProgramEntry> BuildPrograms(Channel channel)
+    {
         if (string.Equals(channel.Id, PopularChannelId, StringComparison.Ordinal))
         {
             return ResolvePopularPrograms(channel);
@@ -841,8 +980,7 @@ public class ChannelService
         else
         {
             var direct = QueryLibrary(libraryId, include, ratings, kinds);
-            var viaSeries = SeriesMatching(libraryId, include)
-                .SelectMany(EpisodesOf)
+            var viaSeries = EpisodesOfSeries(SeriesMatching(libraryId, include))
                 .Where(e => KindAllowed(e, kinds) && ratings.Allows(e));
             items = direct.Concat(viaSeries).DistinctBy(i => i.Id);
         }
@@ -949,6 +1087,35 @@ public class ChannelService
             Recursive = true,
             IsVirtualItem = false
         });
+
+    // The episodes of every matching series in one batched query (AncestorIds matches descendants of any listed
+    // series), instead of a GetItemList call PER series. A genre matching hundreds of series otherwise ran hundreds
+    // of sequential queries and stalled a large channel's start-up for ~40s -- past the live-playlist deadline, so
+    // the stream handed Jellyfin an empty playlist and the client reported "Failed to load". Chunked so a genre
+    // matching very many series cannot overflow the query's host-parameter limit.
+    private IReadOnlyList<BaseItem> EpisodesOfSeries(List<Guid> seriesIds)
+    {
+        if (seriesIds.Count == 0)
+        {
+            return Array.Empty<BaseItem>();
+        }
+
+        const int batchSize = 200;
+        var episodes = new List<BaseItem>();
+        for (var start = 0; start < seriesIds.Count; start += batchSize)
+        {
+            var ancestors = seriesIds.Skip(start).Take(batchSize).ToArray();
+            episodes.AddRange(_libraryManager.GetItemList(new InternalItemsQuery
+            {
+                IncludeItemTypes = new[] { BaseItemKind.Episode },
+                AncestorIds = ancestors,
+                Recursive = true,
+                IsVirtualItem = false
+            }));
+        }
+
+        return episodes;
+    }
 
     private List<BaseItem> QueryLibrary(Guid libraryId, string[] genres, RatingFilter ratings, BaseItemKind[] kinds)
     {

@@ -62,13 +62,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         _activity = activity;
         _logger = logger;
 
-        // Where each channel's growing stream file is written. Configurable, since the file lives for the whole
-        // watch and the system temp is often small or RAM-backed; defaults to a livechannels folder in Jellyfin's
-        // cache. A change takes effect on the next restart (active streams keep using the directory they started in).
-        var configured = Plugin.Instance?.ReadConfiguration(c => c.StreamDirectory);
-        _streamRoot = string.IsNullOrWhiteSpace(configured)
-            ? Path.Combine(appPaths.CachePath, "livechannels")
-            : configured;
+        // Where each channel's growing stream file is written (and where the schedule cache lives). Configurable,
+        // since the file lives for the whole watch and the system temp is often small or RAM-backed; defaults to a
+        // livechannels folder in Jellyfin's cache. Resolved by ChannelService so both agree on the same root. A
+        // change takes effect on the next restart (active streams keep using the directory they started in).
+        _streamRoot = ChannelService.ResolveStreamRoot(appPaths);
 
         // A fresh process owns no live streams, so anything left in the stream root is an orphan from a previous
         // run that ended without CloseLiveStream (a crash). Sweep it now, then periodically reap sessions whose
@@ -121,7 +119,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             return Task.FromResult(Enumerable.Empty<ProgramInfo>());
         }
 
-        var programs = _channels.ResolvePrograms(channel);
+        // The guide refresh is the single build: resolve the loop and overwrite the on-disk cache so every tune-in
+        // until the next refresh reads it instead of re-resolving the library on the stream's start-up path.
+        var programs = _channels.RefreshPrograms(channel);
         if (programs.Count == 0)
         {
             return Task.FromResult(Enumerable.Empty<ProgramInfo>());
@@ -368,9 +368,15 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
                     TryDeleteDirectory(sessionDir);
                 }
 
-                // Tidy any stray loose files from older (single-file) versions.
+                // Tidy any stray loose files from older (single-file) versions, but keep the persistent schedule
+                // cache: it is a long-lived file in this root, not an orphaned stream artifact.
                 foreach (var file in Directory.EnumerateFiles(_streamRoot))
                 {
+                    if (string.Equals(Path.GetFileName(file), ChannelService.ScheduleFileName, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
                     TryDeleteFile(file);
                 }
             }
