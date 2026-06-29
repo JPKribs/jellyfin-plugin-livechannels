@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.6.2",
+        "changelog": "## Features\r\n- Play interlaced content on Intel QSV and VAAPI by decoding it in software for the whole file, so it no longer fails to start\r\n- Run the producer a little above realtime so it can recover a boundary gap and never become the bottleneck",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.2/jellyfin-plugin-livechannels-10.11.6.2.zip",
+        "checksum": "c911a95af5a7a9572b4abbbdc8a988a1",
+        "timestamp": "2026-06-29T08:38:39Z"
+      },
+      {
         "version": "10.11.6.1",
         "changelog": "## Features\r\n- Add a per channel option to include home videos and other loose video files alongside movies, episodes, and music videos\r\n- Start large channels far faster by skipping a full per item HDR scan when it cannot change how the channel plays",
         "targetAbi": "10.11.9.0",
