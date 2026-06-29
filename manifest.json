@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.6.5",
+        "changelog": "## Features\r\n- Build each channel schedule once and reuse it so large channels start quickly instead of failing to load",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.5/jellyfin-plugin-livechannels-10.11.6.5.zip",
+        "checksum": "c5be73bdb8b62759838af112855660de",
+        "timestamp": "2026-06-29T18:32:52Z"
+      },
+      {
         "version": "10.11.6.4",
         "changelog": "## Features\r\n- Play 10 bit content on Intel by decoding it in software so it no longer fails to start\r\n- Restore hardware accelerated playback on Intel after the previous build left it unable to start",
         "targetAbi": "10.11.9.0",
