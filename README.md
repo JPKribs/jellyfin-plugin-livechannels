@@ -1,6 +1,6 @@
 # ![Live Channels](Jellyfin.Plugin.LiveChannels/Assets/Logo.png)
 
-**A Jellyfin plugin that builds looping virtual TV channels from your own library and presents them natively in Jellyfin's Live TV. No tuner URLs to paste and no exposed endpoints.**
+**A Jellyfin plugin that builds looping virtual TV channels from your own library and presents them natively in Jellyfin's Live TV. It ships with a ready to watch Popular channel, fills out the guide with real metadata and landscape artwork, and has no tuner URLs to paste and no exposed endpoints.**
 
 ## Why Does This Exist
 
@@ -20,6 +20,10 @@ A channel pulls from one or more **library cards**. Add a card per library and t
 
 A channel always includes whatever its libraries and filters yield: movies, episodes, and music videos. Only items with a real media file and a known runtime can be scheduled. Anything else is skipped.
 
+### The Popular channel
+
+Out of the box the plugin serves a **Popular** channel on channel 0, with no setup at all. It loops the most popular movies and shows across your whole library, scored by community rating and blended with a recency boost so recent additions show up alongside long time favourites. Series play as blocks of four consecutive episodes in air order, so a popular show airs a coherent run rather than scattered single episodes. Turn it off any time with the **Popular channel** toggle on the Settings tab.
+
 ### Channel settings
 
 Per channel you can also set:
@@ -38,7 +42,11 @@ Per channel you can also set:
 
 ### Output
 
-Resolution, video codec, audio codec, and bitrate are set on the **Settings** tab and apply to every channel. Decoding and encoding both follow Jellyfin's own hardware acceleration, with a switch to force software when you want it. HDR sources are tone mapped to SDR so they never play washed out. 1080p is the practical sweet spot for a round the clock channel.
+Resolution, video codec, audio codec, and bitrate are set on the **Settings** tab and apply to every channel. The same tab holds the playback buffer length, where stream files are written, and the Popular channel toggle. Decoding and encoding both follow Jellyfin's own hardware acceleration, with a switch to force software when you want it. HDR sources are tone mapped to SDR so they never play washed out. 1080p is the practical sweet spot for a round the clock channel.
+
+### Guide
+
+Every program in the guide is filled out from your library: a description, genres, the official and community ratings, the production year and original air date, and season and episode numbers. Episodes show the series as the title with the episode name beside it, and recently added content is flagged as new. Artwork is always landscape so the guide stays tidy, with a movie showing its backdrop while episodes and music videos show their primary thumbnail.
 
 ## Versioning
 

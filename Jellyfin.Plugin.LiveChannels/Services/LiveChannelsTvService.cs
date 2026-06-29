@@ -133,25 +133,39 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         foreach (var slot in schedule)
         {
             var p = slot.Program;
+
+            // For episodes, hand Jellyfin the series as the program name and the episode's own name as the
+            // episode title, so the guide renders "Andor — Reckoning · S1E3" instead of a single blurred string.
+            var isEpisode = p.SeriesId.HasValue && !string.IsNullOrWhiteSpace(p.SeriesName);
+            var isNew = p.DateAdded >= newSince;
             list.Add(new ProgramInfo
             {
                 Id = channelId + "_" + slot.Start.Ticks.ToString(CultureInfo.InvariantCulture),
                 ChannelId = channelId,
-                Name = p.Title,
+                Name = isEpisode ? p.SeriesName! : p.Title,
+                EpisodeTitle = isEpisode ? p.RawName : null,
                 Overview = p.Overview,
                 StartDate = slot.Start,
                 EndDate = slot.Stop,
                 Genres = p.Genres.ToList(),
                 OfficialRating = p.OfficialRating,
+                CommunityRating = p.CommunityRating,
                 ProductionYear = p.Year,
+                OriginalAirDate = p.PremiereDate,
                 SeasonNumber = p.SeasonNumber,
                 EpisodeNumber = p.EpisodeNumber,
+                // SeriesId links episodes to their series; ShowId groups the repeated airings of one item in the
+                // guide (the series for episodes, the item itself for movies).
+                SeriesId = p.SeriesId?.ToString("N", CultureInfo.InvariantCulture),
+                ShowId = (p.SeriesId ?? p.ItemId).ToString("N", CultureInfo.InvariantCulture),
                 IsSeries = p.SeriesId.HasValue,
                 IsMovie = p.IsMovie,
                 IsKids = p.IsKids,
-                IsRepeat = p.DateAdded < newSince,
-                ImagePath = p.PrimaryImagePath,
-                HasImage = !string.IsNullOrEmpty(p.PrimaryImagePath)
+                IsHD = p.SourceHeight >= 720,
+                IsRepeat = !isNew,
+                IsPremiere = isNew,
+                ImagePath = p.GuideImagePath,
+                HasImage = !string.IsNullOrEmpty(p.GuideImagePath)
             });
         }
 

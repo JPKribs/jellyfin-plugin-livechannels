@@ -7,6 +7,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.LiveChannels.Models;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
@@ -319,10 +320,16 @@ public class ChannelService
             return Array.Empty<Channel>();
         }
 
-        return Plugin.Instance.ReadConfiguration(config => config.Channels
+        var channels = Plugin.Instance.ReadConfiguration(config => config.Channels
             .Where(c => c.Enabled && !string.IsNullOrEmpty(c.Id))
-            .OrderBy(c => c.Number)
             .ToList());
+
+        if (PopularChannelEnabled())
+        {
+            channels.Add(BuildPopularChannel());
+        }
+
+        return channels.OrderBy(c => c.Number).ToList();
     }
 
     /// <summary>
@@ -335,6 +342,11 @@ public class ChannelService
         if (string.IsNullOrEmpty(id) || Plugin.Instance is null)
         {
             return null;
+        }
+
+        if (string.Equals(id, PopularChannelId, StringComparison.Ordinal))
+        {
+            return PopularChannelEnabled() ? BuildPopularChannel() : null;
         }
 
         return Plugin.Instance.ReadConfiguration(config => config.Channels
@@ -351,6 +363,11 @@ public class ChannelService
     public IReadOnlyList<ProgramEntry> ResolvePrograms(Channel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
+
+        if (string.Equals(channel.Id, PopularChannelId, StringComparison.Ordinal))
+        {
+            return ResolvePopularPrograms();
+        }
 
         var ratings = new RatingFilter(
             ResolveRatingScore(channel.MinOfficialRating),
@@ -403,6 +420,132 @@ public class ChannelService
             channel.FavorStrength);
 
         return ProgramLoopBuilder.Build(entries, options);
+    }
+
+    // ---- Built-in "Popular" channel (channel 0) ----
+
+    /// <summary>The stable id of the built-in Popular channel.</summary>
+    public const string PopularChannelId = "livechannels-popular";
+
+    private const int PopularPerKind = 10;
+
+    // Play a run of consecutive episodes of a series before moving on, in air order, so a popular show airs as a
+    // coherent block (e.g. episodes 5, 6, 7, 8) rather than scattered single episodes.
+    private const int PopularEpisodesPerBlock = 4;
+
+    private static bool PopularChannelEnabled()
+        => Plugin.Instance?.ReadConfiguration(c => c.PopularChannelEnabled) ?? false;
+
+    // The synthetic channel definition: number 0, a Material Symbol logo, shuffled. It carries no per-channel
+    // filters because its content comes from the popular query rather than configured library sources.
+    private static Channel BuildPopularChannel() => new()
+    {
+        Id = PopularChannelId,
+        Name = "Popular",
+        Number = 0,
+        LogoStyle = LogoStyle.Symbol,
+        LogoSymbol = "diversity_1",
+        LogoShowName = true,
+        Enabled = true,
+        Shuffle = true,
+        ShuffleEpisodes = false,
+        EpisodesPerBlock = PopularEpisodesPerBlock,
+        IncludeUnrated = true,
+        KidsRatingThreshold = string.Empty
+    };
+
+    // Resolves the Popular channel's loop: the most popular movies and shows across the whole library (series
+    // expand to their episodes), blended with recent additions so new content still surfaces.
+    private IReadOnlyList<ProgramEntry> ResolvePopularPrograms()
+    {
+        var items = new Dictionary<Guid, BaseItem>();
+        foreach (var series in TopPopular(BaseItemKind.Series, PopularPerKind))
+        {
+            foreach (var episode in EpisodesOf(series.Id))
+            {
+                items[episode.Id] = episode;
+            }
+        }
+
+        foreach (var movie in TopPopular(BaseItemKind.Movie, PopularPerKind))
+        {
+            items[movie.Id] = movie;
+        }
+
+        var entries = new List<ProgramEntry>();
+        foreach (var item in items.Values)
+        {
+            if (item is Episode ep && ep.ParentIndexNumber == 0)
+            {
+                continue; // skip specials
+            }
+
+            var entry = ToEntry(item, kidsScore: null);
+            if (entry is not null)
+            {
+                entries.Add(entry);
+            }
+        }
+
+        var options = new ChannelLoopOptions(
+            PopularEpisodesPerBlock,
+            true,
+            true,
+            false,
+            PopularChannelId,
+            FavorKind.None,
+            FavorStrength.Moderate);
+
+        return ProgramLoopBuilder.Build(entries, options);
+    }
+
+    // The top N items of a kind across every library, ranked by a popularity score that blends community rating
+    // with a recency boost. Two candidate pools (highest rated, most recently added) are merged so both
+    // well-loved and brand-new content can make the cut.
+    private List<BaseItem> TopPopular(BaseItemKind kind, int count)
+    {
+        var byRating = _libraryManager.GetItemList(new InternalItemsQuery
+        {
+            IncludeItemTypes = new[] { kind },
+            Recursive = true,
+            IsVirtualItem = false,
+            OrderBy = new[] { (ItemSortBy.CommunityRating, SortOrder.Descending) },
+            Limit = count * 3
+        });
+
+        var byRecency = _libraryManager.GetItemList(new InternalItemsQuery
+        {
+            IncludeItemTypes = new[] { kind },
+            Recursive = true,
+            IsVirtualItem = false,
+            OrderBy = new[] { (ItemSortBy.DateCreated, SortOrder.Descending) },
+            Limit = count
+        });
+
+        var now = DateTime.UtcNow;
+        return byRating.Concat(byRecency)
+            .DistinctBy(i => i.Id)
+            .OrderByDescending(i => PopularityScore(i.CommunityRating, i.DateCreated, now))
+            .Take(count)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Scores an item's "popularity" for the built-in Popular channel: its community rating (0-10) plus a recency
+    /// boost that adds up to 3 for a brand-new item and decays to zero over about two years.
+    /// </summary>
+    /// <param name="communityRating">The item's community rating, or <c>null</c>.</param>
+    /// <param name="dateAdded">When the item was added to the library.</param>
+    /// <param name="now">The current UTC time.</param>
+    /// <returns>The blended score; a higher score ranks first.</returns>
+    public static double PopularityScore(float? communityRating, DateTime dateAdded, DateTime now)
+    {
+        const double RecencyWindowDays = 730.0;
+        const double MaxRecencyBoost = 3.0;
+        var rating = communityRating ?? 0f;
+        var ageDays = Math.Max(0, (now - dateAdded).TotalDays);
+        var recency = MaxRecencyBoost * Math.Max(0, 1 - (ageDays / RecencyWindowDays));
+        return rating + recency;
     }
 
     // Resolves one library source to its matching items (before specials/ordering are applied). The
@@ -642,10 +785,33 @@ public class ChannelService
             SeriesId = seriesId,
             SeriesName = seriesName,
             RawName = rawName,
-            HasPrimaryImage = item.HasImage(ImageType.Primary),
-            PrimaryImagePath = item.HasImage(ImageType.Primary) ? item.GetImagePath(ImageType.Primary, 0) : null,
+            GuideImagePath = ResolveGuideImage(item),
             SourceHeight = item.Height,
-            DateAdded = item.DateCreated
+            DateAdded = item.DateCreated,
+            CommunityRating = item.CommunityRating,
+            PremiereDate = item.PremiereDate
         };
+    }
+
+    // Picks landscape-friendly guide artwork: a movie's backdrop, otherwise the primary image (episode and
+    // music-video primaries are already landscape thumbnails). Falls back to the other type so a program still
+    // shows something when its preferred art is missing.
+    private static string? ResolveGuideImage(BaseItem item)
+    {
+        var isMovie = item.GetBaseItemKind() == BaseItemKind.Movie;
+        var preferred = isMovie ? ImageType.Backdrop : ImageType.Primary;
+        var fallback = isMovie ? ImageType.Primary : ImageType.Backdrop;
+
+        if (item.HasImage(preferred))
+        {
+            return item.GetImagePath(preferred, 0);
+        }
+
+        if (item.HasImage(fallback))
+        {
+            return item.GetImagePath(fallback, 0);
+        }
+
+        return null;
     }
 }

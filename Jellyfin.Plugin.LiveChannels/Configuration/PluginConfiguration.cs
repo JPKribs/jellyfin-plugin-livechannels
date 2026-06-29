@@ -33,4 +33,7 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>Gets or sets the directory each channel's live playlist and its rolling stream segments are written to while playing. Empty (the default) uses a <c>livechannels</c> folder inside Jellyfin's cache. Only a short rolling window of segments is kept on disk at a time, so this stays small regardless of how long the channel runs.</summary>
     public string StreamDirectory { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets a value indicating whether the built-in "Popular" channel (channel 0) is served. It loops the most popular movies and shows across the whole library, blended with recent additions, with no setup required.</summary>
+    public bool PopularChannelEnabled { get; set; } = true;
 }

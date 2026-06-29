@@ -42,6 +42,7 @@ export default function (view) {
         el('videoBitrate').value = config.TranscodeVideoBitrateKbps || 4000;
         el('bufferSeconds').value = config.BufferSeconds == null ? 3 : config.BufferSeconds;
         el('streamDirectory').value = config.StreamDirectory || '';
+        el('popularChannel').checked = config.PopularChannelEnabled !== false;
         el('disableHwa').checked = !!config.DisableHardwareAcceleration;
         renderAcceleration();
     }
@@ -64,6 +65,7 @@ export default function (view) {
             var buf = parseInt(el('bufferSeconds').value, 10);
             fresh.BufferSeconds = isNaN(buf) ? 3 : Math.min(30, Math.max(0, buf));
             fresh.StreamDirectory = (el('streamDirectory').value || '').trim();
+            fresh.PopularChannelEnabled = el('popularChannel').checked;
             fresh.DisableHardwareAcceleration = el('disableHwa').checked;
             return Shared.saveConfig(fresh);
         }).then(function () {
@@ -75,8 +77,25 @@ export default function (view) {
         });
     }
 
+    // Forces Jellyfin to rebuild the Live TV guide for every channel from the current saved configuration.
+    // The schedule is a pure projection of the channels, so a guide rebuild is a full reset: a stale schedule
+    // (for example one still showing a now-excluded genre) is recreated fresh.
+    function resetSchedule() {
+        Shared.setStatus('resetStatus', 'Rebuilding schedule and guide…', false);
+        ApiClient.getScheduledTasks().then(function (tasks) {
+            var task = (tasks || []).filter(function (t) { return t.Key === 'RefreshGuide'; })[0];
+            if (!task) { throw new Error('Refresh Guide task not found'); }
+            return ApiClient.startScheduledTask(task.Id);
+        }).then(function () {
+            Shared.setStatus('resetStatus', 'Done. The guide is rebuilding in the background.', false);
+        }).catch(function () {
+            Shared.setStatus('resetStatus', 'Could not start the rebuild. Try again in a moment.', true);
+        });
+    }
+
     function bind() {
         el('btnSaveSettings').addEventListener('click', saveSettings);
+        el('btnResetSchedule').addEventListener('click', resetSchedule);
     }
 
     view.addEventListener('viewshow', function () {

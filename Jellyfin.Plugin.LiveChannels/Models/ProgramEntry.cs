@@ -69,17 +69,20 @@ public sealed class ProgramEntry
     /// <summary>Gets the item's own name (the episode title, without the series prefix), used to detect multi-part siblings.</summary>
     public string? RawName { get; init; }
 
-    /// <summary>Gets a value indicating whether the item has a primary image, so the guide only links artwork that exists.</summary>
-    public bool HasPrimaryImage { get; init; }
-
-    /// <summary>Gets the file-system path to the item's primary image, or <c>null</c>, used to show episode artwork in the guide.</summary>
-    public string? PrimaryImagePath { get; init; }
+    /// <summary>Gets the file-system path to the item's landscape guide artwork, or <c>null</c>: a movie's backdrop, otherwise the primary image (episode and music-video primaries are already landscape thumbnails).</summary>
+    public string? GuideImagePath { get; init; }
 
     /// <summary>Gets the source video height in pixels (0 when unknown), used to choose the decode pipeline (software concat vs per-item hardware decode for high-resolution sources).</summary>
     public int SourceHeight { get; init; }
 
     /// <summary>Gets the date the item was added to the library, used to flag recently-added content as new in the guide.</summary>
     public DateTime DateAdded { get; init; }
+
+    /// <summary>Gets the community/critic rating (0-10), surfaced as the guide's star rating. <c>null</c> when unrated.</summary>
+    public float? CommunityRating { get; init; }
+
+    /// <summary>Gets the original release/air date, surfaced as the guide's original air date. <c>null</c> when unknown.</summary>
+    public DateTime? PremiereDate { get; init; }
 }
 
 /// <summary>
