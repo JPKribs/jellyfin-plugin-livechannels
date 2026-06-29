@@ -435,13 +435,10 @@ public class StreamSessionService
         var pipeline = perItem ? "per-item" : "continuous";
         var burnInForcesSoftware = burnIn && !string.IsNullOrEmpty(profile.DecodeDownload);
         var intelHardware = profile.Name.Contains("qsv", StringComparison.Ordinal) || profile.Name.Contains("vaapi", StringComparison.Ordinal);
-        // On Intel the per-item path runs entirely on the GPU (VAAPI decode/deinterlace/tone-map/scale, then the
-        // QSV or VAAPI encoder), except subtitle burn-in, which composites in software. Other hardware decoders
-        // assist the per-item path (continuous only when every item is the same resolution); software otherwise.
-        var intelGpu = intelHardware && perItem && !burnIn;
-        var hwDecode = !intelHardware && !hasHdr && profile.DecodeHwaccel is not null && (perItem ? !burnInForcesSoftware : uniform);
-        var decode = intelGpu
-            ? (hasHdr ? "vaapi (HDR)" : "vaapi")
+        var hwDecode = !hasHdr && profile.DecodeHwaccel is not null && (perItem ? !burnInForcesSoftware : uniform);
+        // HDR on Intel hardware tone-maps on the GPU (VAAPI); HDR elsewhere tone-maps in software.
+        var decode = hasHdr
+            ? (intelHardware && !burnIn ? "vaapi (HDR)" : "software (HDR)")
             : (hwDecode ? profile.DecodeHwaccel! : "software");
 
         _logger.LogInformation(
@@ -487,8 +484,9 @@ public class StreamSessionService
 
         var isHdr = _channels.IsHdrSource(program.ItemId);
         var isInterlaced = _channels.IsInterlacedSource(program.ItemId);
+        var isTenBit = _channels.Is10BitSource(program.ItemId);
         var audioOrdinal = _channels.GetDefaultAudioOrdinal(program.ItemId);
-        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, isHdr, isInterlaced, audioOrdinal, initialBurst);
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, isHdr, isInterlaced, isTenBit, audioOrdinal, initialBurst);
         var total = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
@@ -496,7 +494,7 @@ public class StreamSessionService
         if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
-            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, isHdr, isInterlaced, audioOrdinal, initialBurst);
+            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, isHdr, isInterlaced, isTenBit, audioOrdinal, initialBurst);
             total = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
         }
 
@@ -511,8 +509,9 @@ public class StreamSessionService
         var subtitle = _channels.FindBurnInSubtitle(program.ItemId, channel.SubtitleBurnIn);
         var isHdr = _channels.IsHdrSource(program.ItemId);
         var isInterlaced = _channels.IsInterlacedSource(program.ItemId);
+        var isTenBit = _channels.Is10BitSource(program.ItemId);
         var audioOrdinal = _channels.GetDefaultAudioOrdinal(program.ItemId);
-        return BuildArguments(program.Path!, TimeSpan.Zero, timeline, subtitle, program.SourceHeight, null, softwareDecode, isHdr, isInterlaced, audioOrdinal, initialBurst);
+        return BuildArguments(program.Path!, TimeSpan.Zero, timeline, subtitle, program.SourceHeight, null, softwareDecode, isHdr, isInterlaced, isTenBit, audioOrdinal, initialBurst);
     }
 
     // Starts and primes the next full item so it is ready to splice with no cold-start gap. A missing file cannot
@@ -796,7 +795,7 @@ public class StreamSessionService
         }
     }
 
-    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, bool isInterlaced, int? audioOrdinal, bool initialBurst)
+    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, bool isInterlaced, bool isTenBit, int? audioOrdinal, bool initialBurst)
     {
         // Read just the scalars we need inside the config lock, rather than holding a reference to the live
         // (mutable, shared) configuration object after the lock releases.
@@ -809,24 +808,32 @@ public class StreamSessionService
         var allowHardware = !forcedSubtitle.HasValue || sourceHeight > 1080;
         var video = _encoders.ResolveVideo(videoCodec, allowHardware);
         var (audioEncoder, audioBitrate) = EncoderResolver.ResolveAudio(audioCodec);
-
-        // On Intel (QSV/VAAPI) the whole pipeline runs on the GPU (decode, deinterlace, tone-map, scale, encode),
-        // mirroring Jellyfin's own transcoder. Build handles the filter graph; here we only decide whether that
-        // all-GPU path applies. It does for everything on Intel except subtitle burn-in (the libass overlay needs
-        // system frames) and the per-item software-decode fallback. Interlaced and HDR sources stay on the GPU
-        // (deinterlace_vaapi / tonemap_vaapi); they are no longer forced to software.
         var intelHardware = video.Name.Contains("qsv", StringComparison.Ordinal) || video.Name.Contains("vaapi", StringComparison.Ordinal);
-        var useIntelGpu = intelHardware && !forcedSubtitle.HasValue && !softwareDecode;
 
-        // HDR off the Intel GPU path (VideoToolbox/NVENC/software, plus burn-in and the fallback) tone-maps in
-        // software, which needs software-decoded frames. Burn-in on a GPU-resident decoder also forces software.
-        var hdrNeedsSoftware = isHdr && !useIntelGpu;
-        var forceSoftware = softwareDecode || hdrNeedsSoftware || (forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeDownload));
+        // Two kinds of source must be software-DECODED on Intel because the hardware-decode path brings frames back
+        // with hwdownload,format=nv12, which fails (exit 234, "Invalid output format nv12 for hwframe download") on:
+        //   - interlaced QSV frames, and
+        //   - 10-bit (p010) surfaces -- this is the real cause of the cartoon-channel failures: the content is
+        //     ordinary progressive 10-bit HEVC, NOT interlaced, and 10-bit alone trips the same download.
+        // Software-decoding them avoids the download entirely; the hardware ENCODER still runs (the frames are
+        // re-uploaded via the profile's hwupload pixel stage). This software-decode + hardware-encode chain was
+        // validated by hand on the failing file (American Dad, 10-bit HEVC) at ~10x realtime. HDR keeps its own
+        // VAAPI tonemap path, so 10-bit HDR is excluded here.
+        var intelInterlaced = intelHardware && isInterlaced;
+        var intelTenBit = intelHardware && isTenBit && !isHdr;
 
-        // The Intel GPU path runs on hardware, so a failure should fall back to software exactly like a hardware
+        // HDR on an Intel hardware encoder (QSV/VAAPI) tone-maps on the GPU (handled inside Build) and must NOT be
+        // forced to software. HDR anywhere else (VideoToolbox/NVENC/software) and HDR burn-in tone-map in software,
+        // which needs software-decoded frames. Burn-in on a GPU-resident decoder also forces software (the overlay
+        // needs system frames). The caller can force software for the per-item fallback.
+        var usesHdrVaapi = isHdr && intelHardware && !forcedSubtitle.HasValue && !softwareDecode && !intelInterlaced;
+        var hdrNeedsSoftware = isHdr && !usesHdrVaapi;
+        var forceSoftware = softwareDecode || hdrNeedsSoftware || intelInterlaced || intelTenBit || (forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeDownload));
+
+        // The HDR VAAPI path runs on hardware, so a failure should fall back to software exactly like a hardware
         // decode does (StreamItemAsync retries with softwareDecode).
-        var hardwareDecode = useIntelGpu || (!forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel));
-        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurst, isInterlaced, readRate);
+        var hardwareDecode = usesHdrVaapi || (!forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel));
+        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurst, readRate);
         return (args, hardwareDecode);
     }
 

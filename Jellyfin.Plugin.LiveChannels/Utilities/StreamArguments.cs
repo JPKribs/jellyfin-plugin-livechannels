@@ -12,13 +12,12 @@ namespace Jellyfin.Plugin.LiveChannels.Utilities;
 public static class StreamArguments
 {
     // How fast the producer reads is configurable (StreamReadRate, passed in as a formatted string). Its output is
-    // packaged by an HLS segmenter into a rolling window of small segments (the playlist), and that window is the
-    // buffer the player draws from. At 1.0 the producer feeds exactly realtime. A small margin over realtime keeps
-    // it from ever being the bottleneck (it can recover the head start a per-item boundary gap consumes instead of
-    // sitting exactly at the live edge), but reading faster pushes the window forward faster than the player
-    // consumes it, so the live edge drifts ahead and the player falls off the back as old segments are deleted
-    // unless the window is enlarged to match. The burst is applied ONCE per session (the first item, or the single
-    // concat ffmpeg) to fill a head start before tune-in; it must never apply to a later item mid-stream.
+    // packaged by an HLS segmenter into a rolling window of small segments (the playlist), the buffer the player
+    // draws from. At 1.0 the producer feeds exactly realtime. A small margin over realtime keeps it from ever being
+    // the bottleneck, but reading faster pushes the live edge forward faster than the player consumes it, so the
+    // window must be enlarged to match or the player falls off the back as old segments are deleted. The burst is
+    // applied ONCE per session (the first item, or the single concat ffmpeg) to fill a head start before tune-in;
+    // it must never apply to a later item mid-stream.
     private const string DefaultReadRate = "1.0";
     private const string ReadRateInitialBurst = "30";
 
@@ -67,27 +66,21 @@ public static class StreamArguments
         bool isHdr = false,
         int? audioOrdinal = null,
         bool initialBurst = false,
-        bool isInterlaced = false,
         string readRate = DefaultReadRate)
     {
         ArgumentNullException.ThrowIfNull(path);
+        ArgumentException.ThrowIfNullOrEmpty(readRate);
         ArgumentNullException.ThrowIfNull(video);
         ArgumentNullException.ThrowIfNull(audioEncoder);
-        ArgumentException.ThrowIfNullOrEmpty(readRate);
 
         var burnIn = forcedSubtitle.HasValue;
 
-        // On Intel (QSV/VAAPI) the entire pipeline runs on the GPU exactly as Jellyfin's own transcoder does:
-        // VAAPI decode, deinterlace_vaapi, tonemap_vaapi (HDR only), scale and pad on VAAPI, then hand the frames
-        // to the encoder (mapped onto a QSV frame for a QSV encoder; consumed directly by a VAAPI encoder). This
-        // is the one Intel path proven to work on this hardware: it never uses hwdownload (which fails QSV with
-        // "Invalid output format nv12 for hwframe download", exit 234) and it deinterlaces on the GPU, so the
-        // encoder sees genuinely progressive frames and tags the output progressive (no -field_order guesswork).
-        // Burn-in (libass needs system frames) and the software-decode fallback drop to the software path below.
-        var intelEncoder = IsIntelHardware(video.Name);
-        var useIntelGpu = intelEncoder && !burnIn && !softwareDecode;
-        var encoderIsQsv = video.Name.Contains("qsv", StringComparison.Ordinal);
-        var hwDecode = !useIntelGpu && !softwareDecode && !string.IsNullOrEmpty(video.DecodeHwaccel);
+        // HDR on an Intel hardware encoder (QSV/VAAPI) tone-maps entirely on the iGPU: VAAPI decode, tonemap_vaapi,
+        // scale and pad on VAAPI, then map to QSV for the encoder. Software tone-mapping a 4K HDR source cannot
+        // hold realtime on low-power hardware (e.g. an N100), so this is the only way HDR plays there. Burn-in and
+        // the software-decode fallback drop back to the software tone-map path below.
+        var useHdrVaapi = isHdr && !burnIn && !softwareDecode && IsIntelHardware(video.Name);
+        var hwDecode = !useHdrVaapi && !softwareDecode && !string.IsNullOrEmpty(video.DecodeHwaccel);
 
         // +genpts fills in any missing presentation timestamps so each item starts from a clean, monotonic
         // timeline before the offset is applied.
@@ -95,10 +88,10 @@ public static class StreamArguments
         // error, so the Sessions tab can report the live encode speed without the noisy human stats line.
         var args = new List<string> { "-hide_banner", "-loglevel", "error", "-progress", "pipe:2", "-fflags", "+genpts" };
 
-        // Hardware device initialisation goes before the input. A QSV encoder on the all-GPU path needs a VAAPI
-        // device with a QSV device derived from it (so the VAAPI filters and the QSV encoder share GPU frames); a
-        // VAAPI encoder and everything else use the encoder profile's own init.
-        foreach (var init in useIntelGpu && encoderIsQsv ? IntelVaapiInit : video.InitArgs)
+        // Hardware device initialisation goes before the input. The HDR path needs a VAAPI device with a QSV
+        // device derived from it (so VAAPI filters and the QSV encoder share frames); everything else uses the
+        // encoder profile's own init.
+        foreach (var init in useHdrVaapi ? HdrVaapiInit : video.InitArgs)
         {
             args.Add(init);
         }
@@ -108,7 +101,7 @@ public static class StreamArguments
         // the GPU (an output format plus a leading hwdownload, below, brings them back for the software scale);
         // VideoToolbox auto-downloads. The caller can force software decode (the per-item fallback when a hardware
         // decode fails, and for subtitle burn-in whose overlay needs system frames the simple way).
-        if (useIntelGpu)
+        if (useHdrVaapi)
         {
             Add(args, "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi");
         }
@@ -171,42 +164,20 @@ public static class StreamArguments
         var w = width.ToString(CultureInfo.InvariantCulture);
         var h = height.ToString(CultureInfo.InvariantCulture);
         string scale;
-        if (useIntelGpu)
+        if (useHdrVaapi)
         {
-            // Full GPU Intel pipeline (mirrors Jellyfin's own working transcode). Deinterlace on the GPU when the
-            // source is interlaced (genuine progressive frames, so the encoder tags the output progressive);
-            // tone-map PQ/HLG to SDR bt709 for HDR; scale and letterbox on VAAPI; pin a constant 30fps. A QSV
-            // encoder needs the frames mapped onto a QSV frame; a VAAPI encoder consumes the VAAPI frames directly.
-            var stages = new List<string>();
-            if (isInterlaced)
-            {
-                stages.Add("deinterlace_vaapi");
-            }
-
-            if (isHdr)
-            {
-                stages.Add("tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709");
-            }
-
-            // extra_hw_frames enlarges the VAAPI surface pool (Jellyfin sets the same): fps=30 below duplicates
-            // frame references on sub-30fps sources, so a larger pool avoids "out of hardware frames" under load.
-            stages.Add("scale_vaapi=format=nv12:w=" + w + ":h=" + h + ":force_original_aspect_ratio=decrease:extra_hw_frames=24");
-            stages.Add("pad_vaapi=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2");
-            stages.Add("fps=30");
-            if (encoderIsQsv)
-            {
-                stages.Add("hwmap=derive_device=qsv,format=qsv");
-            }
-
-            scale = string.Join(",", stages);
+            // Full GPU HDR pipeline: tone-map PQ/HLG to SDR bt709, scale and letterbox on VAAPI, then map onto a
+            // QSV frame for the encoder. fps pins the constant frame rate; pad_vaapi keeps a 1:1 aspect.
+            scale = "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,"
+                + "scale_vaapi=w=" + w + ":h=" + h + ":force_original_aspect_ratio=decrease,"
+                + "pad_vaapi=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30,hwmap=derive_device=qsv,format=qsv";
         }
         else
         {
-            // Deinterlace interlaced sources (e.g. broadcast/DVD music videos) before scaling: it produces clean
-            // progressive frames and clears the interlaced frame flag. deint=1 only touches flagged frames, so
-            // progressive content passes through untouched. The encoder is also told the output is progressive
-            // via -field_order below; the frame flag alone is not enough on every encoder (see that line). When
-            // the decoder kept frames on the GPU, bring them back to system memory before the software scale.
+            // Deinterlace interlaced sources before scaling: it produces clean progressive frames and clears the
+            // interlaced frame flag. deint=1 only touches flagged frames, so progressive content passes through
+            // untouched. The encoder is also told the output is progressive via -field_order below. When the decoder
+            // kept frames on the GPU, bring them back to system memory before the software scale.
             var download = hwDecode ? video.DecodeDownload : string.Empty;
             // Software tone-map fallback for HDR off the VAAPI path (non-Intel encoders, burn-in, the retry): the
             // zscale->tonemap(hable)->zscale chain (ErsatzTV/Tunarr). Decoded in software so the 10-bit survives.
@@ -318,9 +289,9 @@ public static class StreamArguments
         string readRate = DefaultReadRate)
     {
         ArgumentNullException.ThrowIfNull(listFilePath);
+        ArgumentException.ThrowIfNullOrEmpty(readRate);
         ArgumentNullException.ThrowIfNull(video);
         ArgumentNullException.ThrowIfNull(audioEncoder);
-        ArgumentException.ThrowIfNullOrEmpty(readRate);
 
         // -progress writes machine-readable key=value progress (including speed=) to stderr even at loglevel
         // error, so the Sessions tab can report the live encode speed without the noisy human stats line.
@@ -525,10 +496,9 @@ public static class StreamArguments
         return args;
     }
 
-    // Device init for the all-GPU Intel path with a QSV encoder: a VAAPI device (Intel iHD) with a QSV device
-    // derived from it, so the VAAPI decode/deinterlace/tone-map/scale filters and the QSV encoder share GPU
-    // frames through a hwmap. (A VAAPI encoder stays on the VAAPI device and uses the profile's own init.)
-    private static readonly string[] IntelVaapiInit =
+    // Device init for the HDR path: a VAAPI device (Intel iHD) with a QSV device derived from it, so the VAAPI
+    // tone-map/scale filters and the QSV encoder share GPU frames through a hwmap.
+    private static readonly string[] HdrVaapiInit =
     {
         "-init_hw_device", "vaapi=va:,vendor_id=0x8086,driver=iHD",
         "-init_hw_device", "qsv=qs@va",

@@ -52,6 +52,11 @@ public class ChannelService
     // off the Intel hardware-decode path, whose deinterlace + hwdownload chain fails on QSV/VAAPI (exit 234).
     private readonly ConcurrentDictionary<Guid, bool> _interlacedCache = new();
 
+    // Memoised 10-bit result per item. Used to keep 10-bit sources off the Intel hardware-decode path: that path
+    // downloads decoded frames with hwdownload,format=nv12, which fails on a 10-bit (p010) surface ("Invalid output
+    // format nv12 for hwframe download", exit 234) regardless of whether the source is interlaced or progressive.
+    private readonly ConcurrentDictionary<Guid, bool> _tenBitCache = new();
+
     /// <summary>
     /// Initializes a new instance of the <see cref="ChannelService"/> class.
     /// </summary>
@@ -117,6 +122,48 @@ public class ChannelService
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Could not read media streams for interlace check on {ItemId}", itemId);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Whether the item's video stream is 10-bit (or deeper). Cached, like the HDR and interlaced checks. 10-bit
+    /// sources are kept off the Intel hardware-decode path, whose <c>hwdownload,format=nv12</c> step fails to
+    /// download a 10-bit (p010) GPU surface (exit 234); software-decoding them instead avoids the failure.
+    /// </summary>
+    /// <param name="itemId">The item id.</param>
+    /// <returns><c>true</c> when the item's video stream carries 10 or more bits per sample.</returns>
+    public bool Is10BitSource(Guid itemId) => _tenBitCache.GetOrAdd(itemId, Compute10Bit);
+
+    private bool Compute10Bit(Guid itemId)
+    {
+        try
+        {
+            var video = _mediaSourceManager.GetMediaStreams(itemId)
+                .FirstOrDefault(s => s.Type == MediaStreamType.Video);
+            if (video is null)
+            {
+                return false;
+            }
+
+            // Prefer the explicit bit-depth; fall back to the pixel format name when the probe did not populate
+            // BitDepth. Match only true depth suffixes (e.g. yuv420p10le, yuv444p12le, p010le) so common 8-bit
+            // formats are NOT misread: a loose Contains("10")/Contains("12") would wrongly match nv12 (the standard
+            // 8-bit format, contains "12") and yuv410p (contains "10"), needlessly software-decoding 8-bit content.
+            if (video.BitDepth is int depth)
+            {
+                return depth >= 10;
+            }
+
+            var pix = video.PixelFormat;
+            return !string.IsNullOrEmpty(pix)
+                && (pix.Contains("10le", StringComparison.Ordinal) || pix.Contains("10be", StringComparison.Ordinal)
+                    || pix.Contains("12le", StringComparison.Ordinal) || pix.Contains("12be", StringComparison.Ordinal)
+                    || pix.Contains("p010", StringComparison.OrdinalIgnoreCase) || pix.Contains("p012", StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read media streams for bit-depth check on {ItemId}", itemId);
             return false;
         }
     }
