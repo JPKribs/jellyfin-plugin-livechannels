@@ -89,8 +89,14 @@ public class StreamSessionService
         var videoCodec = Plugin.Instance?.ReadConfiguration(c => c.VideoCodec) ?? Models.VideoCodec.H264;
         var usesHwUpload = _encoders.ResolveVideo(videoCodec, allowHardware: true).PixelStage.Contains("hwupload", StringComparison.Ordinal);
         var highRes = programs.Any(p => p.SourceHeight > 1080);
-        var hasHdr = programs.Any(p => _channels.IsHdrSource(p.ItemId));
-        var perItem = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never || highRes || hasHdr || usesHwUpload;
+
+        // HDR detection is a per-item media-stream query, so scanning a whole channel for it is the slowest part of
+        // a large channel's start-up (a 3000+ item channel stalled for over a minute on an N100). It only matters
+        // when it could flip an otherwise-concat channel to per-item, so skip the entire scan when the channel is
+        // already per-item for another reason: subtitle burn-in, a >1080p item, or a GPU-upload encoder (QSV/VAAPI).
+        var alreadyPerItem = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never || highRes || usesHwUpload;
+        var hasHdr = !alreadyPerItem && programs.Any(p => _channels.IsHdrSource(p.ItemId));
+        var perItem = alreadyPerItem || hasHdr;
         var uniform = programs.Count > 0 && programs[0].SourceHeight > 0 && programs.All(p => p.SourceHeight == programs[0].SourceHeight);
         LogEncodePlan(channel, programs.Count, index, perItem, uniform, hasHdr);
 

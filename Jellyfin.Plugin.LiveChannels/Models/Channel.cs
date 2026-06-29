@@ -60,6 +60,9 @@ public class Channel
     /// <summary>Gets or sets a value indicating whether specials (season 0) are included.</summary>
     public bool IncludeSpecials { get; set; }
 
+    /// <summary>Gets or sets a value indicating whether home videos (loose <c>Video</c> items, as found in a Home Videos library) are included. Off by default so existing channels are unchanged; a Movies or Shows library has no such items.</summary>
+    public bool IncludeHomeVideos { get; set; }
+
     /// <summary>Gets or sets a value indicating whether the channel's blocks are shuffled (deterministically) rather than ordered by name.</summary>
     public bool Shuffle { get; set; } = true;
 

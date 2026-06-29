@@ -27,6 +27,10 @@ public class ChannelService
 {
     private static readonly BaseItemKind[] PlayableKinds = { BaseItemKind.Movie, BaseItemKind.Episode, BaseItemKind.MusicVideo };
 
+    // The same kinds plus loose Video items, which is what Jellyfin types home videos as. Used when a channel
+    // opts in to home videos; a Movies/Shows library has no Video-kind items, so this is a no-op for them.
+    private static readonly BaseItemKind[] PlayableKindsWithHomeVideos = { BaseItemKind.Movie, BaseItemKind.Episode, BaseItemKind.MusicVideo, BaseItemKind.Video };
+
     private readonly ILibraryManager _libraryManager;
     private readonly IMediaSourceManager _mediaSourceManager;
     private readonly ISubtitleEncoder _subtitleEncoder;
@@ -38,6 +42,11 @@ public class ChannelService
     // Item/track keys whose subtitle extraction is currently running, so concurrent tune-ins don't pile a
     // second whole-file extraction onto the producer's critical path.
     private readonly ConcurrentDictionary<string, byte> _subtitleExtractions = new(StringComparer.Ordinal);
+
+    // Memoised HDR result per item: the check is a media-stream query and is asked repeatedly (channel start-up,
+    // per-item playback, re-tunes). An item's HDR-ness does not change, so caching it removes thousands of repeat
+    // queries on large channels. Bounded by the library size (one bool per item ever checked).
+    private readonly ConcurrentDictionary<Guid, bool> _hdrCache = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ChannelService"/> class.
@@ -67,7 +76,9 @@ public class ChannelService
     /// </summary>
     /// <param name="itemId">The item id.</param>
     /// <returns><c>true</c> when the item's video stream carries an HDR transfer function.</returns>
-    public bool IsHdrSource(Guid itemId)
+    public bool IsHdrSource(Guid itemId) => _hdrCache.GetOrAdd(itemId, ComputeIsHdrSource);
+
+    private bool ComputeIsHdrSource(Guid itemId)
     {
         try
         {
@@ -378,7 +389,7 @@ public class ChannelService
             ResolveRatingScore(channel.MaxOfficialRating),
             channel.IncludeUnrated);
         var kidsScore = ResolveRatingScore(channel.KidsRatingThreshold);
-        var kinds = PlayableKinds;
+        var kinds = channel.IncludeHomeVideos ? PlayableKindsWithHomeVideos : PlayableKinds;
 
         var byId = new Dictionary<Guid, BaseItem>();
         foreach (var source in channel.Sources)

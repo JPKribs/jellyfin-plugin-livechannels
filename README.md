@@ -18,7 +18,7 @@ A channel pulls from one or more **library cards**. Add a card per library and t
 * **Genre** offers a genre list with a **match all** toggle for AND (for example Comedy and Animation) instead of the default OR (any).
 * **Whitelist** and **Blacklist** are explicit include or exclude lists of shows and movies you pick from the library. Picking a show pulls in all of its episodes.
 
-A channel always includes whatever its libraries and filters yield: movies, episodes, and music videos. Only items with a real media file and a known runtime can be scheduled. Anything else is skipped.
+A channel always includes whatever its libraries and filters yield: movies, episodes, and music videos. Turn on **Include home videos** to also pull in loose video files, such as those in a Home Videos library. Only items with a real media file and a known runtime can be scheduled. Anything else is skipped.
 
 ### The Popular channel
 
@@ -35,6 +35,7 @@ Per channel you can also set:
 * **Episodes per block** plays a set number of consecutive episodes of a series before moving on.
 * **Keep multipart episodes together** never splits a two part episode across a block boundary.
 * **Include specials** opts season 0 in. Off by default.
+* **Include home videos** pulls in loose video files (Home Videos library content). Off by default, so existing channels are unchanged.
 * **Shuffle** is on by default and is fixed and repeatable, so the guide and the live stream always agree. Disable it to play everything alphabetically.
 * **Episode order** plays a series in air order or at random.
 * **Favor content type** weights a channel toward movies, shows, or music videos so that type plays more often, at a slight, moderate, or heavy strength. Shuffle must be on.

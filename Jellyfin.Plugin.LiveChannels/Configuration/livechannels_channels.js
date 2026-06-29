@@ -677,6 +677,7 @@ export default function (view) {
         el('episodesPerBlock').value = ch.EpisodesPerBlock || 1;
         el('keepMultiPart').checked = ch.KeepMultiPartTogether !== false;
         el('includeSpecials').checked = !!ch.IncludeSpecials;
+        el('includeHomeVideos').checked = !!ch.IncludeHomeVideos;
         el('shuffle').checked = ch.Shuffle !== false;
         el('episodeOrder').value = ch.ShuffleEpisodes ? 'random' : 'air';
         el('favorKind').value = ch.FavorKind || 'None';
@@ -704,6 +705,7 @@ export default function (view) {
         ch.EpisodesPerBlock = Math.max(1, parseInt(el('episodesPerBlock').value, 10) || 1);
         ch.KeepMultiPartTogether = el('keepMultiPart').checked;
         ch.IncludeSpecials = el('includeSpecials').checked;
+        ch.IncludeHomeVideos = el('includeHomeVideos').checked;
         ch.Shuffle = el('shuffle').checked;
         ch.ShuffleEpisodes = el('episodeOrder').value === 'random';
         ch.FavorKind = el('favorKind').value;
@@ -774,7 +776,7 @@ export default function (view) {
             LogoStyle: 'Number', LogoSymbol: '', LogoShowName: true,
             Sources: [], AudioLanguage: '', MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, KidsRatingThreshold: 'G',
             EpisodesPerBlock: 1, KeepMultiPartTogether: true,
-            IncludeSpecials: false, Shuffle: true, ShuffleEpisodes: false,
+            IncludeSpecials: false, IncludeHomeVideos: false, Shuffle: true, ShuffleEpisodes: false,
             FavorKind: 'None', FavorStrength: 'Moderate', SubtitleBurnIn: 'Never', Enabled: true
         });
         currentIndex = channels.length - 1;
