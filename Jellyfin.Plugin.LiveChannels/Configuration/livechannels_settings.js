@@ -46,6 +46,7 @@ export default function (view) {
         el('maxSessions').value = config.MaxConcurrentSessions == null ? 3 : config.MaxConcurrentSessions;
         el('sessionTimeout').value = config.SessionTimeoutMinutes == null ? 0 : config.SessionTimeoutMinutes;
         el('streamWindow').value = config.StreamWindowMinutes == null ? 5 : config.StreamWindowMinutes;
+        el('producerRate').value = config.StreamReadRate == null ? 1 : config.StreamReadRate;
         el('streamDirectory').value = config.StreamDirectory || '';
         el('disableHwa').checked = !!config.DisableHardwareAcceleration;
         el('subtitleLanguage').value = config.DefaultSubtitleLanguage || 'eng';
@@ -93,6 +94,8 @@ export default function (view) {
             fresh.SessionTimeoutMinutes = isNaN(timeout) ? 0 : Math.max(0, timeout);
             var window = parseInt(el('streamWindow').value, 10);
             fresh.StreamWindowMinutes = isNaN(window) ? 5 : Math.max(1, window);
+            var rate = parseFloat(el('producerRate').value);
+            fresh.StreamReadRate = isNaN(rate) ? 1.0 : Math.min(2, Math.max(1, Math.round(rate * 1000) / 1000));
             fresh.StreamDirectory = (el('streamDirectory').value || '').trim();
             fresh.DisableHardwareAcceleration = el('disableHwa').checked;
             fresh.DefaultSubtitleLanguage = el('subtitleLanguage').value || 'eng';

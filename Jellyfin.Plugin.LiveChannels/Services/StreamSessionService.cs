@@ -214,11 +214,12 @@ public class StreamSessionService
                 playable.Select(p => "file '" + p.Path!.Replace("'", "'\\''", StringComparison.Ordinal) + "'"),
                 cancellationToken).ConfigureAwait(false);
 
-            var (width, bitrate, videoCodec, audioCodec) = Plugin.Instance?.ReadConfiguration(c =>
-                (c.TranscodeWidth, c.TranscodeVideoBitrateKbps, c.VideoCodec, c.AudioCodec))
-                ?? (1280, 4000, Models.VideoCodec.H264, Models.AudioCodec.Aac);
+            var (width, bitrate, videoCodec, audioCodec, readRateValue) = Plugin.Instance?.ReadConfiguration(c =>
+                (c.TranscodeWidth, c.TranscodeVideoBitrateKbps, c.VideoCodec, c.AudioCodec, c.StreamReadRate))
+                ?? (1280, 4000, Models.VideoCodec.H264, Models.AudioCodec.Aac, 1.0);
             var video = _encoders.ResolveVideo(videoCodec, allowHardware: true);
             var (audioEncoder, audioBitrate) = EncoderResolver.ResolveAudio(audioCodec);
+            var readRate = StreamArguments.FormatReadRate(readRateValue);
 
             // Hardware-decode the playlist only when every item is the same resolution: the concat demuxer feeds
             // one shared decoder, and a mid-stream resolution change fails a hardware decoder (software handles
@@ -232,7 +233,7 @@ public class StreamSessionService
             while (!cancellationToken.IsCancellationRequested)
             {
                 var seek = SeekToNow(playable);
-                var args = StreamArguments.BuildConcat(listFile, seek, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel);
+                var args = StreamArguments.BuildConcat(listFile, seek, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel, readRate);
 
                 var started = DateTime.UtcNow;
                 var total = await RunFfmpegAsync(ffmpeg, args, channel.Name, output, cancellationToken, stats).ConfigureAwait(false);
@@ -434,10 +435,13 @@ public class StreamSessionService
         var pipeline = perItem ? "per-item" : "continuous";
         var burnInForcesSoftware = burnIn && !string.IsNullOrEmpty(profile.DecodeDownload);
         var intelHardware = profile.Name.Contains("qsv", StringComparison.Ordinal) || profile.Name.Contains("vaapi", StringComparison.Ordinal);
-        var hwDecode = !hasHdr && profile.DecodeHwaccel is not null && (perItem ? !burnInForcesSoftware : uniform);
-        // HDR on Intel hardware tone-maps on the GPU (VAAPI); HDR elsewhere tone-maps in software.
-        var decode = hasHdr
-            ? (intelHardware && !burnIn ? "vaapi (HDR)" : "software (HDR)")
+        // On Intel the per-item path runs entirely on the GPU (VAAPI decode/deinterlace/tone-map/scale, then the
+        // QSV or VAAPI encoder), except subtitle burn-in, which composites in software. Other hardware decoders
+        // assist the per-item path (continuous only when every item is the same resolution); software otherwise.
+        var intelGpu = intelHardware && perItem && !burnIn;
+        var hwDecode = !intelHardware && !hasHdr && profile.DecodeHwaccel is not null && (perItem ? !burnInForcesSoftware : uniform);
+        var decode = intelGpu
+            ? (hasHdr ? "vaapi (HDR)" : "vaapi")
             : (hwDecode ? profile.DecodeHwaccel! : "software");
 
         _logger.LogInformation(
@@ -796,35 +800,33 @@ public class StreamSessionService
     {
         // Read just the scalars we need inside the config lock, rather than holding a reference to the live
         // (mutable, shared) configuration object after the lock releases.
-        var (width, bitrate, videoCodec, audioCodec) = Plugin.Instance?.ReadConfiguration(c =>
-            (c.TranscodeWidth, c.TranscodeVideoBitrateKbps, c.VideoCodec, c.AudioCodec))
-            ?? (1280, 4000, Models.VideoCodec.H264, Models.AudioCodec.Aac);
+        var (width, bitrate, videoCodec, audioCodec, readRateValue) = Plugin.Instance?.ReadConfiguration(c =>
+            (c.TranscodeWidth, c.TranscodeVideoBitrateKbps, c.VideoCodec, c.AudioCodec, c.StreamReadRate))
+            ?? (1280, 4000, Models.VideoCodec.H264, Models.AudioCodec.Aac, 1.0);
+        var readRate = StreamArguments.FormatReadRate(readRateValue);
 
         // The hardware encoder still applies to burn-in; only the decode side cares about the overlay.
         var allowHardware = !forcedSubtitle.HasValue || sourceHeight > 1080;
         var video = _encoders.ResolveVideo(videoCodec, allowHardware);
         var (audioEncoder, audioBitrate) = EncoderResolver.ResolveAudio(audioCodec);
 
-        // HDR on an Intel hardware encoder (QSV/VAAPI) tone-maps on the GPU (handled inside Build) and must NOT be
-        // forced to software. HDR anywhere else (VideoToolbox/NVENC/software) and HDR burn-in tone-map in software,
-        // which needs software-decoded frames. Burn-in on a GPU-resident decoder also forces software (the overlay
-        // needs system frames). The caller can force software for the per-item fallback.
+        // On Intel (QSV/VAAPI) the whole pipeline runs on the GPU (decode, deinterlace, tone-map, scale, encode),
+        // mirroring Jellyfin's own transcoder. Build handles the filter graph; here we only decide whether that
+        // all-GPU path applies. It does for everything on Intel except subtitle burn-in (the libass overlay needs
+        // system frames) and the per-item software-decode fallback. Interlaced and HDR sources stay on the GPU
+        // (deinterlace_vaapi / tonemap_vaapi); they are no longer forced to software.
         var intelHardware = video.Name.Contains("qsv", StringComparison.Ordinal) || video.Name.Contains("vaapi", StringComparison.Ordinal);
+        var useIntelGpu = intelHardware && !forcedSubtitle.HasValue && !softwareDecode;
 
-        // Intel QSV/VAAPI cannot deinterlace on the hardware-decode path we use: the decode keeps frames on the GPU,
-        // the deinterlace needs them in system memory, and the hwdownload that bridges the two fails to reconfigure
-        // for interlaced QSV frames ("Invalid output format nv12 for hwframe download", exit 234), producing nothing.
-        // Software-decode interlaced sources instead. They are SD/HD broadcast captures, which decode cheaply, and
-        // the encoder still runs on the GPU.
-        var intelInterlaced = intelHardware && isInterlaced;
-        var usesHdrVaapi = isHdr && intelHardware && !forcedSubtitle.HasValue && !softwareDecode && !intelInterlaced;
-        var hdrNeedsSoftware = isHdr && !usesHdrVaapi;
-        var forceSoftware = softwareDecode || hdrNeedsSoftware || intelInterlaced || (forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeDownload));
+        // HDR off the Intel GPU path (VideoToolbox/NVENC/software, plus burn-in and the fallback) tone-maps in
+        // software, which needs software-decoded frames. Burn-in on a GPU-resident decoder also forces software.
+        var hdrNeedsSoftware = isHdr && !useIntelGpu;
+        var forceSoftware = softwareDecode || hdrNeedsSoftware || (forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeDownload));
 
-        // The HDR VAAPI path runs on hardware, so a failure should fall back to software exactly like a hardware
+        // The Intel GPU path runs on hardware, so a failure should fall back to software exactly like a hardware
         // decode does (StreamItemAsync retries with softwareDecode).
-        var hardwareDecode = usesHdrVaapi || (!forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel));
-        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurst);
+        var hardwareDecode = useIntelGpu || (!forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel));
+        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurst, isInterlaced, readRate);
         return (args, hardwareDecode);
     }
 

@@ -2,17 +2,20 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Jellyfin.Plugin.LiveChannels.Api;
 
 /// <summary>
-/// A small authenticated helper for the configuration page. All channel content (channels, guide, streams,
+/// A small admin-only helper for the configuration page. All channel content (channels, guide, streams,
 /// and logos) is served in-process through Jellyfin's Live TV; this controller exposes no content endpoints,
-/// only the encoder check and the active-session list the configuration page reads.
+/// only the encoder check and the active-session list the configuration page reads. Every endpoint requires
+/// an elevated (administrator) token, so a session can only be listed or closed from the dashboard.
 /// </summary>
 [ApiController]
+[Authorize(Policy = "RequiresElevation")]
 [Route("livechannels")]
 public class LiveChannelsController : ControllerBase
 {

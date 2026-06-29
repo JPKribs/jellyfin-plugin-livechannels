@@ -56,13 +56,13 @@ public class EncoderResolver
         {
             // Hardware ENCODE follows the server's configured accelerator for every vendor. Hardware DECODE
             // offloads the heaviest part of the pipeline (decoding 4K/HEVC sources) from the CPU. VideoToolbox
-            // auto-downloads decoded frames to system memory; QSV/VAAPI keep frames on the GPU, so they set an
-            // output format and a leading hwdownload that brings frames back for the software scale. The download
-            // must allow nv12 (8-bit) AND p010le (10-bit): a 10-bit source (most HEVC, all 4K HDR) decodes to a
-            // p010 surface, and pinning the download to nv12 alone makes it fail, dropping the whole item to a
-            // software decode that cannot hold realtime (the choppiness on HEVC/4K). The continuous and per-item
-            // paths still fall back to software decode if a hardware decode genuinely fails, so a codec a driver
-            // cannot decode never breaks playback. NVENC/AMF stay encode-only (no decode offload wired up here).
+            // auto-downloads decoded frames to system memory. On Intel the per-item path no longer downloads at
+            // all: it runs the whole pipeline on the GPU (VAAPI decode/deinterlace/tone-map/scale, then the QSV or
+            // VAAPI encoder), exactly as Jellyfin's own transcoder does, which is the one Intel path proven on this
+            // hardware. The DecodeHwaccel/DecodeDownload below now only drive the continuous (concat) path and the
+            // decision that subtitle burn-in needs system frames; the all-GPU per-item path ignores them. The paths
+            // still fall back to software decode if a hardware decode genuinely fails, so a codec a driver cannot
+            // decode never breaks playback. NVENC/AMF stay encode-only (no decode offload wired up here).
             case "videotoolbox":
                 return new VideoEncoderProfile(family + "_videotoolbox", label + " (VideoToolbox)", true,
                     Empty, VideotoolboxExtra, "format=yuv420p", false, DecodeHwaccel: "videotoolbox");

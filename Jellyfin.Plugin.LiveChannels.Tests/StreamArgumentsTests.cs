@@ -53,16 +53,35 @@ public class StreamArgumentsTests
     }
 
     [Fact]
-    public void LaterItems_PaceNearRealtime_WithNoBurst()
+    public void LaterItems_PaceAtRealtime_WithNoBurst()
     {
         // A burst on anything but the first item shoves its content into the HLS playlist far faster than realtime,
         // lurching the live edge forward until the player falls off the back of the delete window. Every item after
-        // the first runs just above realtime (a small margin so the producer can recover a boundary gap and never
-        // be the bottleneck) but with NO burst, which is the part that would lurch the edge.
+        // the first runs at the configured read rate (default 1.0, exactly realtime) but with NO burst, which is
+        // the part that would lurch the edge.
         var a = Build();
-        Assert.True(Pair(a, "-readrate", "1.1"));
+        Assert.True(Pair(a, "-readrate", "1.0"));
         Assert.DoesNotContain("-readrate_initial_burst", a);
     }
+
+    [Fact]
+    public void ReadRate_IsConfigurable_AndPassedThrough()
+    {
+        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, false, null, false, false, "1.01");
+        Assert.True(Pair(a, "-readrate", "1.01"));
+        var concat = StreamArguments.BuildConcat("/tmp/list.txt", default, 1280, 4000, SoftwareH264, "aac", 192, null, "1.5");
+        Assert.True(Pair(concat, "-readrate", "1.5"));
+    }
+
+    [Theory]
+    [InlineData(1.0, "1")]
+    [InlineData(1.01, "1.01")]
+    [InlineData(1.5, "1.5")]
+    [InlineData(0.5, "1")]      // below realtime is clamped up: the producer must never lag
+    [InlineData(9.0, "2")]      // absurdly fast is clamped down so the window cannot be drained
+    [InlineData(1.4567, "1.457")] // kept to three decimals, extra precision dropped
+    public void FormatReadRate_ClampsAndRoundsToThreeDecimals(double input, string expected)
+        => Assert.Equal(expected, StreamArguments.FormatReadRate(input));
 
     [Fact]
     public void FirstItem_BurstsATuneInHeadStart()
@@ -87,13 +106,36 @@ public class StreamArgumentsTests
         DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12,");
 
     [Fact]
-    public void HardwareDecode_GpuResident_DownloadsBeforeScale_AndSetsOutputFormat()
+    public void Sdr_OnIntelHardware_UsesAllGpuVaapiPipeline_NoHwdownload()
     {
+        // SDR on a QSV encoder runs the whole pipeline on the GPU (Jellyfin's own approach): VAAPI decode,
+        // scale/pad on VAAPI, hwmap to QSV. It must never use hwdownload, which fails QSV ("Invalid output
+        // format nv12 for hwframe download", exit 234).
         var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, QsvStyle, "aac", 192, null);
-        Assert.True(Pair(a, "-hwaccel", "qsv"));
-        Assert.True(Pair(a, "-hwaccel_output_format", "qsv"));
+        Assert.True(Pair(a, "-hwaccel", "vaapi"));
+        Assert.True(Pair(a, "-hwaccel_output_format", "vaapi"));
         Assert.True(a.IndexOf("-hwaccel") < a.IndexOf("-i"));
-        Assert.Contains(a, x => x.StartsWith("hwdownload,format=nv12,", StringComparison.Ordinal) && x.Contains("scale=1280:720", StringComparison.Ordinal));
+        Assert.DoesNotContain(a, x => x.Contains("hwdownload", StringComparison.Ordinal));
+        var vf = a[a.IndexOf("-vf") + 1];
+        Assert.Contains("scale_vaapi=format=nv12:w=1280:h=720:force_original_aspect_ratio=decrease", vf, StringComparison.Ordinal);
+        Assert.Contains("extra_hw_frames=24", vf, StringComparison.Ordinal); // enlarged surface pool, matching Jellyfin
+        Assert.Contains("fps=30,hwmap=derive_device=qsv,format=qsv", vf, StringComparison.Ordinal);
+        Assert.DoesNotContain("deinterlace_vaapi", vf, StringComparison.Ordinal); // progressive source
+        Assert.DoesNotContain("tonemap_vaapi", vf, StringComparison.Ordinal);     // SDR
+        Assert.True(Pair(a, "-c:v", "h264_qsv"));
+    }
+
+    [Fact]
+    public void Interlaced_OnIntelHardware_DeinterlacesOnGpu_NotSoftware()
+    {
+        // Interlaced sources deinterlace on the GPU (deinterlace_vaapi) rather than being forced to a software
+        // decode, so the encoder stays hardware-accelerated and the output is genuinely progressive.
+        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, QsvStyle, "aac", 192, null, isInterlaced: true);
+        Assert.True(Pair(a, "-hwaccel", "vaapi"));
+        var vf = a[a.IndexOf("-vf") + 1];
+        Assert.StartsWith("deinterlace_vaapi", vf, StringComparison.Ordinal);
+        Assert.Contains("hwmap=derive_device=qsv,format=qsv", vf, StringComparison.Ordinal);
+        Assert.DoesNotContain("yadif", vf, StringComparison.Ordinal); // not the software deinterlacer
     }
 
     [Fact]
@@ -125,7 +167,7 @@ public class StreamArgumentsTests
         Assert.Contains("vaapi=va:,vendor_id=0x8086,driver=iHD", a);
         var vf = a[a.IndexOf("-vf") + 1];
         Assert.Contains("tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709", vf, StringComparison.Ordinal);
-        Assert.Contains("scale_vaapi=w=1920:h=1080:force_original_aspect_ratio=decrease", vf, StringComparison.Ordinal);
+        Assert.Contains("scale_vaapi=format=nv12:w=1920:h=1080:force_original_aspect_ratio=decrease", vf, StringComparison.Ordinal);
         Assert.Contains("pad_vaapi=1920:1080", vf, StringComparison.Ordinal);
         Assert.Contains("fps=30,hwmap=derive_device=qsv,format=qsv", vf, StringComparison.Ordinal);
         Assert.DoesNotContain("zscale", vf, StringComparison.Ordinal);
@@ -155,15 +197,22 @@ public class StreamArgumentsTests
     }
 
     [Fact]
-    public void HardwareProfile_AddsInitArgs_PixelUpload_AndNoPreset()
+    public void VaapiEncoder_UsesAllGpuPipeline_NoHwuploadNoPreset()
     {
+        // A VAAPI encoder runs the whole pipeline on the GPU like QSV, but stays on the VAAPI device: VAAPI
+        // decode, scale on VAAPI, straight into h264_vaapi. No hwupload (frames are already GPU-resident) and
+        // no hwmap to QSV. The libx264 preset is skipped for hardware encoders.
         var vaapi = new VideoEncoderProfile("h264_vaapi", "H.264 (VAAPI)", true,
             new[] { "-init_hw_device", "vaapi=va:/dev/dri/renderD128", "-filter_hw_device", "va" },
             Array.Empty<string>(), "format=nv12,hwupload", false);
         var a = Build(vaapi);
         Assert.True(Pair(a, "-c:v", "h264_vaapi"));
         Assert.True(Pair(a, "-init_hw_device", "vaapi=va:/dev/dri/renderD128"));
-        Assert.Contains(a, x => x.Contains("hwupload"));
+        Assert.True(Pair(a, "-hwaccel", "vaapi"));
+        var vf = a[a.IndexOf("-vf") + 1];
+        Assert.Contains("scale_vaapi=format=nv12:w=1280:h=720", vf, StringComparison.Ordinal);
+        Assert.DoesNotContain("hwmap=derive_device=qsv", vf, StringComparison.Ordinal); // VAAPI encoder stays on VAAPI
+        Assert.DoesNotContain(a, x => x.Contains("hwupload", StringComparison.Ordinal)); // frames already GPU-resident
         Assert.False(Pair(a, "-preset", "veryfast")); // hardware encoder skips the libx264 preset
         Assert.True(a.IndexOf("-init_hw_device") < a.IndexOf("-i")); // device init before input
     }

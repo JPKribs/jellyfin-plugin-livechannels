@@ -744,14 +744,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
                 return;
             }
 
-            try
-            {
-                await Task.Delay(200, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
+            // Let cancellation propagate (do not swallow it): a client that drops the tune-in mid-wait must reach
+            // the caller's teardown, otherwise the producer keeps encoding into a session nobody will ever close.
+            await Task.Delay(200, cancellationToken).ConfigureAwait(false);
         }
 
         // The loop ended either because the segmenter is alive but still filling (deadline hit — hand over the
