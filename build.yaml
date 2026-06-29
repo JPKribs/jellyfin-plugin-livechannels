@@ -1,14 +1,14 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.4.0"
+version: "10.11.5.0"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV, with a ready-made Popular channel out of the box."
 description: >
   Live Channels lets administrators build looping virtual TV channels from genres and official
-  ratings or from a hand-picked list of items. A built-in Popular channel loops the most popular
-  movies and shows across your library, blended with recent additions, with no setup at all. Every
+  ratings or from a hand-picked list of items. A built-in Popular channel, configurable on its own
+  tab, loops your recent, top rated, and most watched movies and shows with no setup at all. Every
   channel's guide is filled out with descriptions, ratings, episode titles, original air dates, and
   landscape artwork. Each channel, its guide, and its stream are served in-process through Jellyfin's
   own Live TV, so the channels appear automatically with no tuner to add, no URLs to paste, and no
@@ -20,6 +20,7 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   features:
-  - Add a built in Popular channel that loops your top movies and shows blended with recent additions
-  - Fill the guide with episode titles, ratings, original air dates, and an HD marker
-  - Show landscape artwork in the guide, backdrops for movies and thumbnails for episodes and music videos
+  - Give the Popular channel its own tab to set its name, icon, rating limit, subtitle rule, and loop behaviour
+  - Build the Popular channel from your recent, top rated, and most watched movies and shows
+  - Measure most watched across the whole server by combining every user's play counts
+  - Choose a default language in Settings that decides when Forced subtitles burn in

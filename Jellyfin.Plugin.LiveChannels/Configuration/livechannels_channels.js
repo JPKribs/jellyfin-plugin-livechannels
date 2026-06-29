@@ -4,6 +4,7 @@ export default function (view) {
     var PLUGIN_ID = 'ac6940fb-aac6-4de8-b622-55a662e23658';
     var TABS = [
         { href: 'configurationpage?name=livechannels_channels', name: 'Channels' },
+        { href: 'configurationpage?name=livechannels_popular', name: 'Popular' },
         { href: 'configurationpage?name=livechannels_settings', name: 'Settings' }
     ];
 

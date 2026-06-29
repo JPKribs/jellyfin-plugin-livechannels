@@ -4,6 +4,7 @@ export default function (view) {
     var PLUGIN_ID = 'ac6940fb-aac6-4de8-b622-55a662e23658';
     var TABS = [
         { href: 'configurationpage?name=livechannels_channels', name: 'Channels' },
+        { href: 'configurationpage?name=livechannels_popular', name: 'Popular' },
         { href: 'configurationpage?name=livechannels_settings', name: 'Settings' }
     ];
 
@@ -42,9 +43,27 @@ export default function (view) {
         el('videoBitrate').value = config.TranscodeVideoBitrateKbps || 4000;
         el('bufferSeconds').value = config.BufferSeconds == null ? 3 : config.BufferSeconds;
         el('streamDirectory').value = config.StreamDirectory || '';
-        el('popularChannel').checked = config.PopularChannelEnabled !== false;
         el('disableHwa').checked = !!config.DisableHardwareAcceleration;
+        el('subtitleLanguage').value = config.DefaultSubtitleLanguage || 'eng';
         renderAcceleration();
+    }
+
+    // Populates the default-language dropdown from the server's known cultures (value is the three-letter ISO code).
+    function loadLanguages() {
+        return ApiClient.getJSON(ApiClient.getUrl('Localization/Cultures')).then(function (list) {
+            var seen = {};
+            var opts = (list || []).filter(function (c) {
+                var code = c && c.ThreeLetterISOLanguageName;
+                if (!code || seen[code]) return false;
+                seen[code] = true; return true;
+            }).sort(function (a, b) { return (a.DisplayName || a.Name || '').localeCompare(b.DisplayName || b.Name || ''); })
+              .map(function (c) {
+                return '<option value="' + Shared.escapeHtml(c.ThreeLetterISOLanguageName) + '">' + Shared.escapeHtml(c.DisplayName || c.Name) + '</option>';
+            }).join('');
+            el('subtitleLanguage').innerHTML = opts;
+        }).catch(function () {
+            el('subtitleLanguage').innerHTML = '<option value="eng">English</option>';
+        });
     }
 
     // Triggers Jellyfin's built-in guide refresh so a save propagates to Live TV right away.
@@ -65,8 +84,8 @@ export default function (view) {
             var buf = parseInt(el('bufferSeconds').value, 10);
             fresh.BufferSeconds = isNaN(buf) ? 3 : Math.min(30, Math.max(0, buf));
             fresh.StreamDirectory = (el('streamDirectory').value || '').trim();
-            fresh.PopularChannelEnabled = el('popularChannel').checked;
             fresh.DisableHardwareAcceleration = el('disableHwa').checked;
+            fresh.DefaultSubtitleLanguage = el('subtitleLanguage').value || 'eng';
             return Shared.saveConfig(fresh);
         }).then(function () {
             renderAcceleration();
@@ -100,10 +119,13 @@ export default function (view) {
 
     view.addEventListener('viewshow', function () {
         _sharedPromise.then(function () {
-            setTabs('livechannels', 1, TABS);
+            setTabs('livechannels', 2, TABS);
             if (!_bound) { bind(); _bound = true; }
             Shared.initCollapsibles();
-            Shared.getConfig().then(loadSettings);
+            // Populate the language options before applying the saved value to the dropdown.
+            loadLanguages().then(function () {
+                Shared.getConfig().then(loadSettings);
+            });
         });
     });
 }

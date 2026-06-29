@@ -7,6 +7,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.LiveChannels.Models;
 using MediaBrowser.Controller.Entities;
@@ -30,6 +31,8 @@ public class ChannelService
     private readonly IMediaSourceManager _mediaSourceManager;
     private readonly ISubtitleEncoder _subtitleEncoder;
     private readonly ILocalizationManager _localization;
+    private readonly IUserManager _userManager;
+    private readonly IUserDataManager _userDataManager;
     private readonly ILogger<ChannelService> _logger;
 
     // Item/track keys whose subtitle extraction is currently running, so concurrent tune-ins don't pile a
@@ -43,13 +46,17 @@ public class ChannelService
     /// <param name="mediaSourceManager">The media source manager used to inspect subtitle streams.</param>
     /// <param name="subtitleEncoder">The subtitle encoder used to extract (and cache) embedded subtitles for burn-in.</param>
     /// <param name="localization">The localization manager used to rank official ratings.</param>
+    /// <param name="userManager">The user manager, used to read server-wide watch data for the Popular channel.</param>
+    /// <param name="userDataManager">The user-data manager, used to read per-item play counts for the Popular channel.</param>
     /// <param name="logger">The logger.</param>
-    public ChannelService(ILibraryManager libraryManager, IMediaSourceManager mediaSourceManager, ISubtitleEncoder subtitleEncoder, ILocalizationManager localization, ILogger<ChannelService> logger)
+    public ChannelService(ILibraryManager libraryManager, IMediaSourceManager mediaSourceManager, ISubtitleEncoder subtitleEncoder, ILocalizationManager localization, IUserManager userManager, IUserDataManager userDataManager, ILogger<ChannelService> logger)
     {
         _libraryManager = libraryManager;
         _mediaSourceManager = mediaSourceManager;
         _subtitleEncoder = subtitleEncoder;
         _localization = localization;
+        _userManager = userManager;
+        _userDataManager = userDataManager;
         _logger = logger;
     }
 
@@ -134,11 +141,6 @@ public class ChannelService
         }
     }
 
-    // ISO 639 English codes, the only language treated as needing no subtitles for non-English-audio burn-in.
-    private static bool IsEnglish(string? language)
-        => string.Equals(language, "eng", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(language, "en", StringComparison.OrdinalIgnoreCase);
-
     /// <summary>
     /// Picks the subtitle track to burn into an item for the given mode. <see cref="SubtitleBurnInMode.Forced"/>
     /// burns only the forced track, except when the default audio track is in a known non-English language, where
@@ -177,15 +179,17 @@ public class ChannelService
             }
         }
 
-        // "Forced only" also burns subtitles when the audio we play is in a known non-English language, so
-        // foreign-language content stays followable. English or untagged audio shows nothing without a forced
-        // track, so ordinary English content is never subtitled by surprise.
+        // "Forced only" also burns subtitles when the audio we play is not in the configured default language, so
+        // foreign-language content stays followable. Audio in the default language, or untagged audio, shows
+        // nothing without a forced track, so ordinary content is never subtitled by surprise.
+        var defaultLanguage = Plugin.Instance?.ReadConfiguration(c => c.DefaultSubtitleLanguage) ?? string.Empty;
         var audioLanguage = DefaultAudio(streams)?.Stream.Language;
-        var forcedForNonEnglishAudio = mode == SubtitleBurnInMode.Forced
+        var forcedForForeignAudio = mode == SubtitleBurnInMode.Forced
             && !string.IsNullOrEmpty(audioLanguage)
-            && !IsEnglish(audioLanguage);
+            && !string.IsNullOrEmpty(defaultLanguage)
+            && !string.Equals(audioLanguage, defaultLanguage, StringComparison.OrdinalIgnoreCase);
 
-        if ((mode == SubtitleBurnInMode.Always || forcedForNonEnglishAudio) && subtitles.Count > 0)
+        if ((mode == SubtitleBurnInMode.Always || forcedForForeignAudio) && subtitles.Count > 0)
         {
             // Both "Always" and non-English-audio "Forced only" burn the same track "Always" picks: the default
             // subtitle, or the first one when none is flagged default.
@@ -366,7 +370,7 @@ public class ChannelService
 
         if (string.Equals(channel.Id, PopularChannelId, StringComparison.Ordinal))
         {
-            return ResolvePopularPrograms();
+            return ResolvePopularPrograms(channel);
         }
 
         var ratings = new RatingFilter(
@@ -427,60 +431,130 @@ public class ChannelService
     /// <summary>The stable id of the built-in Popular channel.</summary>
     public const string PopularChannelId = "livechannels-popular";
 
-    private const int PopularPerKind = 10;
+    // Per-bucket caps for the Popular channel. Each kind is drawn from three sources: recently added, top
+    // community rating, and most watched across all users. A short or empty source just yields fewer items.
+    private const int MovieRecent = 9;
+    private const int MovieRated = 9;
+    private const int MovieWatched = 6;
+    private const int SeriesRecent = 3;
+    private const int SeriesRated = 3;
+    private const int SeriesWatched = 2;
 
-    // Play a run of consecutive episodes of a series before moving on, in air order, so a popular show airs as a
-    // coherent block (e.g. episodes 5, 6, 7, 8) rather than scattered single episodes.
-    private const int PopularEpisodesPerBlock = 4;
+    // How many of each user's most-played episodes to scan when ranking the most-watched series.
+    private const int WatchedEpisodeScan = 200;
 
     private static bool PopularChannelEnabled()
-        => Plugin.Instance?.ReadConfiguration(c => c.PopularChannelEnabled) ?? false;
+        => Plugin.Instance?.ReadConfiguration(c => c.PopularChannel.Enabled) ?? false;
 
-    // The synthetic channel definition: number 0, a Material Symbol logo, shuffled. It carries no per-channel
-    // filters because its content comes from the popular query rather than configured library sources.
-    private static Channel BuildPopularChannel() => new()
+    // The Popular channel as Jellyfin sees it: the user's saved settings (name, icon, rating band, subtitle rule,
+    // loop behaviour) with the fixed bits forced. It always lives at channel 0 under the reserved id, and its
+    // content comes from the popular buckets rather than configured sources. Returns a copy so the stored
+    // configuration object is never mutated.
+    private static Channel BuildPopularChannel()
     {
-        Id = PopularChannelId,
-        Name = "Popular",
-        Number = 0,
-        LogoStyle = LogoStyle.Symbol,
-        LogoSymbol = "diversity_1",
-        LogoShowName = true,
-        Enabled = true,
-        Shuffle = true,
-        ShuffleEpisodes = false,
-        EpisodesPerBlock = PopularEpisodesPerBlock,
-        IncludeUnrated = true,
-        KidsRatingThreshold = string.Empty
-    };
-
-    // Resolves the Popular channel's loop: the most popular movies and shows across the whole library (series
-    // expand to their episodes), blended with recent additions so new content still surfaces.
-    private IReadOnlyList<ProgramEntry> ResolvePopularPrograms()
-    {
-        var items = new Dictionary<Guid, BaseItem>();
-        foreach (var series in TopPopular(BaseItemKind.Series, PopularPerKind))
+        var src = Plugin.Instance?.ReadConfiguration(c => c.PopularChannel) ?? new Channel();
+        return new Channel
         {
-            foreach (var episode in EpisodesOf(series.Id))
+            Id = PopularChannelId,
+            Number = 0,
+            Name = string.IsNullOrWhiteSpace(src.Name) ? "Popular" : src.Name,
+            LogoStyle = src.LogoStyle,
+            LogoSymbol = src.LogoSymbol,
+            LogoData = src.LogoData,
+            LogoContentType = src.LogoContentType,
+            LogoShowName = src.LogoShowName,
+            Enabled = src.Enabled,
+            AudioLanguage = src.AudioLanguage,
+            MinOfficialRating = src.MinOfficialRating,
+            MaxOfficialRating = src.MaxOfficialRating,
+            IncludeUnrated = src.IncludeUnrated,
+            KidsRatingThreshold = src.KidsRatingThreshold,
+            EpisodesPerBlock = src.EpisodesPerBlock,
+            KeepMultiPartTogether = src.KeepMultiPartTogether,
+            IncludeSpecials = src.IncludeSpecials,
+            Shuffle = src.Shuffle,
+            ShuffleEpisodes = src.ShuffleEpisodes,
+            FavorKind = src.FavorKind,
+            FavorStrength = src.FavorStrength,
+            SubtitleBurnIn = src.SubtitleBurnIn
+        };
+    }
+
+    // Resolves the Popular channel's loop. Movies and shows are each drawn from three buckets (recent additions,
+    // top community rating, most watched across all users) up to their per-bucket caps, de-duplicated so a title
+    // that qualifies in two buckets is counted once and the next candidate backfills it. Series then expand to
+    // their episodes.
+    private IReadOnlyList<ProgramEntry> ResolvePopularPrograms(Channel channel)
+    {
+        var ratings = new RatingFilter(
+            ResolveRatingScore(channel.MinOfficialRating),
+            ResolveRatingScore(channel.MaxOfficialRating),
+            channel.IncludeUnrated);
+        var kidsScore = ResolveRatingScore(channel.KidsRatingThreshold);
+        var users = _userManager.GetUsers().ToList();
+        var lookup = new Dictionary<Guid, BaseItem>();
+
+        // Keep only the candidates the channel's rating band allows, so the rating cap applies to the bucket
+        // selection itself. The queries over-fetch (x4) so a tight cap still leaves enough to fill the quotas.
+        List<Guid> Ids(IReadOnlyList<BaseItem> found)
+        {
+            var ids = new List<Guid>();
+            foreach (var item in found)
+            {
+                if (!ratings.Allows(item))
+                {
+                    continue;
+                }
+
+                lookup[item.Id] = item;
+                ids.Add(item.Id);
+            }
+
+            return ids;
+        }
+
+        var movieIds = SelectBuckets(
+            (Ids(Recent(BaseItemKind.Movie, MovieRecent * 4)), MovieRecent),
+            (Ids(TopRated(BaseItemKind.Movie, MovieRated * 4)), MovieRated),
+            (Ids(MostWatchedMovies(users, MovieWatched * 4)), MovieWatched));
+
+        var seriesIds = SelectBuckets(
+            (Ids(Recent(BaseItemKind.Series, SeriesRecent * 4)), SeriesRecent),
+            (Ids(TopRated(BaseItemKind.Series, SeriesRated * 4)), SeriesRated),
+            (Ids(MostWatchedSeries(users, SeriesWatched * 4)), SeriesWatched));
+
+        var items = new Dictionary<Guid, BaseItem>();
+        foreach (var id in movieIds)
+        {
+            if (lookup.TryGetValue(id, out var movie))
+            {
+                items[movie.Id] = movie;
+            }
+        }
+
+        foreach (var id in seriesIds)
+        {
+            foreach (var episode in EpisodesOf(id))
             {
                 items[episode.Id] = episode;
             }
         }
 
-        foreach (var movie in TopPopular(BaseItemKind.Movie, PopularPerKind))
-        {
-            items[movie.Id] = movie;
-        }
-
         var entries = new List<ProgramEntry>();
         foreach (var item in items.Values)
         {
-            if (item is Episode ep && ep.ParentIndexNumber == 0)
+            if (!channel.IncludeSpecials && item is Episode ep && ep.ParentIndexNumber == 0)
             {
-                continue; // skip specials
+                continue;
             }
 
-            var entry = ToEntry(item, kidsScore: null);
+            // Episodes inherit their series' rating, but re-check so the cap holds for any odd outlier.
+            if (!ratings.Allows(item))
+            {
+                continue;
+            }
+
+            var entry = ToEntry(item, kidsScore);
             if (entry is not null)
             {
                 entries.Add(entry);
@@ -488,32 +562,53 @@ public class ChannelService
         }
 
         var options = new ChannelLoopOptions(
-            PopularEpisodesPerBlock,
-            true,
-            true,
-            false,
+            channel.EpisodesPerBlock,
+            channel.KeepMultiPartTogether,
+            channel.Shuffle,
+            channel.ShuffleEpisodes,
             PopularChannelId,
-            FavorKind.None,
-            FavorStrength.Moderate);
+            channel.FavorKind,
+            channel.FavorStrength);
 
         return ProgramLoopBuilder.Build(entries, options);
     }
 
-    // The top N items of a kind across every library, ranked by a popularity score that blends community rating
-    // with a recency boost. Two candidate pools (highest rated, most recently added) are merged so both
-    // well-loved and brand-new content can make the cut.
-    private List<BaseItem> TopPopular(BaseItemKind kind, int count)
+    /// <summary>
+    /// Fills ordered buckets up to their quotas from candidate id lists, de-duplicating across buckets: an id
+    /// already taken by an earlier bucket is skipped and the next candidate backfills it. A bucket whose
+    /// candidates run out simply contributes fewer ids.
+    /// </summary>
+    /// <param name="buckets">The candidate id lists paired with their quotas, in priority order.</param>
+    /// <returns>The selected ids, each appearing once, in bucket order.</returns>
+    public static List<Guid> SelectBuckets(params (IReadOnlyList<Guid> Candidates, int Quota)[] buckets)
     {
-        var byRating = _libraryManager.GetItemList(new InternalItemsQuery
+        ArgumentNullException.ThrowIfNull(buckets);
+        var selected = new HashSet<Guid>();
+        var result = new List<Guid>();
+        foreach (var (candidates, quota) in buckets)
         {
-            IncludeItemTypes = new[] { kind },
-            Recursive = true,
-            IsVirtualItem = false,
-            OrderBy = new[] { (ItemSortBy.CommunityRating, SortOrder.Descending) },
-            Limit = count * 3
-        });
+            var taken = 0;
+            foreach (var id in candidates)
+            {
+                if (taken >= quota)
+                {
+                    break;
+                }
 
-        var byRecency = _libraryManager.GetItemList(new InternalItemsQuery
+                if (selected.Add(id))
+                {
+                    result.Add(id);
+                    taken++;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    // Most recently added items of a kind, across every library.
+    private IReadOnlyList<BaseItem> Recent(BaseItemKind kind, int count)
+        => _libraryManager.GetItemList(new InternalItemsQuery
         {
             IncludeItemTypes = new[] { kind },
             Recursive = true,
@@ -522,30 +617,105 @@ public class ChannelService
             Limit = count
         });
 
-        var now = DateTime.UtcNow;
-        return byRating.Concat(byRecency)
-            .DistinctBy(i => i.Id)
-            .OrderByDescending(i => PopularityScore(i.CommunityRating, i.DateCreated, now))
+    // Highest community-rated items of a kind, across every library.
+    private IReadOnlyList<BaseItem> TopRated(BaseItemKind kind, int count)
+        => _libraryManager.GetItemList(new InternalItemsQuery
+        {
+            IncludeItemTypes = new[] { kind },
+            Recursive = true,
+            IsVirtualItem = false,
+            OrderBy = new[] { (ItemSortBy.CommunityRating, SortOrder.Descending) },
+            Limit = count
+        });
+
+    // Movies watched most across the whole server: each user's most-played movies are pooled, then ranked by
+    // their play count summed over every user.
+    private List<BaseItem> MostWatchedMovies(List<User> users, int count)
+    {
+        if (users.Count == 0)
+        {
+            return new List<BaseItem>();
+        }
+
+        var candidates = new Dictionary<Guid, BaseItem>();
+        foreach (var user in users)
+        {
+            foreach (var movie in _libraryManager.GetItemList(new InternalItemsQuery(user)
+            {
+                IncludeItemTypes = new[] { BaseItemKind.Movie },
+                Recursive = true,
+                IsVirtualItem = false,
+                IsPlayed = true,
+                OrderBy = new[] { (ItemSortBy.PlayCount, SortOrder.Descending) },
+                Limit = count * 5
+            }))
+            {
+                candidates[movie.Id] = movie;
+            }
+        }
+
+        return candidates.Values
+            .OrderByDescending(movie => TotalPlayCount(movie, users))
             .Take(count)
             .ToList();
     }
 
-    /// <summary>
-    /// Scores an item's "popularity" for the built-in Popular channel: its community rating (0-10) plus a recency
-    /// boost that adds up to 3 for a brand-new item and decays to zero over about two years.
-    /// </summary>
-    /// <param name="communityRating">The item's community rating, or <c>null</c>.</param>
-    /// <param name="dateAdded">When the item was added to the library.</param>
-    /// <param name="now">The current UTC time.</param>
-    /// <returns>The blended score; a higher score ranks first.</returns>
-    public static double PopularityScore(float? communityRating, DateTime dateAdded, DateTime now)
+    // Series watched most across the whole server: each user's most-played episodes are tallied to their series,
+    // summed over every user, and the top series are returned.
+    private List<BaseItem> MostWatchedSeries(List<User> users, int count)
     {
-        const double RecencyWindowDays = 730.0;
-        const double MaxRecencyBoost = 3.0;
-        var rating = communityRating ?? 0f;
-        var ageDays = Math.Max(0, (now - dateAdded).TotalDays);
-        var recency = MaxRecencyBoost * Math.Max(0, 1 - (ageDays / RecencyWindowDays));
-        return rating + recency;
+        if (users.Count == 0)
+        {
+            return new List<BaseItem>();
+        }
+
+        var plays = new Dictionary<Guid, long>();
+        foreach (var user in users)
+        {
+            foreach (var item in _libraryManager.GetItemList(new InternalItemsQuery(user)
+            {
+                IncludeItemTypes = new[] { BaseItemKind.Episode },
+                Recursive = true,
+                IsVirtualItem = false,
+                IsPlayed = true,
+                OrderBy = new[] { (ItemSortBy.PlayCount, SortOrder.Descending) },
+                Limit = WatchedEpisodeScan
+            }))
+            {
+                if (item is Episode ep && ep.SeriesId != Guid.Empty)
+                {
+                    var playCount = _userDataManager.GetUserData(user, item)?.PlayCount ?? 0;
+                    if (playCount > 0)
+                    {
+                        plays.TryGetValue(ep.SeriesId, out var current);
+                        plays[ep.SeriesId] = current + playCount;
+                    }
+                }
+            }
+        }
+
+        var series = new List<BaseItem>();
+        foreach (var id in plays.OrderByDescending(kv => kv.Value).Select(kv => kv.Key).Take(count))
+        {
+            if (_libraryManager.GetItemById(id) is { } found)
+            {
+                series.Add(found);
+            }
+        }
+
+        return series;
+    }
+
+    // An item's total play count across every user.
+    private long TotalPlayCount(BaseItem item, List<User> users)
+    {
+        long total = 0;
+        foreach (var user in users)
+        {
+            total += _userDataManager.GetUserData(user, item)?.PlayCount ?? 0;
+        }
+
+        return total;
     }
 
     // Resolves one library source to its matching items (before specials/ordering are applied). The

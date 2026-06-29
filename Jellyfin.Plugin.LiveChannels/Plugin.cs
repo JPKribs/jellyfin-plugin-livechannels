@@ -76,7 +76,20 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
             EmbeddedResourcePath = $"{ns}.Configuration.livechannels_channels.js"
         };
 
-        // Tab 2: Settings (plugin-wide configuration).
+        // Tab 2: Popular channel (the built-in channel 0's own settings).
+        yield return new PluginPageInfo
+        {
+            Name = "livechannels_popular",
+            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_popular.html"
+        };
+
+        yield return new PluginPageInfo
+        {
+            Name = "livechannels_popular.js",
+            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_popular.js"
+        };
+
+        // Tab 3: Settings (plugin-wide configuration).
         yield return new PluginPageInfo
         {
             Name = "livechannels_settings",

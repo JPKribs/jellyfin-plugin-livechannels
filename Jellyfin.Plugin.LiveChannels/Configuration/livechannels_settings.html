@@ -24,11 +24,11 @@
                     </label>
                     <div class="fieldDescription">Forces software encoding and decoding. Turn this on if channels fail to play with hardware acceleration.</div>
 
-                    <label class="emby-checkbox-label">
-                        <input type="checkbox" is="emby-checkbox" id="popularChannel" />
-                        <span class="checkboxLabel">Popular channel</span>
-                    </label>
-                    <div class="fieldDescription">Creates a channel for recent &amp; popular content on your server at channel 0.</div>
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="subtitleLanguage">Default language</label>
+                        <select is="emby-select" id="subtitleLanguage" class="jpk-selector-dropdown"></select>
+                        <div class="fieldDescription">Your native language. With a channel's subtitle rule set to Forced only, content whose default audio track is not in this language burns in subtitles so it stays followable.</div>
+                    </div>
 
                     <div class="selectContainer">
                         <label class="selectLabel" for="resolution">Resolution</label>

@@ -22,7 +22,7 @@ A channel always includes whatever its libraries and filters yield: movies, epis
 
 ### The Popular channel
 
-Out of the box the plugin serves a **Popular** channel on channel 0, with no setup at all. It loops the most popular movies and shows across your whole library, scored by community rating and blended with a recency boost so recent additions show up alongside long time favourites. Series play as blocks of four consecutive episodes in air order, so a popular show airs a coherent run rather than scattered single episodes. Turn it off any time with the **Popular channel** toggle on the Settings tab.
+Out of the box the plugin serves a **Popular** channel on channel 0, with no setup at all. It loops a mix of your **recently added**, **highest rated**, and **most watched** movies and shows, where most watched is measured server wide by summing play counts across every user. It aims for 24 movies (9 recent, 9 rated, 6 watched) and 8 shows (3 recent, 3 rated, 2 watched), de-duplicated so a title that qualifies twice is counted once, and simply returns fewer when a source is thin. Series play as blocks of four consecutive episodes in air order, so a popular show airs a coherent run rather than scattered single episodes. Its own **Popular** tab lets you rename it, change its icon, cap the rating, set a subtitle rule, and tune the loop, or turn it off entirely. Only its number (always 0) and its content are fixed.
 
 ### Channel settings
 
@@ -38,11 +38,11 @@ Per channel you can also set:
 * **Shuffle** is on by default and is fixed and repeatable, so the guide and the live stream always agree. Disable it to play everything alphabetically.
 * **Episode order** plays a series in air order or at random.
 * **Favor content type** weights a channel toward movies, shows, or music videos so that type plays more often, at a slight, moderate, or heavy strength. Shuffle must be on.
-* **Subtitle burn in** bakes a subtitle track into the video for everyone. Choose **Never**, **Forced only**, or **Always**. Forced only burns only the forced track, but switches to Always behaviour when the audio is in a known language other than English, so foreign content stays readable.
+* **Subtitle burn in** bakes a subtitle track into the video for everyone. Choose **Never**, **Forced only**, or **Always**. Forced only burns only the forced track, but switches to Always behaviour when the audio is in a language other than your **Default language** (set on the Settings tab), so foreign content stays readable.
 
 ### Output
 
-Resolution, video codec, audio codec, and bitrate are set on the **Settings** tab and apply to every channel. The same tab holds the playback buffer length, where stream files are written, and the Popular channel toggle. Decoding and encoding both follow Jellyfin's own hardware acceleration, with a switch to force software when you want it. HDR sources are tone mapped to SDR so they never play washed out. 1080p is the practical sweet spot for a round the clock channel.
+Resolution, video codec, audio codec, and bitrate are set on the **Settings** tab and apply to every channel. The same tab holds the playback buffer length, where stream files are written, and your **Default language** (the language used to decide Forced subtitle burn in). Decoding and encoding both follow Jellyfin's own hardware acceleration, with a switch to force software when you want it. HDR sources are tone mapped to SDR so they never play washed out. 1080p is the practical sweet spot for a round the clock channel.
 
 ### Guide
 

@@ -1,0 +1,131 @@
+<div id="LiveChannelsPopularPage" data-role="page"
+     class="page type-interior pluginConfigurationPage withTabs"
+     data-require="emby-input,emby-button,emby-checkbox,emby-select"
+     data-controller="__plugin/livechannels_popular.js">
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="LiveChannelsPopularForm">
+                <div class="verticalSection verticalSection-extrabottompadding">
+
+                    <div class="sectionTitleContainer flex align-items-center">
+                        <h1 class="sectionTitle">Popular channel</h1>
+                    </div>
+
+                    <div class="fieldDescription">A built in channel at number 0 that loops your recent, top rated, and most watched movies and shows.</div>
+
+                    <label class="emby-checkbox-label">
+                        <input type="checkbox" is="emby-checkbox" id="popularEnabled" />
+                        <span class="checkboxLabel">Enable the Popular channel</span>
+                    </label>
+
+                    <!-- Channel -->
+                    <div class="jpk-collapsible-section">
+                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="popularSectionChannel">
+                            <span class="jpk-collapsible-title">Channel</span>
+                            <span class="jpk-collapsible-icon">&#9660;</span>
+                        </button>
+                        <div id="popularSectionChannel" class="jpk-collapsible-content collapsed">
+                            <div class="inputContainer">
+                                <label for="popularName">Name</label>
+                                <input is="emby-input" type="text" id="popularName" autocomplete="off" />
+                            </div>
+                            <div class="inputContainer">
+                                <label for="popularIcon">Icon</label>
+                                <input is="emby-input" type="text" id="popularIcon" autocomplete="off" placeholder="e.g. diversity_1" />
+                                <div class="fieldDescription">Any Material Symbols name, drawn in the centre of the generated logo. Browse names at fonts.google.com/icons.</div>
+                            </div>
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label class="emby-checkbox-label">
+                                    <input type="checkbox" is="emby-checkbox" id="popularShowName" />
+                                    <span class="checkboxLabel">Show channel name on the generated logo</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Channel settings -->
+                    <div class="jpk-collapsible-section">
+                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="popularSectionSettings">
+                            <span class="jpk-collapsible-title">Channel settings</span>
+                            <span class="jpk-collapsible-icon">&#9660;</span>
+                        </button>
+                        <div id="popularSectionSettings" class="jpk-collapsible-content collapsed">
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="popularSubtitle">Subtitle burn in</label>
+                                <select is="emby-select" id="popularSubtitle" class="jpk-selector-dropdown">
+                                    <option value="Never">Never</option>
+                                    <option value="Forced">Forced only</option>
+                                    <option value="Always">Always</option>
+                                </select>
+                                <div class="fieldDescription">Burns subtitles into the picture, where Forced only shows the forced track or the default track when the audio is not in your default language, and Always shows subtitles on everything.</div>
+                            </div>
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="popularMinRating">Minimum age rating</label>
+                                <select id="popularMinRating" class="jpk-selector-dropdown"></select>
+                                <div class="fieldDescription">Content at or above this rating. Use this with a maximum to make an adults-only or a single-band channel.</div>
+                            </div>
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="popularMaxRating">Maximum age rating</label>
+                                <select id="popularMaxRating" class="jpk-selector-dropdown"></select>
+                                <div class="fieldDescription">Content at or below this rating.</div>
+                            </div>
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label class="emby-checkbox-label">
+                                    <input type="checkbox" is="emby-checkbox" id="popularIncludeUnrated" />
+                                    <span class="checkboxLabel">Include unrated</span>
+                                </label>
+                                <div class="fieldDescription">On by default. When off, items with no rating are dropped. When on, unrated content is always allowed regardless of the bounds above.</div>
+                            </div>
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="popularKidsRating">Kids rating</label>
+                                <select id="popularKidsRating" class="jpk-selector-dropdown"></select>
+                                <div class="fieldDescription">Programs that carry a rating at or below this are flagged as Kids in the guide. Movies are flagged as movies automatically.</div>
+                            </div>
+                            <div class="inputContainer">
+                                <label for="popularEpisodesPerBlock">Episodes per block</label>
+                                <input is="emby-input" type="number" id="popularEpisodesPerBlock" min="1" step="1" autocomplete="off" />
+                                <div class="fieldDescription">Consecutive episodes per series before moving on. 1 disables grouping.</div>
+                            </div>
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="popularEpisodeOrder">Episode order</label>
+                                <select id="popularEpisodeOrder" class="jpk-selector-dropdown">
+                                    <option value="air">Air order</option>
+                                    <option value="random">Random</option>
+                                </select>
+                            </div>
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label class="emby-checkbox-label">
+                                    <input type="checkbox" is="emby-checkbox" id="popularKeepMultiPart" />
+                                    <span class="checkboxLabel">Keep multipart episodes together</span>
+                                </label>
+                                <div class="fieldDescription">Keeps two part episodes together across a block boundary.</div>
+                            </div>
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label class="emby-checkbox-label">
+                                    <input type="checkbox" is="emby-checkbox" id="popularIncludeSpecials" />
+                                    <span class="checkboxLabel">Include specials</span>
+                                </label>
+                                <div class="fieldDescription">Includes specials found in series.</div>
+                            </div>
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label class="emby-checkbox-label">
+                                    <input type="checkbox" is="emby-checkbox" id="popularShuffle" />
+                                    <span class="checkboxLabel">Shuffle the channel</span>
+                                </label>
+                                <div class="fieldDescription">Disable to play everything alphabetically.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button is="emby-button" type="button" id="btnSavePopular" class="raised block jpk-button-submit">
+                        <span>Save</span>
+                    </button>
+                    <span id="popularStatus" class="jpk-status-text"></span>
+
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">
+</div>
