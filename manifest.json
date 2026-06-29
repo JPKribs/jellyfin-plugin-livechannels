@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.5.0",
+        "changelog": "## Features\r\n- Give the Popular channel its own tab to set its name, icon, rating limit, subtitle rule, and loop behaviour\r\n- Build the Popular channel from your recent, top rated, and most watched movies and shows\r\n- Measure most watched across the whole server by combining every user's play counts\r\n- Choose a default language in Settings that decides when Forced subtitles burn in",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.5.0/jellyfin-plugin-livechannels-10.11.5.0.zip",
+        "checksum": "6f1cdbb705de1b683d604598102af573",
+        "timestamp": "2026-06-29T03:40:05Z"
+      },
+      {
         "version": "10.11.4.0",
         "changelog": "## Features\r\n- Add a built in Popular channel that loops your top movies and shows blended with recent additions\r\n- Fill the guide with episode titles, ratings, original air dates, and an HD marker\r\n- Show landscape artwork in the guide, backdrops for movies and thumbnails for episodes and music videos",
         "targetAbi": "10.11.9.0",
