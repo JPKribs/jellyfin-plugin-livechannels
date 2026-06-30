@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.7.0",
+        "changelog": "## Features\r\n- Filter a channel by production year or decade, so you can build a 90s channel\r\n- Filter a channel by studio or network, like an HBO channel, matching shows by their series too\r\n- Filter a channel by people, so you can build a favourite actor or director channel\r\n- Filter a channel by a minimum community or critic rating, for a best-of channel",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.7.0/jellyfin-plugin-livechannels-10.11.7.0.zip",
+        "checksum": "c921449bf2edf8c9966a6d5ed52afb67",
+        "timestamp": "2026-06-30T07:24:01Z"
+      },
+      {
         "version": "10.11.6.6",
         "changelog": "## Features\r\n- Start channels quickly even right after a restart by saving each item's video details with the schedule, so tune-in no longer re-scans the library\r\n- Keep each channel's schedule in its own file and release it from memory once the channel stops, so large setups use less memory\r\n- Add a pre-render setting to control how early the next item starts encoding, which can be lowered or turned off to save CPU on low-power hardware",
         "targetAbi": "10.11.9.0",
