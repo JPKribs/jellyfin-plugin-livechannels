@@ -962,6 +962,99 @@ export default function (view) {
         return max + 1;
     }
 
+    // MARK: Import / export
+    //
+    // Move channels between servers (e.g. a low-power box and a fast one) without re-creating them by hand.
+    // Export writes every channel -- filters, appearance, loop behaviour, and the Base64 logo -- to a self-contained
+    // JSON file. Import merges that file back: a channel whose Number matches an existing one replaces it (so the
+    // same export re-imported updates in place instead of duplicating), and any other channel is added. Library
+    // *content* still has to exist on the target server; the IDs of hand-picked items only resolve if those items
+    // are present, but library/genre/rating filters carry over as-is.
+
+    function exportChannels() {
+        var payload = {
+            type: 'livechannels-export',
+            version: 1,
+            exportedAt: new Date().toISOString(),
+            channels: stripInternal(channels)
+        };
+        var name = 'live-channels-' + new Date().toISOString().slice(0, 10) + '.json';
+        var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+        Shared.setStatus('ioStatus', 'Exported ' + channels.length + ' channel' + (channels.length === 1 ? '' : 's') + ' to ' + name + '.', false);
+    }
+
+    // Finds the index of the first channel with the given number, or -1.
+    function indexByNumber(number) {
+        for (var i = 0; i < channels.length; i++) { if ((channels[i].Number || 0) === (number || 0)) return i; }
+        return -1;
+    }
+
+    function importChannelsFromText(text) {
+        var parsed;
+        try { parsed = JSON.parse(text); }
+        catch (e) { Shared.setStatus('ioStatus', 'Import failed: the file is not valid JSON.', true); return; }
+
+        var incoming = Array.isArray(parsed) ? parsed
+            : (parsed && Array.isArray(parsed.channels) ? parsed.channels : null);
+        if (!incoming) { Shared.setStatus('ioStatus', 'Import failed: no channels found in the file.', true); return; }
+
+        // Validate the shape before touching the working set, so a bad file changes nothing.
+        var clean = [];
+        for (var i = 0; i < incoming.length; i++) {
+            var ch = incoming[i];
+            if (!ch || typeof ch !== 'object' || typeof ch.Name !== 'string' || !Array.isArray(ch.Sources)) {
+                Shared.setStatus('ioStatus', 'Import failed: this does not look like a Live Channels export.', true);
+                return;
+            }
+            clean.push(ch);
+        }
+        if (!clean.length) { Shared.setStatus('ioStatus', 'Nothing to import: the file contains no channels.', true); return; }
+
+        var added = 0, replaced = 0;
+        clean.forEach(function (ic) {
+            delete ic.__items;
+            ic.Sources = (ic.Sources || []).map(function (s) { delete s.__items; return s; });
+            ic.Id = ic.Id || newId();
+
+            var idx = indexByNumber(ic.Number);
+            if (idx >= 0) {
+                ic.Id = channels[idx].Id || ic.Id; // keep the slot's existing stable id
+                channels[idx] = ic;
+                replaced++;
+            } else {
+                // Avoid colliding with the id of a channel we are keeping.
+                var collides = channels.some(function (c) { return c.Id === ic.Id; });
+                if (collides) ic.Id = newId();
+                channels.push(ic);
+                added++;
+            }
+        });
+
+        currentIndex = channels.length ? 0 : -1;
+        // Resolve item names for any hand-picked sources so the editor reads cleanly, then save + refresh Live TV.
+        hydrateItemNames().then(function () {
+            persist('ioStatus', 'Imported ' + clean.length + ' channel' + (clean.length === 1 ? '' : 's') + ' (' + added + ' added, ' + replaced + ' replaced).', 'Import failed to save.');
+        });
+    }
+
+    function onImportFile(e) {
+        var file = e.target.files && e.target.files[0];
+        e.target.value = ''; // let the same file be chosen again
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function () { importChannelsFromText(String(reader.result || '')); };
+        reader.onerror = function () { Shared.setStatus('ioStatus', 'Import failed: could not read the file.', true); };
+        reader.readAsText(file);
+    }
+
     function addChannel() {
         channels.push({
             Id: newId(), Name: '', Number: nextNumber(), LogoData: '', LogoContentType: '',
@@ -1037,6 +1130,9 @@ export default function (view) {
         el('maxRating').addEventListener('change', function () { enforceRatingBand('max'); });
         el('btnNewChannel').addEventListener('click', addChannel);
         el('btnDeleteChannel').addEventListener('click', deleteChannel);
+        el('btnExportChannels').addEventListener('click', exportChannels);
+        el('btnImportChannels').addEventListener('click', function () { el('importFile').click(); });
+        el('importFile').addEventListener('change', onImportFile);
         el('btnSaveChannel').addEventListener('click', saveChannel);
         el('btnAddLibrary').addEventListener('click', addLibrary);
         el('btnEnable').addEventListener('click', function () { currentEnabled = !currentEnabled; setEnableVisual(currentEnabled); });

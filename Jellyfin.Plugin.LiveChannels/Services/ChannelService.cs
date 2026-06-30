@@ -654,14 +654,23 @@ public class ChannelService
     /// <summary>The stable id of the built-in Popular channel.</summary>
     public const string PopularChannelId = "livechannels-popular";
 
-    // Per-bucket caps for the Popular channel. Each kind is drawn from three sources: recently added, top
-    // community rating, and most watched across all users. A short or empty source just yields fewer items.
-    private const int MovieRecent = 9;
-    private const int MovieRated = 9;
-    private const int MovieWatched = 6;
-    private const int SeriesRecent = 3;
-    private const int SeriesRated = 3;
-    private const int SeriesWatched = 2;
+    // Per-bucket quotas for the Popular channel population (35 titles). Movies (25): most-watched by play count,
+    // recently added, and a random handful from the highest community-rated. Shows (10): most-watched series,
+    // series whose episodes were just added, and a random handful from the highest community-rated. A short or
+    // empty source just yields fewer items -- the buckets do not backfill each other, so the channel is simply
+    // smaller on a sparse server. Each selected series contributes its whole catalogue; the round-robin loop
+    // builder keeps a show from recurring until every other show has had a turn, so episodes never clump.
+    private const int MovieWatched = 15;
+    private const int MovieRecent = 5;
+    private const int MovieRandomRated = 5;
+    private const int SeriesWatched = 6;
+    private const int SeriesRecentEpisode = 2;
+    private const int SeriesRandomRated = 2;
+
+    // The community-rated pools the random "rated" picks are drawn from (the top N by rating, then a seeded
+    // random subset), so the channel surfaces different highly-rated titles over time rather than the same few.
+    private const int MovieRatedPool = 50;
+    private const int SeriesRatedPool = 25;
 
     // How many of each user's most-played episodes to scan when ranking the most-watched series.
     private const int WatchedEpisodeScan = 200;
@@ -730,8 +739,13 @@ public class ChannelService
         var users = _userManager.GetUsers().ToList();
         var lookup = new Dictionary<Guid, BaseItem>();
 
+        // A per-resolve seed for the random "rated" picks. It is captured once and baked into the cached schedule
+        // (which both the guide and the live stream read), so they always agree; it changes each guide refresh, so
+        // the random picks rotate over time. Includes the day so the rotation is stable within a refresh cycle.
+        var seed = PopularChannelId + ":" + DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+
         // Keep only the candidates the channel's rating band allows, so the rating cap applies to the bucket
-        // selection itself. The queries over-fetch (x4) so a tight cap still leaves enough to fill the quotas.
+        // selection itself. The queries over-fetch so a tight cap still leaves enough to fill the quotas.
         List<Guid> Ids(IReadOnlyList<BaseItem> found)
         {
             var ids = new List<Guid>();
@@ -749,15 +763,18 @@ public class ChannelService
             return ids;
         }
 
+        // Movies (25): 15 most-watched, 5 most-recently-added, 5 random from the top community-rated. SelectBuckets
+        // de-duplicates across buckets and fills each in order; buckets do not backfill each other.
         var movieIds = SelectBuckets(
+            (Ids(MostWatchedMovies(users, MovieWatched * 4)), MovieWatched),
             (Ids(Recent(BaseItemKind.Movie, MovieRecent * 4)), MovieRecent),
-            (Ids(TopRated(BaseItemKind.Movie, MovieRated * 4)), MovieRated),
-            (Ids(MostWatchedMovies(users, MovieWatched * 4)), MovieWatched));
+            (SeededShuffle(Ids(TopRated(BaseItemKind.Movie, MovieRatedPool)), seed + ":mvr"), MovieRandomRated));
 
+        // Shows (10): 6 most-watched series, 2 series whose episodes were just added, 2 random from the top rated.
         var seriesIds = SelectBuckets(
-            (Ids(Recent(BaseItemKind.Series, SeriesRecent * 4)), SeriesRecent),
-            (Ids(TopRated(BaseItemKind.Series, SeriesRated * 4)), SeriesRated),
-            (Ids(MostWatchedSeries(users, SeriesWatched * 4)), SeriesWatched));
+            (Ids(MostWatchedSeries(users, SeriesWatched * 4)), SeriesWatched),
+            (Ids(RecentEpisodeSeries(SeriesRecentEpisode * 4)), SeriesRecentEpisode),
+            (SeededShuffle(Ids(TopRated(BaseItemKind.Series, SeriesRatedPool)), seed + ":svr"), SeriesRandomRated));
 
         var items = new Dictionary<Guid, BaseItem>();
         foreach (var id in movieIds)
@@ -907,8 +924,10 @@ public class ChannelService
             .ToList();
     }
 
-    // Series watched most across the whole server: each user's most-played episodes are tallied to their series,
-    // summed over every user, and the top series are returned.
+    // Series watched most across the whole server. Each episode's play count is summed over every user, the
+    // episodes are ranked by total plays, and we then walk down that ranked list taking each new series until we
+    // have `count` distinct ones -- so the popular shows are exactly the shows the most-played episodes belong to
+    // (the whole series is used downstream, not just the popular episodes).
     private List<BaseItem> MostWatchedSeries(List<User> users, int count)
     {
         if (users.Count == 0)
@@ -916,7 +935,8 @@ public class ChannelService
             return new List<BaseItem>();
         }
 
-        var plays = new Dictionary<Guid, long>();
+        // Episode id -> (total plays across users, owning series).
+        var episodePlays = new Dictionary<Guid, (long Plays, Guid SeriesId)>();
         foreach (var user in users)
         {
             foreach (var item in _libraryManager.GetItemList(new InternalItemsQuery(user)
@@ -934,23 +954,87 @@ public class ChannelService
                     var playCount = _userDataManager.GetUserData(user, item)?.PlayCount ?? 0;
                     if (playCount > 0)
                     {
-                        plays.TryGetValue(ep.SeriesId, out var current);
-                        plays[ep.SeriesId] = current + playCount;
+                        episodePlays.TryGetValue(item.Id, out var current);
+                        episodePlays[item.Id] = (current.Plays + playCount, ep.SeriesId);
                     }
                 }
             }
         }
 
         var series = new List<BaseItem>();
-        foreach (var id in plays.OrderByDescending(kv => kv.Value).Select(kv => kv.Key).Take(count))
+        var seen = new HashSet<Guid>();
+        foreach (var entry in episodePlays.Values.OrderByDescending(e => e.Plays))
         {
-            if (_libraryManager.GetItemById(id) is { } found)
+            if (!seen.Add(entry.SeriesId))
+            {
+                continue;
+            }
+
+            if (_libraryManager.GetItemById(entry.SeriesId) is { } found)
             {
                 series.Add(found);
+                if (series.Count >= count)
+                {
+                    break;
+                }
             }
         }
 
         return series;
+    }
+
+    // Series whose episodes were added to the library most recently: the newest episodes are scanned and their
+    // distinct owning series returned, newest first, until `count` are found. Surfaces "what just landed" as shows.
+    private List<BaseItem> RecentEpisodeSeries(int count)
+    {
+        var series = new List<BaseItem>();
+        var seen = new HashSet<Guid>();
+        foreach (var item in _libraryManager.GetItemList(new InternalItemsQuery
+        {
+            IncludeItemTypes = new[] { BaseItemKind.Episode },
+            Recursive = true,
+            IsVirtualItem = false,
+            OrderBy = new[] { (ItemSortBy.DateCreated, SortOrder.Descending) },
+            Limit = Math.Max(count, 1) * 50
+        }))
+        {
+            if (item is Episode ep && ep.SeriesId != Guid.Empty && seen.Add(ep.SeriesId)
+                && _libraryManager.GetItemById(ep.SeriesId) is { } found)
+            {
+                series.Add(found);
+                if (series.Count >= count)
+                {
+                    break;
+                }
+            }
+        }
+
+        return series;
+    }
+
+    // A deterministic, seeded shuffle of ids: stable for a given seed (so the guide and stream agree and it only
+    // changes when the seed does), used to pick a random subset from a "top rated" pool.
+    private static List<Guid> SeededShuffle(IReadOnlyList<Guid> ids, string seed)
+        => ids.OrderBy(id => SeededOrder(seed, id)).ToList();
+
+    // FNV-1a hash of the seed and an id, giving a stable pseudo-random ordering key.
+    private static uint SeededOrder(string seed, Guid id)
+    {
+        unchecked
+        {
+            var hash = 2166136261u;
+            foreach (var c in seed)
+            {
+                hash = (hash ^ (byte)c) * 16777619u;
+            }
+
+            foreach (var b in id.ToByteArray())
+            {
+                hash = (hash ^ b) * 16777619u;
+            }
+
+            return hash;
+        }
     }
 
     // An item's total play count across every user.

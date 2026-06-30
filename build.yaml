@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.7.1"
+version: "10.11.8.0"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV, with a ready-made Popular channel out of the box."
@@ -16,5 +16,6 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   features:
-  - Find studios, people, and the audio or subtitle language by searching instead of scrolling a long list, so any studio such as HBO is reachable
-  - Group the channel content filters into their own Filters section for a tidier editor
+  - Export and import your channels from the Channels tab, so you can copy a setup between servers
+  - Keep channels varied by never repeating a series until every other series has aired, so one big show no longer dominates the loop
+  - Make the Popular channel more diverse by choosing shows from your most-watched episodes and rotating a larger pool of movies and shows

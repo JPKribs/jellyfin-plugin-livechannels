@@ -108,34 +108,58 @@ public static class ProgramLoopBuilder
                 .ToList();
         }
 
-        // Spread each series' blocks evenly across the loop rather than shuffling every block independently:
-        // a flat shuffle lets a series with many blocks clump into back-to-back runs. Each block is placed at a
-        // fractional position (index + phase) / blockCount within its series, where phase is a stable per-series
-        // hash so equal-sized series do not line up. Sorting by that position deals each series out at even
-        // intervals and interleaves the series in proportion to their size, while keeping a series in order.
-        // Standalone items are one-block groups, so each lands at its own random phase and scatters too.
-        // When the channel favours a content type, give every group of that type extra slots so it fills the
-        // target share of the loop, cycling its blocks to cover the slots (the "repeat to fill the share" choice).
-        // A multiplier of 1 leaves a group untouched.
+        // Order the blocks round-robin so a series never recurs until every other series has placed a block: deal
+        // one block from each series per round, so the loop cycles A B C A B C … and a long series simply keeps its
+        // remaining blocks for later rounds. A series repeats back-to-back only once every other series is exhausted
+        // (it genuinely fills the rest of the channel). Standalone items (movies, videos) are single-block groups;
+        // rather than bunching them all into the first round, each is scattered to a round by its stable phase.
+        // Within a round, series are dealt in a stable per-channel order (the same every round) so a series never
+        // straddles a round boundary. When the channel favours a content type, its groups get extra rounds to reach the
+        // target share. Deterministic (seeded by channel id) so the guide projection and the live stream agree.
         var favorMultiplier = FavorMultiplier(blocks, options);
 
-        var spread = blocks
+        var groups = blocks
             .GroupBy(b => b.GroupKey, StringComparer.Ordinal)
-            .SelectMany(g =>
+            .Select(g =>
             {
                 var ordered = g.OrderBy(b => b.Seq).ToList();
-                var phase = (uint)ShuffleKey(options.ChannelId, "phase:" + g.Key) / (double)uint.MaxValue;
                 var favored = options.FavorKind != FavorKind.None && KindOf(ordered[0]) == options.FavorKind;
                 var slots = favored ? Math.Max(ordered.Count, (int)Math.Round(ordered.Count * favorMultiplier)) : ordered.Count;
-                return Enumerable.Range(0, slots).Select(k => (Block: ordered[k % ordered.Count], Position: (k + phase) / slots));
+                var phase = (uint)ShuffleKey(options.ChannelId, "phase:" + g.Key) / (double)uint.MaxValue;
+                return (Ordered: ordered, Slots: slots, Phase: phase);
             })
-            .OrderBy(x => x.Position)
-            .ThenBy(x => x.Block.GroupKey, StringComparer.Ordinal)
-            .Select(x => x.Block)
             .ToList();
 
-        SpaceOutNeighbours(spread);
-        return spread.SelectMany(b => b.Items).ToList();
+        var maxRounds = groups.Max(g => g.Slots);
+        var placements = new List<(int Round, int Order, Block Block)>();
+        foreach (var g in groups)
+        {
+            // A stable per-series order used in EVERY round, so each round deals the series in the same sequence.
+            // That keeps the same series from straddling a round boundary (round N ends on a different series than
+            // round N+1 begins) -- the only same-series run is the legitimate tail once all other series run out.
+            var order = ShuffleKey(options.ChannelId, "order:" + g.Ordered[0].GroupKey);
+            if (g.Slots <= 1)
+            {
+                // A once-only item (a movie or video): drop it into a round chosen by its phase so the standalone
+                // items scatter through the loop instead of all landing in the first round.
+                var round = Math.Min(maxRounds - 1, (int)(g.Phase * maxRounds));
+                placements.Add((round, order, g.Ordered[0]));
+            }
+            else
+            {
+                for (var r = 0; r < g.Slots; r++)
+                {
+                    placements.Add((r, order, g.Ordered[r % g.Ordered.Count]));
+                }
+            }
+        }
+
+        return placements
+            .OrderBy(p => p.Round)
+            .ThenBy(p => p.Order)
+            .ThenBy(p => p.Block.GroupKey, StringComparer.Ordinal)
+            .SelectMany(p => p.Block.Items)
+            .ToList();
     }
 
     // Groups consecutive episodes that share a base title and a part marker into one unit (so a two-parter
@@ -210,40 +234,6 @@ public static class ProgramLoopBuilder
         return baseTitle.Length >= 2 ? baseTitle : null;
     }
 
-    // Pulls apart any same-series blocks the even spread still left adjacent (a series large enough to dominate
-    // the channel). For each clash, swaps the second block forward with the nearest later block when that strictly
-    // reduces the local number of same-series adjacencies, so it never makes the order worse and leaves a pair in
-    // place only when the series genuinely fills the rest of the loop. Deterministic, so guide and stream agree.
-    private static void SpaceOutNeighbours(List<Block> order)
-    {
-        for (var i = 1; i < order.Count; i++)
-        {
-            if (!SameSeries(order[i], order[i - 1]))
-            {
-                continue;
-            }
-
-            for (var j = i + 1; j < order.Count; j++)
-            {
-                if (SameSeries(order[j], order[i]))
-                {
-                    continue;
-                }
-
-                var before = LocalAdjacencies(order, i, j);
-                (order[i], order[j]) = (order[j], order[i]);
-                if (LocalAdjacencies(order, i, j) < before)
-                {
-                    break;
-                }
-
-                (order[i], order[j]) = (order[j], order[i]);
-            }
-        }
-    }
-
-    private static bool SameSeries(Block a, Block b) => string.Equals(a.GroupKey, b.GroupKey, StringComparison.Ordinal);
-
     // The content type of a block, from its first item: an episode (has a series), a movie, or otherwise a
     // standalone (music video).
     private static FavorKind KindOf(Block block)
@@ -285,23 +275,6 @@ public static class ProgramLoopBuilder
         var m = target * others / (favored * (1 - target));
         return Math.Clamp(m, 1.0, 10.0);
     }
-
-    // Counts the same-series adjacent pairs touching positions a and b (the only pairs a swap of a and b changes).
-    // a < b always, so the only overlapping right-index is a+1 == b.
-    private static int LocalAdjacencies(List<Block> order, int a, int b)
-    {
-        var count = Pair(order, a) + Pair(order, b) + Pair(order, b + 1);
-        if (a + 1 != b)
-        {
-            count += Pair(order, a + 1);
-        }
-
-        return count;
-    }
-
-    // 1 when the block at `right` shares a series with the block before it, else 0.
-    private static int Pair(List<Block> order, int right)
-        => right >= 1 && right < order.Count && SameSeries(order[right], order[right - 1]) ? 1 : 0;
 
     // FNV-1a hash of channel id + key, giving a stable per-channel ordering that survives restarts.
     private static int ShuffleKey(string channelId, string key)

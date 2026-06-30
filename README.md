@@ -20,9 +20,13 @@ A channel pulls from one or more **library cards**. Add a card per library and t
 
 A channel always includes whatever its libraries and filters yield: movies, episodes, and music videos. Turn on **Include home videos** to also pull in loose video files, such as those in a Home Videos library. Only items with a real media file and a known runtime can be scheduled. Anything else is skipped.
 
+### Import and export
+
+The **Channels** tab has **Export** and **Import** buttons. Export downloads all of your channels — every filter, the appearance, the loop behaviour, and the logo — as a single JSON file. Import reads that file on another server and merges it in: a channel whose number matches an existing one is updated in place, and any others are added, so you can copy a setup between servers. Channels built from libraries, genres, or ratings carry over as long as the target server has libraries with matching names; a channel that pins individual hand-picked items only keeps the items that exist on the target.
+
 ### The Popular channel
 
-Out of the box the plugin serves a **Popular** channel on channel 0, with no setup at all. It loops a mix of your **recently added**, **highest rated**, and **most watched** movies and shows, where most watched is measured server wide by summing play counts across every user. It aims for 24 movies (9 recent, 9 rated, 6 watched) and 8 shows (3 recent, 3 rated, 2 watched), de-duplicated so a title that qualifies twice is counted once, and simply returns fewer when a source is thin. Series play as blocks of four consecutive episodes in air order, so a popular show airs a coherent run rather than scattered single episodes. Its own **Popular** tab lets you rename it, change its icon, cap the rating, set a subtitle rule, and tune the loop, or turn it off entirely. Only its number (always 0) and its content are fixed.
+Out of the box the plugin serves a **Popular** channel on channel 0, with no setup at all. It loops a mix of your **most watched**, **recently added**, and **highest rated** movies and shows. Most watched is measured server wide by summing play counts across every user, and the popular shows are exactly the series your most-played episodes belong to. It aims for 25 movies (15 most watched, 5 recently added, 5 picked at random from your top community rated) and 10 shows (6 most watched, 2 whose episodes were just added, 2 picked at random from your top community rated), de-duplicated so a title that qualifies twice is counted once, and simply returns fewer when a source is thin. The random highly-rated picks are seeded and rotate over time, so the channel stays fresh. Each chosen show contributes its whole catalogue, and the loop ordering keeps any one show from dominating (see **Shuffle** below). Its own **Popular** tab lets you rename it, change its icon, cap the rating, set a subtitle rule, and tune the loop, or turn it off entirely. Only its number (always 0) and its content are fixed.
 
 ### Filters
 
@@ -46,7 +50,7 @@ Per channel you can also set:
 * **Keep multipart episodes together** never splits a two part episode across a block boundary.
 * **Include specials** opts season 0 in. Off by default.
 * **Include home videos** enables Home and unassigned videos. Off by default, so existing channels are unchanged.
-* **Shuffle** is on by default and is fixed and repeatable, so the guide and the live stream always agree. Disable it to play everything alphabetically.
+* **Shuffle** is on by default and is fixed and repeatable, so the guide and the live stream always agree. It interleaves your series round-robin, so the same show never plays again until every other show has had a turn — keeping the channel varied instead of letting one large series dominate (a show only runs back to back once everything else is exhausted). Disable it to play everything alphabetically.
 * **Episode order** plays a series in air order or at random.
 * **Favor content type** weights a channel toward movies, shows, or music videos so that type plays more often, at a slight, moderate, or heavy strength. Shuffle must be on.
 * **Subtitle burn in** bakes a subtitle track into the video for everyone. Choose **Never**, **Forced only**, or **Always**. Forced only burns only the forced track, but switches to Always behaviour when the audio is in a language other than your **Default language** (set on the Settings tab), so foreign content stays readable.

@@ -40,8 +40,17 @@
                             <button is="emby-button" type="button" id="btnDeleteChannel" class="raised jpk-icon-btn jpk-button-destructive" title="Delete channel">
                                 <span class="material-icons" aria-hidden="true">delete</span><span>Delete</span>
                             </button>
+                            <button is="emby-button" type="button" id="btnExportChannels" class="raised jpk-icon-btn" title="Export all channels to a file">
+                                <span class="material-icons" aria-hidden="true">download</span><span>Export</span>
+                            </button>
+                            <button is="emby-button" type="button" id="btnImportChannels" class="raised jpk-icon-btn" title="Import channels from a file">
+                                <span class="material-icons" aria-hidden="true">upload</span><span>Import</span>
+                            </button>
+                            <input type="file" id="importFile" accept="application/json,.json" class="hidden" />
                         </div>
                     </div>
+
+                    <span id="ioStatus" class="jpk-status-text"></span>
 
                     <div id="emptyState" class="jpk-empty-section hidden">No channels yet. Click <strong>New</strong> to create one.</div>
 

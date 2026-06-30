@@ -135,11 +135,28 @@ public class LoopBuilderTests
     }
 
     [Fact]
-    public void Shuffle_SpreadsSeries_NoBackToBackBlocks()
+    public void Shuffle_EqualSeries_RoundRobin_NoBackToBackBlocks()
     {
-        // A dominant series plus several smaller ones, 4-episode blocks. The even spread must keep the same
-        // series from playing two blocks back to back (the old flat shuffle clustered them, e.g. "Futurama
-        // Futurama Simpsons Futurama"). A run of one series should never exceed a single block.
+        // Five equal-sized series, 4-episode blocks. Round-robin must interleave them perfectly, so no series ever
+        // plays two blocks back to back -- the longest same-series run is a single block (4 episodes).
+        var items = new List<ProgramEntry>();
+        for (var s = 0; s < 5; s++)
+        {
+            var id = new Guid("2222222" + s + "-2222-2222-2222-222222222222");
+            items.AddRange(Enumerable.Range(1, 20).Select(i => Ep(id, "Show" + s, 1, i, "e" + i)));
+        }
+
+        var loop = ProgramLoopBuilder.Build(items, Opts(block: 4, shuffle: true));
+
+        Assert.True(MaxRun(loop) <= 4, "a series ran longer than one 4-episode block: " + MaxRun(loop));
+    }
+
+    [Fact]
+    public void Shuffle_DominantSeries_NeverRepeatsUntilOthersExhausted()
+    {
+        // A dominant series (10 blocks) plus four smaller ones (5 blocks each), 4-episode blocks. The rule: a
+        // series never recurs until every other series has had a block. So while the small series still have
+        // blocks, nothing plays back to back; only once they are exhausted may the dominant series fill the tail.
         var items = new List<ProgramEntry>();
         var big = new Guid("11111111-1111-1111-1111-111111111111");
         items.AddRange(Enumerable.Range(1, 40).Select(i => Ep(big, "Futurama", 1, i, "e" + i)));
@@ -151,7 +168,23 @@ public class LoopBuilderTests
 
         var loop = ProgramLoopBuilder.Build(items, Opts(block: 4, shuffle: true));
 
-        var maxRun = 1;
+        // Find where the small series are exhausted (the last episode that is not the dominant series). Up to and
+        // including that point, no series may run longer than one block; after it, the dominant tail is allowed.
+        var lastOther = loop.Count - 1;
+        while (lastOther >= 0 && loop[lastOther].SeriesId == big)
+        {
+            lastOther--;
+        }
+
+        Assert.True(MaxRun(loop.Take(lastOther + 1).ToList()) <= 4, "a series clumped before the others were exhausted: " + MaxRun(loop.Take(lastOther + 1).ToList()));
+        // Every episode is still present (nothing dropped), just reordered.
+        Assert.Equal(items.Count, loop.Count);
+    }
+
+    // The longest run of consecutive items sharing a series.
+    private static int MaxRun(IReadOnlyList<ProgramEntry> loop)
+    {
+        var maxRun = loop.Count > 0 ? 1 : 0;
         var run = 1;
         for (var i = 1; i < loop.Count; i++)
         {
@@ -159,7 +192,7 @@ public class LoopBuilderTests
             maxRun = Math.Max(maxRun, run);
         }
 
-        Assert.True(maxRun <= 4, "a series ran for " + maxRun + " consecutive items (more than one 4-episode block)");
+        return maxRun;
     }
 
     [Fact]
