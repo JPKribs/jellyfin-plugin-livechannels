@@ -660,12 +660,12 @@ public class ChannelService
     /// <summary>The stable id of the built-in Popular channel.</summary>
     public const string PopularChannelId = "livechannels-popular";
 
-    // Per-bucket quotas for the Popular channel population (35 titles). Movies (25): most-watched by play count,
-    // recently added, and a random handful from the highest community-rated. Shows (10): most-watched series,
-    // series whose episodes were just added, and a random handful from the highest community-rated. A short or
-    // empty source just yields fewer items -- the buckets do not backfill each other, so the channel is simply
-    // smaller on a sparse server. Each selected series contributes its whole catalogue; the round-robin loop
-    // builder keeps a show from recurring until every other show has had a turn, so episodes never clump.
+    // Per-bucket quotas for the Popular channel population (35 titles). Movies (25): most recently played (by play
+    // date, across every user), recently added, and a random handful from the highest community-rated. Shows (10):
+    // most recently played series, series whose episodes were just added, and a random handful from the highest
+    // community-rated. A short or empty source just yields fewer items -- the buckets do not backfill each other, so
+    // the channel is simply smaller on a sparse server. Each selected series contributes its whole catalogue; the
+    // loop builder then caps every series to one block per loop, so all ten shows appear and none can dominate.
     private const int MovieWatched = 15;
     private const int MovieRecent = 5;
     private const int MovieRandomRated = 5;
@@ -678,7 +678,7 @@ public class ChannelService
     private const int MovieRatedPool = 50;
     private const int SeriesRatedPool = 25;
 
-    // How many of each user's most-played episodes to scan when ranking the most-watched series.
+    // How many of each user's most-recently-played episodes to scan when finding the recently-played series.
     private const int WatchedEpisodeScan = 200;
 
     private static bool PopularChannelEnabled()
@@ -723,10 +723,10 @@ public class ChannelService
         };
     }
 
-    // Resolves the Popular channel's loop. Movies and shows are each drawn from three buckets (recent additions,
-    // top community rating, most watched across all users) up to their per-bucket caps, de-duplicated so a title
-    // that qualifies in two buckets is counted once and the next candidate backfills it. Series then expand to
-    // their episodes.
+    // Resolves the Popular channel's loop. Movies and shows are each drawn from three buckets (most recently played
+    // across all users, recent additions, top community rating) up to their per-bucket caps, de-duplicated so a
+    // title that qualifies in two buckets is counted once and the next candidate backfills it. Series then expand
+    // to their episodes, and the loop builder caps each series to one block per loop.
     private IReadOnlyList<ProgramEntry> ResolvePopularPrograms(Channel channel)
     {
         var ratings = new RatingFilter(
@@ -769,16 +769,17 @@ public class ChannelService
             return ids;
         }
 
-        // Movies (25): 15 most-watched, 5 most-recently-added, 5 random from the top community-rated. SelectBuckets
-        // de-duplicates across buckets and fills each in order; buckets do not backfill each other.
+        // Movies (25): 15 most-recently-played, 5 most-recently-added, 5 random from the top community-rated.
+        // SelectBuckets de-duplicates across buckets and fills each in order; buckets do not backfill each other.
         var movieIds = SelectBuckets(
-            (Ids(MostWatchedMovies(users, MovieWatched * 4)), MovieWatched),
+            (Ids(RecentlyPlayedMovies(users, MovieWatched * 4)), MovieWatched),
             (Ids(Recent(BaseItemKind.Movie, MovieRecent * 4)), MovieRecent),
             (SeededShuffle(Ids(TopRated(BaseItemKind.Movie, MovieRatedPool)), seed + ":mvr"), MovieRandomRated));
 
-        // Shows (10): 6 most-watched series, 2 series whose episodes were just added, 2 random from the top rated.
+        // Shows (10): 6 most-recently-played series, 2 series whose episodes were just added, 2 random from the top
+        // rated. The recently-played series are found by walking the newest-played episodes until 6 distinct series.
         var seriesIds = SelectBuckets(
-            (Ids(MostWatchedSeries(users, SeriesWatched * 4)), SeriesWatched),
+            (Ids(RecentlyPlayedSeries(users, SeriesWatched * 4)), SeriesWatched),
             (Ids(RecentEpisodeSeries(SeriesRecentEpisode * 4)), SeriesRecentEpisode),
             (SeededShuffle(Ids(TopRated(BaseItemKind.Series, SeriesRatedPool)), seed + ":svr"), SeriesRandomRated));
 
@@ -901,14 +902,18 @@ public class ChannelService
 
     // Movies watched most across the whole server: each user's most-played movies are pooled, then ranked by
     // their play count summed over every user.
-    private List<BaseItem> MostWatchedMovies(List<User> users, int count)
+    // Movies played most recently across the whole server. Each movie's play time is the most recent across every
+    // user, and the newest-played `count` are returned. As anyone watches a movie it rises to the top, so the
+    // channel reflects what the server has been watching lately rather than all-time totals.
+    private List<BaseItem> RecentlyPlayedMovies(List<User> users, int count)
     {
         if (users.Count == 0)
         {
             return new List<BaseItem>();
         }
 
-        var candidates = new Dictionary<Guid, BaseItem>();
+        // Movie id -> (most recent play across users, the movie).
+        var played = new Dictionary<Guid, (DateTime When, BaseItem Item)>();
         foreach (var user in users)
         {
             foreach (var movie in _libraryManager.GetItemList(new InternalItemsQuery(user)
@@ -917,33 +922,39 @@ public class ChannelService
                 Recursive = true,
                 IsVirtualItem = false,
                 IsPlayed = true,
-                OrderBy = new[] { (ItemSortBy.PlayCount, SortOrder.Descending) },
+                OrderBy = new[] { (ItemSortBy.DatePlayed, SortOrder.Descending) },
                 Limit = count * 5
             }))
             {
-                candidates[movie.Id] = movie;
+                var when = _userDataManager.GetUserData(user, movie)?.LastPlayedDate;
+                if (when is { } w && (!played.TryGetValue(movie.Id, out var current) || w > current.When))
+                {
+                    played[movie.Id] = (w, movie);
+                }
             }
         }
 
-        return candidates.Values
-            .OrderByDescending(movie => TotalPlayCount(movie, users))
+        return played.Values
+            .OrderByDescending(p => p.When)
             .Take(count)
+            .Select(p => p.Item)
             .ToList();
     }
 
-    // Series watched most across the whole server. Each episode's play count is summed over every user, the
-    // episodes are ranked by total plays, and we then walk down that ranked list taking each new series until we
-    // have `count` distinct ones -- so the popular shows are exactly the shows the most-played episodes belong to
-    // (the whole series is used downstream, not just the popular episodes).
-    private List<BaseItem> MostWatchedSeries(List<User> users, int count)
+    // Series played most recently across the whole server. Every user's recently-played episodes are scanned, each
+    // episode's play time is taken as the most recent across users, and we walk down that newest-played-first list
+    // taking each new series until we have `count` distinct ones -- so the popular shows are whatever was watched
+    // most recently. The whole series is used downstream, not just those episodes, and as people keep watching the
+    // schedule refreshes onto the latest shows.
+    private List<BaseItem> RecentlyPlayedSeries(List<User> users, int count)
     {
         if (users.Count == 0)
         {
             return new List<BaseItem>();
         }
 
-        // Episode id -> (total plays across users, owning series).
-        var episodePlays = new Dictionary<Guid, (long Plays, Guid SeriesId)>();
+        // Episode id -> (most recent play across users, owning series).
+        var episodePlayed = new Dictionary<Guid, (DateTime When, Guid SeriesId)>();
         foreach (var user in users)
         {
             foreach (var item in _libraryManager.GetItemList(new InternalItemsQuery(user)
@@ -952,17 +963,16 @@ public class ChannelService
                 Recursive = true,
                 IsVirtualItem = false,
                 IsPlayed = true,
-                OrderBy = new[] { (ItemSortBy.PlayCount, SortOrder.Descending) },
+                OrderBy = new[] { (ItemSortBy.DatePlayed, SortOrder.Descending) },
                 Limit = WatchedEpisodeScan
             }))
             {
                 if (item is Episode ep && ep.SeriesId != Guid.Empty)
                 {
-                    var playCount = _userDataManager.GetUserData(user, item)?.PlayCount ?? 0;
-                    if (playCount > 0)
+                    var when = _userDataManager.GetUserData(user, item)?.LastPlayedDate;
+                    if (when is { } w && (!episodePlayed.TryGetValue(item.Id, out var current) || w > current.When))
                     {
-                        episodePlays.TryGetValue(item.Id, out var current);
-                        episodePlays[item.Id] = (current.Plays + playCount, ep.SeriesId);
+                        episodePlayed[item.Id] = (w, ep.SeriesId);
                     }
                 }
             }
@@ -970,7 +980,7 @@ public class ChannelService
 
         var series = new List<BaseItem>();
         var seen = new HashSet<Guid>();
-        foreach (var entry in episodePlays.Values.OrderByDescending(e => e.Plays))
+        foreach (var entry in episodePlayed.Values.OrderByDescending(e => e.When))
         {
             if (!seen.Add(entry.SeriesId))
             {
@@ -1042,18 +1052,6 @@ public class ChannelService
 
             return hash;
         }
-    }
-
-    // An item's total play count across every user.
-    private long TotalPlayCount(BaseItem item, List<User> users)
-    {
-        long total = 0;
-        foreach (var user in users)
-        {
-            total += _userDataManager.GetUserData(user, item)?.PlayCount ?? 0;
-        }
-
-        return total;
     }
 
     // Resolves one library source to its matching items (before specials/ordering are applied). The

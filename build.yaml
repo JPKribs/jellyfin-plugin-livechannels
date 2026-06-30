@@ -18,4 +18,5 @@ changelog:
   features:
   - Give every channel real variety, each series plays one block then steps aside until the others have aired, cycling through the series over time so no show dominates
   - Make the Popular channel show 10 distinct series and 25 distinct movies instead of one big show filling it
+  - Build Popular from what the server has watched most recently, so the channel follows your latest viewing
   - Keep only genuine two-part episodes together, extending a block by at most one episode
