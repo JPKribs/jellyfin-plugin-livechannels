@@ -90,19 +90,32 @@ public class LoopBuilderTests
     [Fact]
     public void MultiPart_StaysAdjacent_EvenAtBlockSizeOne()
     {
+        // A two-part episode is one block even at block size 1 (the block extends by one to hold the pair), so the
+        // series' single shuffled block contains both parts adjacently.
         var s = Guid.NewGuid();
         var loop = ProgramLoopBuilder.Build(new[]
         {
-            Ep(s, "Show", 1, 1, "Intro"),
-            Ep(s, "Show", 1, 2, "The Trap (1)"),
-            Ep(s, "Show", 1, 3, "The Trap (2)"),
-            Ep(s, "Show", 1, 4, "End")
+            Ep(s, "Show", 1, 1, "The Trap (1)"),
+            Ep(s, "Show", 1, 2, "The Trap (2)")
         }, Opts(block: 1, shuffle: true));
 
-        var order = EpisodeOrder(loop, s);
-        var p1 = order.IndexOf(2);
-        var p2 = order.IndexOf(3);
-        Assert.Equal(p1 + 1, p2); // (1) immediately followed by (2)
+        Assert.Equal(new[] { 1, 2 }, EpisodeOrder(loop, s).ToArray()); // both parts, in order, adjacent
+    }
+
+    [Fact]
+    public void MultiPart_BlockExtendsByAtMostOne_ThirdPartNotGlued()
+    {
+        // A three-parter (1)(2)(3) with block size 2: a block holds the pair (1)(2) but never a third part, so no
+        // block exceeds blockSize + 1. The series' single shuffled block therefore never contains all three.
+        var s = Guid.NewGuid();
+        var loop = ProgramLoopBuilder.Build(new[]
+        {
+            Ep(s, "Show", 1, 1, "The Saga (1)"),
+            Ep(s, "Show", 1, 2, "The Saga (2)"),
+            Ep(s, "Show", 1, 3, "The Saga (3)")
+        }, Opts(block: 2, shuffle: true));
+
+        Assert.True(loop.Count <= 2, "a block glued more than a pair together: " + loop.Count);
     }
 
     [Fact]
@@ -152,11 +165,11 @@ public class LoopBuilderTests
     }
 
     [Fact]
-    public void Shuffle_DominantSeries_NeverRepeatsUntilOthersExhausted()
+    public void Shuffle_CapsEachSeriesToOneBlock_NoDomination()
     {
-        // A dominant series (10 blocks) plus four smaller ones (5 blocks each), 4-episode blocks. The rule: a
-        // series never recurs until every other series has had a block. So while the small series still have
-        // blocks, nothing plays back to back; only once they are exhausted may the dominant series fill the tail.
+        // A huge series (40 episodes) plus four smaller ones (20 each), 4-episode blocks. The per-series cap means
+        // every series contributes exactly ONE block (4 episodes) per loop -- so the giant series gets the same
+        // footing as the others, the loop is 5 blocks (20 episodes), and nothing plays back to back.
         var items = new List<ProgramEntry>();
         var big = new Guid("11111111-1111-1111-1111-111111111111");
         items.AddRange(Enumerable.Range(1, 40).Select(i => Ep(big, "Futurama", 1, i, "e" + i)));
@@ -168,17 +181,9 @@ public class LoopBuilderTests
 
         var loop = ProgramLoopBuilder.Build(items, Opts(block: 4, shuffle: true));
 
-        // Find where the small series are exhausted (the last episode that is not the dominant series). Up to and
-        // including that point, no series may run longer than one block; after it, the dominant tail is allowed.
-        var lastOther = loop.Count - 1;
-        while (lastOther >= 0 && loop[lastOther].SeriesId == big)
-        {
-            lastOther--;
-        }
-
-        Assert.True(MaxRun(loop.Take(lastOther + 1).ToList()) <= 4, "a series clumped before the others were exhausted: " + MaxRun(loop.Take(lastOther + 1).ToList()));
-        // Every episode is still present (nothing dropped), just reordered.
-        Assert.Equal(items.Count, loop.Count);
+        Assert.Equal(5 * 4, loop.Count);                                       // 5 series x one 4-episode block
+        Assert.Equal(4, loop.Count(e => e.SeriesId == big));                   // the giant series is capped to 4
+        Assert.True(MaxRun(loop) <= 4, "a series ran longer than one block: " + MaxRun(loop));
     }
 
     // The longest run of consecutive items sharing a series.
@@ -220,16 +225,33 @@ public class LoopBuilderTests
     }
 
     [Fact]
-    public void AllItems_ArePreserved()
+    public void Shuffle_KeepsEveryMovie_ButCapsSeriesToOneBlock()
     {
+        // Movies are one-offs and all stay in the loop; a series is capped to a single block per loop (its other
+        // blocks rotate in on later refreshes), so a 5-episode show contributes one block, not all five episodes.
         var s = Guid.NewGuid();
         var items = new List<ProgramEntry> { Movie("Zed"), Movie("Abe") };
         items.AddRange(Enumerable.Range(1, 5).Select(i => Ep(s, "Show", 1, i, "e" + i)));
 
         var loop = ProgramLoopBuilder.Build(items, Opts(block: 3, shuffle: true));
 
-        Assert.Equal(7, loop.Count);
-        Assert.Equal(items.Select(i => i.ItemId).OrderBy(x => x), loop.Select(i => i.ItemId).OrderBy(x => x));
+        Assert.Equal(2, loop.Count(e => e.SeriesId is null));   // both movies kept
+        var showEps = loop.Count(e => e.SeriesId == s);
+        Assert.True(showEps >= 1 && showEps < 5, "series should contribute one block, not its whole catalogue: " + showEps);
+    }
+
+    [Fact]
+    public void Shuffle_SeriesBlockRotatesWithRotationCounter()
+    {
+        // The single block a series contributes advances with the rotation counter, so the channel works through
+        // the series over successive refreshes instead of replaying the same episodes forever.
+        var s = Guid.NewGuid();
+        var items = Enumerable.Range(1, 12).Select(i => Ep(s, "Show", 1, i, "e" + i)).ToList();
+
+        var day0 = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(4, true, true, false, "ch1", Rotation: 0));
+        var day1 = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(4, true, true, false, "ch1", Rotation: 1));
+
+        Assert.NotEqual(day0.Select(e => e.EpisodeNumber), day1.Select(e => e.EpisodeNumber));
     }
 
     [Fact]

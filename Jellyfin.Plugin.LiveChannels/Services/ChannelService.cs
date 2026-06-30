@@ -644,10 +644,16 @@ public class ChannelService
             channel.ShuffleEpisodes,
             channel.Id,
             channel.FavorKind,
-            channel.FavorStrength);
+            channel.FavorStrength,
+            LoopRotation());
 
         return ProgramLoopBuilder.Build(entries, options);
     }
+
+    // A rotation counter (days since the Unix epoch) that advances which single block each series contributes to a
+    // shuffled loop. It is captured into the cached schedule when the schedule is built, so the guide and the live
+    // stream always agree, and it advances day over day so a channel works through each series across refreshes.
+    private static int LoopRotation() => (int)(DateTime.UtcNow - DateTime.UnixEpoch).TotalDays;
 
     // ---- Built-in "Popular" channel (channel 0) ----
 
@@ -832,7 +838,8 @@ public class ChannelService
             channel.ShuffleEpisodes,
             PopularChannelId,
             channel.FavorKind,
-            channel.FavorStrength);
+            channel.FavorStrength,
+            LoopRotation());
 
         return ProgramLoopBuilder.Build(entries, options);
     }

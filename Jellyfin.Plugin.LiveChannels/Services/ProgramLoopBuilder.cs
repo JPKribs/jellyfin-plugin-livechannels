@@ -16,6 +16,9 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// <param name="ChannelId">Channel id, seeding the deterministic shuffle so the guide and stream agree.</param>
 /// <param name="FavorKind">A content type to weight more heavily in the shuffled loop, or <see cref="Models.FavorKind.None"/>.</param>
 /// <param name="FavorStrength">How strongly <paramref name="FavorKind"/> is favoured.</param>
+/// <param name="Rotation">A counter (e.g. days since an epoch) that advances which single block each series
+/// contributes in a shuffled loop, so the channel walks through a series over time. Stable within a built
+/// schedule (guide and stream agree); the caller bumps it each refresh.</param>
 public readonly record struct ChannelLoopOptions(
     int EpisodesPerBlock,
     bool KeepMultiPartTogether,
@@ -23,7 +26,8 @@ public readonly record struct ChannelLoopOptions(
     bool ShuffleEpisodes,
     string ChannelId,
     FavorKind FavorKind = FavorKind.None,
-    FavorStrength FavorStrength = FavorStrength.Moderate);
+    FavorStrength FavorStrength = FavorStrength.Moderate,
+    int Rotation = 0);
 
 /// <summary>
 /// Turns a channel's resolved items into the ordered loop it cycles through: episodes are grouped by series
@@ -108,25 +112,35 @@ public static class ProgramLoopBuilder
                 .ToList();
         }
 
-        // Order the blocks round-robin so a series never recurs until every other series has placed a block: deal
-        // one block from each series per round, so the loop cycles A B C A B C … and a long series simply keeps its
-        // remaining blocks for later rounds. A series repeats back-to-back only once every other series is exhausted
-        // (it genuinely fills the rest of the channel). Standalone items (movies, videos) are single-block groups;
-        // rather than bunching them all into the first round, each is scattered to a round by its stable phase.
-        // Within a round, series are dealt in a stable per-channel order (the same every round) so a series never
-        // straddles a round boundary. When the channel favours a content type, its groups get extra rounds to reach the
-        // target share. Deterministic (seeded by channel id) so the guide projection and the live stream agree.
+        // Each series contributes ONE block per loop, so One Piece and a twelve-episode show get equal footing and
+        // no series can dominate. Which block is the series' "current" one rotates with options.Rotation (a per-
+        // series offset keeps series from syncing), so the loop walks through each series over successive refreshes.
+        // A favoured content type is the one exception: its groups contribute a few blocks (a rotating window) so
+        // that type fills more of the loop. The chosen blocks are then ordered round-robin -- one block from each
+        // series per round, dealt in a stable per-channel order so a series never straddles a round boundary and the
+        // same show never plays twice in a row. Standalone items (movies, videos) are single blocks scattered across
+        // the rounds by their phase. Deterministic (seeded by channel id) so the guide projection and stream agree.
         var favorMultiplier = FavorMultiplier(blocks, options);
 
         var groups = blocks
             .GroupBy(b => b.GroupKey, StringComparer.Ordinal)
             .Select(g =>
             {
-                var ordered = g.OrderBy(b => b.Seq).ToList();
-                var favored = options.FavorKind != FavorKind.None && KindOf(ordered[0]) == options.FavorKind;
-                var slots = favored ? Math.Max(ordered.Count, (int)Math.Round(ordered.Count * favorMultiplier)) : ordered.Count;
+                var all = g.OrderBy(b => b.Seq).ToList();
+                var favored = options.FavorKind != FavorKind.None && KindOf(all[0]) == options.FavorKind;
+                // One block per series; a favoured type takes more (a rotating window, repeating its blocks if
+                // needed) so that type fills more of the loop.
+                var take = favored ? Math.Max(1, (int)Math.Round(favorMultiplier)) : 1;
+                var offset = (int)((uint)ShuffleKey(options.ChannelId, "rot:" + g.Key) % (uint)all.Count);
+                var start = (((options.Rotation + offset) % all.Count) + all.Count) % all.Count;
+                var window = new List<Block>(take);
+                for (var k = 0; k < take; k++)
+                {
+                    window.Add(all[(start + k) % all.Count]);
+                }
+
                 var phase = (uint)ShuffleKey(options.ChannelId, "phase:" + g.Key) / (double)uint.MaxValue;
-                return (Ordered: ordered, Slots: slots, Phase: phase);
+                return (Ordered: window, Slots: take, Phase: phase);
             })
             .ToList();
 
@@ -162,8 +176,10 @@ public static class ProgramLoopBuilder
             .ToList();
     }
 
-    // Groups consecutive episodes that share a base title and a part marker into one unit (so a two-parter
-    // is never split). Every other episode is its own single-item unit.
+    // Groups consecutive episodes that share a base title and a part marker into one unit, so a two-parter is kept
+    // together (a block extends by at most one episode to hold the pair). A unit is capped at two episodes: a
+    // three-parter (1)(2)(3) keeps (1)(2) together and lets (3) fall into the next block -- we never extend a block
+    // by more than one. Every other episode is its own single-item unit.
     private static List<List<ProgramEntry>> GroupUnits(List<ProgramEntry> ordered, bool keepMultiPart)
     {
         var units = new List<List<ProgramEntry>>();
@@ -182,10 +198,11 @@ public static class ProgramLoopBuilder
 
         foreach (var e in ordered)
         {
+            // Join the run only to complete a pair (cap at two episodes), so (1)(2) stay together but (3) does not.
             var partBase = MultiPartBase(e.RawName);
-            if (partBase is not null && runBase is not null && string.Equals(partBase, runBase, StringComparison.OrdinalIgnoreCase))
+            if (partBase is not null && runBase is not null && run!.Count < 2 && string.Equals(partBase, runBase, StringComparison.OrdinalIgnoreCase))
             {
-                run!.Add(e);
+                run.Add(e);
                 continue;
             }
 
