@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.7.1",
+        "changelog": "## Features\r\n- Find studios, people, and the audio or subtitle language by searching instead of scrolling a long list, so any studio such as HBO is reachable\r\n- Group the channel content filters into their own Filters section for a tidier editor",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.7.1/jellyfin-plugin-livechannels-10.11.7.1.zip",
+        "checksum": "51ab74c585056ca017afcfab7bac8db3",
+        "timestamp": "2026-06-30T08:28:20Z"
+      },
+      {
         "version": "10.11.7.0",
         "changelog": "## Features\r\n- Filter a channel by production year or decade, so you can build a 90s channel\r\n- Filter a channel by studio or network, like an HBO channel, matching shows by their series too\r\n- Filter a channel by people, so you can build a favourite actor or director channel\r\n- Filter a channel by a minimum community or critic rating, for a best-of channel",
         "targetAbi": "10.11.9.0",
