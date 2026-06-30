@@ -49,8 +49,10 @@ public class ChannelService
     // tune-in (so repeat reads skip the disk read and JSON parse) and released the moment a channel's last session
     // closes, so an idle channel holds nothing. The on-disk per-channel file is the source of truth; this is just
     // a hot copy. The schedule already carries every item's probed media metadata (HDR, interlace, bit depth,
-    // audio, subtitles), so a tune-in served from here makes no media-stream queries at all.
-    private readonly ConcurrentDictionary<int, IReadOnlyList<ProgramEntry>> _memorySchedules = new();
+    // audio, subtitles), so a tune-in served from here makes no media-stream queries at all. Static (the service is
+    // a singleton) so the static configuration-change handler can flush it alongside the on-disk cache, ensuring a
+    // filter or channel edit is never served from a stale hot copy of a channel that happens to be on screen.
+    private static readonly ConcurrentDictionary<int, IReadOnlyList<ProgramEntry>> MemorySchedules = new();
 
     // Resolved schedules cached on disk so the expensive library resolve (and per-item media probe) runs once -- on
     // guide refresh -- and every tune-in reads the result instead of rebuilding it on the stream's start-up critical
@@ -418,13 +420,13 @@ public class ChannelService
     public IReadOnlyList<ProgramEntry> ResolvePrograms(Channel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        if (_memorySchedules.TryGetValue(channel.Number, out var hot))
+        if (MemorySchedules.TryGetValue(channel.Number, out var hot))
         {
             return hot;
         }
 
         var programs = TryReadScheduleCache(channel) ?? RefreshPrograms(channel);
-        _memorySchedules[channel.Number] = programs;
+        MemorySchedules[channel.Number] = programs;
         return programs;
     }
 
@@ -442,7 +444,7 @@ public class ChannelService
         WriteScheduleCache(channel, programs);
         // Invalidate the hot copy: a channel being watched while its guide refreshes will reload the fresh schedule
         // on its next resolve, and an idle channel never gets an entry added here (only ResolvePrograms populates).
-        _memorySchedules.TryRemove(channel.Number, out _);
+        MemorySchedules.TryRemove(channel.Number, out _);
         return programs;
     }
 
@@ -451,7 +453,7 @@ public class ChannelService
     /// nothing in memory. The on-disk cache remains, so the next tune-in reloads it. A no-op when nothing is cached.
     /// </summary>
     /// <param name="channelNumber">The channel number whose hot schedule should be dropped.</param>
-    public void ReleaseFromMemory(int channelNumber) => _memorySchedules.TryRemove(channelNumber, out _);
+    public void ReleaseFromMemory(int channelNumber) => MemorySchedules.TryRemove(channelNumber, out _);
 
     /// <summary>
     /// Deletes the cached schedule. Called when the plugin configuration changes so a channel edit is never served
@@ -460,6 +462,10 @@ public class ChannelService
     /// <param name="paths">The application paths, used to locate the stream root the cache lives in.</param>
     public static void ClearScheduleCache(IApplicationPaths paths)
     {
+        // Flush the in-memory hot copies too, so a channel currently on screen does not keep serving its old
+        // schedule (with the old filters) to new tune-ins until the asynchronous guide refresh reaches it.
+        MemorySchedules.Clear();
+
         try
         {
             lock (ScheduleLock)
@@ -568,9 +574,11 @@ public class ChannelService
             ResolveRatingScore(channel.MaxOfficialRating),
             channel.IncludeUnrated);
         var kidsScore = ResolveRatingScore(channel.KidsRatingThreshold);
+        var years = new YearFilter(channel.Years);
         var kinds = channel.IncludeHomeVideos ? PlayableKindsWithHomeVideos : PlayableKinds;
 
         var byId = new Dictionary<Guid, BaseItem>();
+        var libraryIds = new List<Guid>();
         foreach (var source in channel.Sources)
         {
             if (string.IsNullOrEmpty(source.LibraryId) || !Guid.TryParse(source.LibraryId, out var libraryId))
@@ -578,16 +586,37 @@ public class ChannelService
                 continue;
             }
 
+            libraryIds.Add(libraryId);
             foreach (var item in ResolveSource(source, libraryId, ratings, kinds))
             {
                 byId[item.Id] = item;
             }
         }
 
+        // Additional channel-wide filters, resolved once. Studios match the item or its series (so a network on the
+        // series carries to its episodes); people are resolved to the set of items they appear in via one query per
+        // library; the rating floors and year set are simple per-item checks.
+        var studios = BuildStudioSet(channel.Studios);
+        var seriesStudios = studios.Count > 0 ? BuildSeriesStudioMap(libraryIds) : new Dictionary<Guid, HashSet<string>>();
+        var peopleAllowed = channel.People.Any(p => p.Id != Guid.Empty)
+            ? ResolvePeopleAllowed(channel.People, libraryIds, kinds)
+            : null;
+
         var entries = new List<ProgramEntry>();
         foreach (var item in byId.Values)
         {
             if (!channel.IncludeSpecials && item is Episode ep && ep.ParentIndexNumber == 0)
+            {
+                continue;
+            }
+
+            // Cheap per-item gates first, so a filtered item never pays the media read below. Year, rating floors,
+            // studios, and (when active) the people set each narrow the channel independently.
+            if (!years.Allows(item.ProductionYear)
+                || !PassesMinRating(item.CommunityRating, channel.MinCommunityRating)
+                || !PassesMinRating(item.CriticRating, channel.MinCriticRating)
+                || !PassesStudios(studios, EffectiveStudios(item, seriesStudios))
+                || (peopleAllowed is not null && !peopleAllowed.Contains(item.Id)))
             {
                 continue;
             }
@@ -663,6 +692,11 @@ public class ChannelService
             MaxOfficialRating = src.MaxOfficialRating,
             IncludeUnrated = src.IncludeUnrated,
             KidsRatingThreshold = src.KidsRatingThreshold,
+            Years = src.Years,
+            MinCommunityRating = src.MinCommunityRating,
+            MinCriticRating = src.MinCriticRating,
+            Studios = src.Studios,
+            People = src.People,
             EpisodesPerBlock = src.EpisodesPerBlock,
             KeepMultiPartTogether = src.KeepMultiPartTogether,
             IncludeSpecials = src.IncludeSpecials,
@@ -685,6 +719,14 @@ public class ChannelService
             ResolveRatingScore(channel.MaxOfficialRating),
             channel.IncludeUnrated);
         var kidsScore = ResolveRatingScore(channel.KidsRatingThreshold);
+        var years = new YearFilter(channel.Years);
+        var kinds = PlayableKinds;
+        // The Popular channel has no library sources, so studios and people are resolved across every library.
+        var studios = BuildStudioSet(channel.Studios);
+        var seriesStudios = studios.Count > 0 ? BuildSeriesStudioMap(Array.Empty<Guid>()) : new Dictionary<Guid, HashSet<string>>();
+        var peopleAllowed = channel.People.Any(p => p.Id != Guid.Empty)
+            ? ResolvePeopleAllowed(channel.People, Array.Empty<Guid>(), kinds)
+            : null;
         var users = _userManager.GetUsers().ToList();
         var lookup = new Dictionary<Guid, BaseItem>();
 
@@ -744,6 +786,17 @@ public class ChannelService
 
             // Episodes inherit their series' rating, but re-check so the cap holds for any odd outlier.
             if (!ratings.Allows(item))
+            {
+                continue;
+            }
+
+            // Apply the same channel-wide filters as a normal channel to each playable item (the episode's own year,
+            // not the series' start year), so a filtered Popular channel keeps only the matching movies and episodes.
+            if (!years.Allows(item.ProductionYear)
+                || !PassesMinRating(item.CommunityRating, channel.MinCommunityRating)
+                || !PassesMinRating(item.CriticRating, channel.MinCriticRating)
+                || !PassesStudios(studios, EffectiveStudios(item, seriesStudios))
+                || (peopleAllowed is not null && !peopleAllowed.Contains(item.Id)))
             {
                 continue;
             }
@@ -1139,6 +1192,148 @@ public class ChannelService
 
             return Max is null || value.Value <= Max.Value;
         }
+    }
+
+    // The channel's allowed production years. An empty set allows every year; otherwise an item passes only when
+    // its production year is one of these, so an item with no year is dropped while a year filter is active.
+    // Internal so the year matching can be unit tested without a live library. Takes the item's production year
+    // directly (rather than a BaseItem) for the same reason.
+    internal readonly struct YearFilter
+    {
+        private readonly HashSet<int>? _years;
+
+        public YearFilter(IEnumerable<int>? years)
+        {
+            var set = years is null ? null : new HashSet<int>(years);
+            _years = set is { Count: > 0 } ? set : null;
+        }
+
+        // Whether any year is actually restricted (a non-empty set was supplied).
+        public bool IsActive => _years is not null;
+
+        public bool Allows(int? productionYear)
+            => _years is null || (productionYear is int year && _years.Contains(year));
+    }
+
+    // Whether a 0-N rating passes a minimum floor. A floor of zero (or less) is off and admits everything;
+    // otherwise the item must carry a rating at or above the floor, so a missing rating is dropped. Shared by the
+    // community (0-10) and critic (0-100) floors. Internal so the threshold logic can be unit tested.
+    internal static bool PassesMinRating(float? value, double minimum)
+        => minimum <= 0 || (value is float rating && rating >= minimum);
+
+    // Whether an item's studios satisfy the channel's studio set. An empty channel set admits everything; otherwise
+    // the item passes when any of its (effective) studios is in the set. Internal so the matching can be unit tested.
+    internal static bool PassesStudios(IReadOnlySet<string> channelStudios, IEnumerable<string> effectiveStudios)
+    {
+        if (channelStudios.Count == 0)
+        {
+            return true;
+        }
+
+        foreach (var studio in effectiveStudios)
+        {
+            if (!string.IsNullOrEmpty(studio) && channelStudios.Contains(studio))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // The channel's studio names as a case-insensitive set, blanks removed. Empty when no studio filter is set.
+    private static HashSet<string> BuildStudioSet(IEnumerable<string>? studios)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (studios is not null)
+        {
+            foreach (var studio in studios)
+            {
+                if (!string.IsNullOrWhiteSpace(studio))
+                {
+                    set.Add(studio.Trim());
+                }
+            }
+        }
+
+        return set;
+    }
+
+    // A seriesId -> studios lookup for every series in the given libraries (all libraries when none are listed), so
+    // an episode's effective studios can include its parent series' network the way the genre filter does. Built
+    // only when a studio filter is active.
+    private Dictionary<Guid, HashSet<string>> BuildSeriesStudioMap(IReadOnlyCollection<Guid> libraryIds)
+    {
+        var map = new Dictionary<Guid, HashSet<string>>();
+
+        void Add(InternalItemsQuery query)
+        {
+            foreach (var series in _libraryManager.GetItemList(query))
+            {
+                map[series.Id] = new HashSet<string>(series.Studios ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        if (libraryIds.Count == 0)
+        {
+            Add(new InternalItemsQuery { IncludeItemTypes = new[] { BaseItemKind.Series }, Recursive = true, IsVirtualItem = false });
+        }
+        else
+        {
+            foreach (var libraryId in libraryIds)
+            {
+                Add(new InternalItemsQuery { IncludeItemTypes = new[] { BaseItemKind.Series }, AncestorIds = new[] { libraryId }, Recursive = true, IsVirtualItem = false });
+            }
+        }
+
+        return map;
+    }
+
+    // An item's effective studios for matching: its own, plus its series' when it is an episode.
+    private static IEnumerable<string> EffectiveStudios(BaseItem item, Dictionary<Guid, HashSet<string>> seriesStudios)
+    {
+        var own = item.Studios ?? Array.Empty<string>();
+        if (item is Episode ep && ep.SeriesId != Guid.Empty && seriesStudios.TryGetValue(ep.SeriesId, out var ss))
+        {
+            return own.Concat(ss);
+        }
+
+        return own;
+    }
+
+    // The set of item ids the channel's people appear in, resolved with one PersonIds query per library (all
+    // libraries when none are listed, for the Popular channel). An item passes the people filter when it is in this
+    // set. Built only when a people filter is active; an empty people list returns an empty set.
+    private HashSet<Guid> ResolvePeopleAllowed(IEnumerable<PersonRef> people, IReadOnlyCollection<Guid> libraryIds, BaseItemKind[] kinds)
+    {
+        var allowed = new HashSet<Guid>();
+        var personIds = people.Where(p => p.Id != Guid.Empty).Select(p => p.Id).Distinct().ToArray();
+        if (personIds.Length == 0)
+        {
+            return allowed;
+        }
+
+        void Add(InternalItemsQuery query)
+        {
+            foreach (var item in _libraryManager.GetItemList(query))
+            {
+                allowed.Add(item.Id);
+            }
+        }
+
+        if (libraryIds.Count == 0)
+        {
+            Add(new InternalItemsQuery { PersonIds = personIds, IncludeItemTypes = kinds, Recursive = true, IsVirtualItem = false });
+        }
+        else
+        {
+            foreach (var libraryId in libraryIds)
+            {
+                Add(new InternalItemsQuery { PersonIds = personIds, AncestorIds = new[] { libraryId }, IncludeItemTypes = kinds, Recursive = true, IsVirtualItem = false });
+            }
+        }
+
+        return allowed;
     }
 
     private static ProgramEntry? ToEntry(BaseItem? item, int? kidsScore, IReadOnlyList<MediaStream> streams)

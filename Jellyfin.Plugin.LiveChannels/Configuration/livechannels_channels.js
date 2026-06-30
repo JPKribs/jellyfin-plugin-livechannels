@@ -26,9 +26,48 @@ export default function (view) {
     var logoContentType = '';
     var libraries = [];        // [{ Id, Name }]
     var ratings = [];          // [{ Name, Value }]
+    var studioChip = null;     // channel-level studio chip-select (created once)
+    var peoplePicker = null;   // channel-level person typeahead picker (created once)
+    var studiosLoaded = false; // whether the studio name list has been fetched
     var _bound = false;
 
     function el(id) { return view.querySelector('#' + id); }
+
+    // Parses the Years field into a sorted, de-duplicated list of production years. Accepts individual years and
+    // ranges (e.g. "1990-1999, 2005" or "1990 1991 1992"), so a decade is two keystrokes rather than ten entries.
+    // Anything outside a sane 1850-2200 band is dropped.
+    function parseYears(text) {
+        var set = {};
+        function addRange(a, b) { if (a > b) { var t = a; a = b; b = t; } for (var y = a; y <= b; y++) set[y] = true; }
+        (text || '').split(/[,\n]/).forEach(function (token) {
+            token = token.trim();
+            if (!token) return;
+            var range = token.match(/^(\d{3,4})\s*-\s*(\d{3,4})$/);
+            if (range) { addRange(parseInt(range[1], 10), parseInt(range[2], 10)); return; }
+            token.split(/\s+/).forEach(function (part) {
+                if (/^\d{3,4}$/.test(part)) set[parseInt(part, 10)] = true;
+            });
+        });
+        return Object.keys(set).map(Number)
+            .filter(function (n) { return n >= 1850 && n <= 2200; })
+            .sort(function (a, b) { return a - b; });
+    }
+
+    // Renders a year list back into the compact field text, collapsing consecutive runs to ranges (e.g.
+    // [1990..1999, 2005] -> "1990-1999, 2005"), so what was typed round-trips cleanly.
+    function yearsToText(years) {
+        if (!years || !years.length) return '';
+        var sorted = years.slice().sort(function (a, b) { return a - b; });
+        var parts = [], start = sorted[0], prev = sorted[0];
+        for (var i = 1; i <= sorted.length; i++) {
+            var cur = sorted[i];
+            if (cur === prev + 1) { prev = cur; continue; }
+            if (cur === prev) { continue; }
+            parts.push(start === prev ? String(start) : (start + '-' + prev));
+            start = cur; prev = cur;
+        }
+        return parts.join(', ');
+    }
 
     function newId() {
         if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
@@ -149,6 +188,117 @@ export default function (view) {
             setValue: function (v) { selected = (v || []).slice(); renderChips(); renderPicker(); },
             setAvailable: function (v) { available = (v || []).slice(); renderPicker(); }
         };
+    }
+
+    // MARK: Person picker (people)
+
+    // A typeahead picker for people: too many to list in a dropdown, so it searches the server's Persons as you
+    // type and stores the selected { Id, Name } pairs as chips. Matching at resolve time is by id.
+    function createPersonPicker() {
+        var selected = []; // [{ Id, Name }]
+
+        var wrap = document.createElement('div');
+        wrap.className = 'jpk-chip-select';
+        var chips = document.createElement('div');
+        chips.className = 'jpk-tags';
+        var searchHost = document.createElement('div');
+        searchHost.innerHTML = '<input type="text" is="emby-input" class="emby-input" placeholder="Search people…" autocomplete="off" />';
+        var search = searchHost.querySelector('input');
+        var results = document.createElement('div');
+        results.className = 'jpk-table';
+        results.style.display = 'none';
+        wrap.appendChild(chips);
+        wrap.appendChild(search);
+        wrap.appendChild(results);
+
+        function renderChips() {
+            chips.innerHTML = '';
+            selected.forEach(function (person, index) {
+                var tag = document.createElement('span');
+                tag.className = 'jpk-tag';
+                var label = document.createElement('span');
+                label.textContent = person.Name;
+                var remove = document.createElement('span');
+                remove.className = 'jpk-tag-remove';
+                remove.textContent = '×';
+                remove.title = 'Remove';
+                remove.addEventListener('click', function () { selected.splice(index, 1); renderChips(); });
+                tag.appendChild(label);
+                tag.appendChild(remove);
+                chips.appendChild(tag);
+            });
+        }
+
+        function hasId(id) { return selected.some(function (p) { return p.Id === id; }); }
+
+        function addPerson(person) {
+            if (person.Id && !hasId(person.Id)) { selected.push({ Id: person.Id, Name: person.Name }); renderChips(); }
+            search.value = '';
+            results.innerHTML = '';
+            results.style.display = 'none';
+        }
+
+        function runSearch(term) {
+            ApiClient.getJSON(ApiClient.getUrl('Persons', { searchTerm: term, Limit: 25, userId: ApiClient.getCurrentUserId() })).then(function (res) {
+                var items = (res && res.Items) || [];
+                results.innerHTML = '';
+                if (!items.length) { results.style.display = 'none'; return; }
+                items.forEach(function (it) {
+                    var row = document.createElement('div');
+                    row.className = 'jpk-table-row';
+                    row.style.cursor = 'pointer';
+                    row.textContent = it.Name;
+                    row.addEventListener('click', function () { addPerson({ Id: it.Id, Name: it.Name }); });
+                    results.appendChild(row);
+                });
+                results.style.display = '';
+            }).catch(function () { results.innerHTML = ''; results.style.display = 'none'; });
+        }
+
+        var timer = null;
+        search.addEventListener('input', function () {
+            if (timer) clearTimeout(timer);
+            var term = search.value.trim();
+            if (!term) { results.innerHTML = ''; results.style.display = 'none'; return; }
+            timer = setTimeout(function () { runSearch(term); }, 300);
+        });
+
+        renderChips();
+
+        return {
+            element: wrap,
+            getValue: function () { return selected.map(function (p) { return { Id: p.Id, Name: p.Name }; }); },
+            setValue: function (v) {
+                selected = (v || []).filter(function (p) { return p && p.Id; }).map(function (p) { return { Id: p.Id, Name: p.Name }; });
+                renderChips();
+                results.innerHTML = '';
+                results.style.display = 'none';
+                if (search) search.value = '';
+            }
+        };
+    }
+
+    // Creates (once) the channel-level studio chip and person picker and mounts them into the editor, loading the
+    // studio name list on first use. Called before the editor is populated for a channel.
+    function ensureFilterPickers() {
+        if (!studioChip) {
+            studioChip = createChipSelect({ placeholder: 'Add a studio…' });
+            var studioMount = view.querySelector('.lc-studio-mount');
+            if (studioMount) studioMount.appendChild(studioChip.element);
+        }
+
+        if (!peoplePicker) {
+            peoplePicker = createPersonPicker();
+            var peopleMount = view.querySelector('.lc-people-mount');
+            if (peopleMount) peopleMount.appendChild(peoplePicker.element);
+        }
+
+        if (!studiosLoaded) {
+            studiosLoaded = true;
+            ApiClient.getJSON(ApiClient.getUrl('Studios', { IncludeItemTypes: 'Movie,Series', Recursive: true, Limit: 1000, SortBy: 'SortName' }))
+                .then(function (result) { studioChip.setAvailable(((result && result.Items) || []).map(function (s) { return s.Name; })); })
+                .catch(function () { /* leave the picker empty */ });
+        }
     }
 
     // MARK: Logo
@@ -674,6 +824,12 @@ export default function (view) {
         el('maxRating').value = ch.MaxOfficialRating || '';
         el('includeUnrated').checked = ch.IncludeUnrated !== false;
         el('kidsRating').value = ch.KidsRatingThreshold || '';
+        el('years').value = yearsToText(ch.Years);
+        el('minCommunityRating').value = ch.MinCommunityRating || '';
+        el('minCriticRating').value = ch.MinCriticRating || '';
+        ensureFilterPickers();
+        studioChip.setValue(ch.Studios || []);
+        peoplePicker.setValue(ch.People || []);
         el('episodesPerBlock').value = ch.EpisodesPerBlock || 1;
         el('keepMultiPart').checked = ch.KeepMultiPartTogether !== false;
         el('includeSpecials').checked = !!ch.IncludeSpecials;
@@ -702,6 +858,13 @@ export default function (view) {
         ch.MaxOfficialRating = el('maxRating').value;
         ch.IncludeUnrated = el('includeUnrated').checked;
         ch.KidsRatingThreshold = el('kidsRating').value;
+        ch.Years = parseYears(el('years').value);
+        var minCommunity = parseFloat(el('minCommunityRating').value);
+        ch.MinCommunityRating = isNaN(minCommunity) ? 0 : Math.min(10, Math.max(0, minCommunity));
+        var minCritic = parseFloat(el('minCriticRating').value);
+        ch.MinCriticRating = isNaN(minCritic) ? 0 : Math.min(100, Math.max(0, minCritic));
+        ch.Studios = studioChip ? studioChip.getValue() : (ch.Studios || []);
+        ch.People = peoplePicker ? peoplePicker.getValue() : (ch.People || []);
         ch.EpisodesPerBlock = Math.max(1, parseInt(el('episodesPerBlock').value, 10) || 1);
         ch.KeepMultiPartTogether = el('keepMultiPart').checked;
         ch.IncludeSpecials = el('includeSpecials').checked;

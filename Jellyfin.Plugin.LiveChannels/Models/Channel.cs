@@ -51,6 +51,21 @@ public class Channel
     /// <summary>Gets or sets the rating at or below which a program is flagged as Kids in the guide (e.g. <c>G</c>). The program must still carry a rating to be flagged.</summary>
     public string KidsRatingThreshold { get; set; } = "G";
 
+    /// <summary>Gets or sets the production years a channel is limited to (e.g. <c>1990</c>…<c>1999</c> for a 90s channel). Empty means every year is allowed; otherwise only items whose production year is in this set are included, and items with no production year are dropped. For episodes this is the episode's own year, so a long-running series contributes only the episodes from the chosen years.</summary>
+    public List<int> Years { get; set; } = new();
+
+    /// <summary>Gets or sets the minimum community (audience) rating, on a 0–10 scale. 0 means no floor; otherwise items rated below this, and items with no community rating, are dropped.</summary>
+    public double MinCommunityRating { get; set; }
+
+    /// <summary>Gets or sets the minimum critic rating, on a 0–100 scale. 0 means no floor; otherwise items rated below this, and items with no critic rating, are dropped.</summary>
+    public double MinCriticRating { get; set; }
+
+    /// <summary>Gets or sets the studios/networks a channel is limited to (e.g. <c>HBO</c>). Empty means all studios; otherwise an item is included when it, or its series, carries any of these studios. Matched by name, case-insensitively.</summary>
+    public List<string> Studios { get; set; } = new();
+
+    /// <summary>Gets or sets the people (actors, directors, …) a channel is limited to. Empty means everyone; otherwise only items one of these people appears in are included. Matched by Jellyfin person id.</summary>
+    public List<PersonRef> People { get; set; } = new();
+
     /// <summary>Gets or sets how many consecutive episodes of a series to play as a block before moving on. 1 disables grouping.</summary>
     public int EpisodesPerBlock { get; set; } = 1;
 

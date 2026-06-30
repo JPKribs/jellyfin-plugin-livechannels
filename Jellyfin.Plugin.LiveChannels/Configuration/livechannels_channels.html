@@ -159,7 +159,32 @@
                                 <div class="selectContainer">
                                     <label class="selectLabel" for="kidsRating">Kids rating</label>
                                     <select id="kidsRating" class="jpk-selector-dropdown"></select>
-                                    <div class="fieldDescription">Programs that carry a rating at or below this are flagged as Kids in the guide. Movies are flagged as movies automatically.</div>
+                                    <div class="fieldDescription">Programs that carry a rating at or below this are flagged as Kids in the guide.</div>
+                                </div>
+                                <div class="inputContainer">
+                                    <label for="years">Years</label>
+                                    <input is="emby-input" type="text" id="years" autocomplete="off" placeholder="Any year" />
+                                    <div class="fieldDescription">Limit the channel to certain production years, like a 90s channel. Enter years and ranges separated by commas, for example 1990-1999 or 1985, 1999, 2003. Leave blank to allow every year. For shows this uses each episode's year, so a long-running series contributes only its episodes from those years.</div>
+                                </div>
+                                <div class="inputContainer">
+                                    <label for="minCommunityRating">Minimum community rating</label>
+                                    <input is="emby-input" type="number" id="minCommunityRating" min="0" max="10" step="0.1" autocomplete="off" />
+                                    <div class="fieldDescription">Only include content rated at least this by the audience, on a 0 to 10 scale, like 7.5 for a best-of channel. 0 allows everything. Content with no community rating is dropped.</div>
+                                </div>
+                                <div class="inputContainer">
+                                    <label for="minCriticRating">Minimum critic rating</label>
+                                    <input is="emby-input" type="number" id="minCriticRating" min="0" max="100" step="1" autocomplete="off" />
+                                    <div class="fieldDescription">Only include content with at least this critic score, on a 0 to 100 scale. 0 allows everything. Content with no critic rating is dropped.</div>
+                                </div>
+                                <div class="selectContainer">
+                                    <label class="selectLabel">Studios</label>
+                                    <div class="lc-studio-mount"></div>
+                                    <div class="fieldDescription">Limit the channel to these studios or networks, like an HBO channel. Leave empty to allow all. For shows this also matches the series' studio.</div>
+                                </div>
+                                <div class="selectContainer">
+                                    <label class="selectLabel">People</label>
+                                    <div class="lc-people-mount"></div>
+                                    <div class="fieldDescription">Limit the channel to content featuring these people, like a favourite director or actor. Search by name to add. Leave empty to allow everyone.</div>
                                 </div>
                                 <div class="inputContainer">
                                     <label for="episodesPerBlock">Episodes per block</label>
@@ -192,7 +217,7 @@
                                         <input type="checkbox" is="emby-checkbox" id="includeHomeVideos" />
                                         <span class="checkboxLabel">Include home videos</span>
                                     </label>
-                                    <div class="fieldDescription">Adds loose videos from a Home Videos library. Off by default.</div>
+                                    <div class="fieldDescription">Enables Home and unassigned videos.</div>
                                 </div>
                                 <div class="checkboxContainer checkboxContainer-withDescription">
                                     <label class="emby-checkbox-label">
