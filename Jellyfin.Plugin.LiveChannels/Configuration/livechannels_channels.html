@@ -120,25 +120,11 @@
 
                         <!-- Channel settings -->
                         <div class="jpk-collapsible-section">
-                            <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionSettings">
-                                <span class="jpk-collapsible-title">Channel settings</span>
+                            <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionFilters">
+                                <span class="jpk-collapsible-title">Filters</span>
                                 <span class="jpk-collapsible-icon">&#9660;</span>
                             </button>
-                            <div id="sectionSettings" class="jpk-collapsible-content collapsed">
-                                <div class="selectContainer">
-                                    <label class="selectLabel" for="subtitleBurnIn">Subtitle burn in</label>
-                                    <select id="subtitleBurnIn" class="jpk-selector-dropdown">
-                                        <option value="Never">Never</option>
-                                        <option value="Forced">Forced only</option>
-                                        <option value="Always">Always</option>
-                                    </select>
-                                    <div class="fieldDescription">Bakes subtitles into the picture for everyone. Forced only burns the forced track, or the full track when the audio is in another language, while Always burns them on everything.</div>
-                                </div>
-                                <div class="selectContainer">
-                                    <label class="selectLabel" for="audioLanguage">Audio language</label>
-                                    <select id="audioLanguage" class="jpk-selector-dropdown"></select>
-                                    <div class="fieldDescription">Only include content whose default audio track is this language, like English only or Japanese only. Allow all languages keeps everything.</div>
-                                </div>
+                            <div id="sectionFilters" class="jpk-collapsible-content collapsed">
                                 <div class="selectContainer">
                                     <label class="selectLabel" for="minRating">Minimum age rating</label>
                                     <select id="minRating" class="jpk-selector-dropdown"></select>
@@ -155,11 +141,6 @@
                                         <span class="checkboxLabel">Include unrated</span>
                                     </label>
                                     <div class="fieldDescription">On by default, so unrated content is always allowed regardless of the rating bounds. Turn it off to drop items that carry no rating.</div>
-                                </div>
-                                <div class="selectContainer">
-                                    <label class="selectLabel" for="kidsRating">Kids rating</label>
-                                    <select id="kidsRating" class="jpk-selector-dropdown"></select>
-                                    <div class="fieldDescription">Programs that carry a rating at or below this are flagged as Kids in the guide.</div>
                                 </div>
                                 <div class="inputContainer">
                                     <label for="years">Years</label>
@@ -185,6 +166,34 @@
                                     <label class="selectLabel">People</label>
                                     <div class="lc-people-mount"></div>
                                     <div class="fieldDescription">Limit the channel to content featuring these people, like a favourite director or actor. Search by name to add. Leave empty to allow everyone.</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="jpk-collapsible-section">
+                            <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionSettings">
+                                <span class="jpk-collapsible-title">Channel settings</span>
+                                <span class="jpk-collapsible-icon">&#9660;</span>
+                            </button>
+                            <div id="sectionSettings" class="jpk-collapsible-content collapsed">
+                                <div class="selectContainer">
+                                    <label class="selectLabel" for="subtitleBurnIn">Subtitle burn in</label>
+                                    <select id="subtitleBurnIn" class="jpk-selector-dropdown">
+                                        <option value="Never">Never</option>
+                                        <option value="Forced">Forced only</option>
+                                        <option value="Always">Always</option>
+                                    </select>
+                                    <div class="fieldDescription">Bakes subtitles into the picture for everyone. Forced only burns the forced track, or the full track when the audio is in another language, while Always burns them on everything.</div>
+                                </div>
+                                <div class="selectContainer">
+                                    <label class="selectLabel">Audio language</label>
+                                    <div class="lc-audiolang-mount"></div>
+                                    <div class="fieldDescription">Only include content whose default audio track is this language, like English only or Japanese only. Allow all languages keeps everything.</div>
+                                </div>
+                                <div class="selectContainer">
+                                    <label class="selectLabel" for="kidsRating">Kids rating</label>
+                                    <select id="kidsRating" class="jpk-selector-dropdown"></select>
+                                    <div class="fieldDescription">Programs that carry a rating at or below this are flagged as Kids in the guide.</div>
                                 </div>
                                 <div class="inputContainer">
                                     <label for="episodesPerBlock">Episodes per block</label>

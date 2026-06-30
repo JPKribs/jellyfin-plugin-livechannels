@@ -17,8 +17,94 @@ export default function (view) {
     });
 
     var _bound = false;
+    var cultures = [];         // cached [{ key: ISO code, label: name }] for the language search
+    var langSelect = null;     // searchable single-select for the default subtitle language
 
     function el(id) { return view.querySelector('#' + id); }
+
+    // The display name for a stored language code, falling back to the code itself when cultures are unavailable.
+    function cultureLabel(code) {
+        for (var i = 0; i < cultures.length; i++) { if (cultures[i].key === code) return cultures[i].label; }
+        return code;
+    }
+
+    // A searchable single-select for a language: type to filter the (fixed, long) culture list and pick one, instead
+    // of scrolling a ~180-entry dropdown. Stores and returns the three-letter ISO code.
+    function createLanguageSelect() {
+        var selected = null; // { key, label }
+
+        var wrap = document.createElement('div');
+        wrap.className = 'jpk-chip-select';
+        var chips = document.createElement('div');
+        chips.className = 'jpk-tags';
+        var searchHost = document.createElement('div');
+        searchHost.innerHTML = '<input type="text" is="emby-input" class="emby-input" placeholder="Search language…" autocomplete="off" />';
+        var search = searchHost.querySelector('input');
+        var results = document.createElement('div');
+        results.className = 'jpk-table';
+        results.style.display = 'none';
+        wrap.appendChild(chips);
+        wrap.appendChild(search);
+        wrap.appendChild(results);
+
+        function hideResults() { results.innerHTML = ''; results.style.display = 'none'; }
+
+        function renderChip() {
+            chips.innerHTML = '';
+            if (!selected) { return; }
+            var tag = document.createElement('span');
+            tag.className = 'jpk-tag';
+            var label = document.createElement('span');
+            label.textContent = selected.label;
+            var remove = document.createElement('span');
+            remove.className = 'jpk-tag-remove';
+            remove.textContent = '×';
+            remove.title = 'Remove';
+            remove.addEventListener('click', function () { selected = null; renderChip(); });
+            tag.appendChild(label);
+            tag.appendChild(remove);
+            chips.appendChild(tag);
+        }
+
+        var timer = null;
+        search.addEventListener('input', function () {
+            if (timer) clearTimeout(timer);
+            var term = search.value.trim();
+            if (!term) { hideResults(); return; }
+            timer = setTimeout(function () {
+                var lower = term.toLowerCase();
+                var rows = cultures.filter(function (c) { return c.label.toLowerCase().indexOf(lower) >= 0; }).slice(0, 25);
+                results.innerHTML = '';
+                if (!rows.length) { results.style.display = 'none'; return; }
+                rows.forEach(function (c) {
+                    var row = document.createElement('div');
+                    row.className = 'jpk-table-row';
+                    row.style.cursor = 'pointer';
+                    row.textContent = c.label;
+                    row.addEventListener('click', function () { selected = { key: c.key, label: c.label }; renderChip(); search.value = ''; hideResults(); });
+                    results.appendChild(row);
+                });
+                results.style.display = '';
+            }, 300);
+        });
+
+        renderChip();
+
+        return {
+            element: wrap,
+            getValue: function () { return selected ? selected.key : ''; },
+            setValue: function (code) { selected = code ? { key: code, label: cultureLabel(code) } : null; renderChip(); hideResults(); search.value = ''; }
+        };
+    }
+
+    // Creates (once) the language select and mounts it into the playback section.
+    function ensureLangSelect() {
+        if (!langSelect) {
+            langSelect = createLanguageSelect();
+            var mount = view.querySelector('.lc-sublang-mount');
+            if (mount) mount.appendChild(langSelect.element);
+        }
+    }
 
     // Snap a stored width to the nearest preset value in the resolution dropdown.
     function setResolution(width) {
@@ -50,26 +136,23 @@ export default function (view) {
         el('producerRate').value = config.StreamReadRate == null ? 1 : config.StreamReadRate;
         el('streamDirectory').value = config.StreamDirectory || '';
         el('disableHwa').checked = !!config.DisableHardwareAcceleration;
-        el('subtitleLanguage').value = config.DefaultSubtitleLanguage || 'eng';
+        ensureLangSelect();
+        langSelect.setValue(config.DefaultSubtitleLanguage || 'eng');
         renderAcceleration();
     }
 
-    // Populates the default-language dropdown from the server's known cultures (value is the three-letter ISO code).
+    // Loads the server's known cultures once into a cache of { key: ISO code, label: name } for the language search.
     function loadLanguages() {
         return ApiClient.getJSON(ApiClient.getUrl('Localization/Cultures')).then(function (list) {
             var seen = {};
-            var opts = (list || []).filter(function (c) {
+            cultures = (list || []).filter(function (c) {
                 var code = c && c.ThreeLetterISOLanguageName;
                 if (!code || seen[code]) return false;
                 seen[code] = true; return true;
-            }).sort(function (a, b) { return (a.DisplayName || a.Name || '').localeCompare(b.DisplayName || b.Name || ''); })
-              .map(function (c) {
-                return '<option value="' + Shared.escapeHtml(c.ThreeLetterISOLanguageName) + '">' + Shared.escapeHtml(c.DisplayName || c.Name) + '</option>';
-            }).join('');
-            el('subtitleLanguage').innerHTML = opts;
-        }).catch(function () {
-            el('subtitleLanguage').innerHTML = '<option value="eng">English</option>';
-        });
+            }).map(function (c) {
+                return { key: c.ThreeLetterISOLanguageName, label: c.DisplayName || c.Name };
+            }).sort(function (a, b) { return a.label.localeCompare(b.label); });
+        }).catch(function () { cultures = []; });
     }
 
     // Triggers Jellyfin's built-in guide refresh so a save propagates to Live TV right away.
@@ -101,7 +184,7 @@ export default function (view) {
             fresh.StreamReadRate = isNaN(rate) ? 1.0 : Math.min(2, Math.max(1, Math.round(rate * 1000) / 1000));
             fresh.StreamDirectory = (el('streamDirectory').value || '').trim();
             fresh.DisableHardwareAcceleration = el('disableHwa').checked;
-            fresh.DefaultSubtitleLanguage = el('subtitleLanguage').value || 'eng';
+            fresh.DefaultSubtitleLanguage = (langSelect ? langSelect.getValue() : '') || 'eng';
             return Shared.saveConfig(fresh);
         }).then(function () {
             renderAcceleration();

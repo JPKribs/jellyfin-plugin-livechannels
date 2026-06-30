@@ -24,18 +24,28 @@ A channel always includes whatever its libraries and filters yield: movies, epis
 
 Out of the box the plugin serves a **Popular** channel on channel 0, with no setup at all. It loops a mix of your **recently added**, **highest rated**, and **most watched** movies and shows, where most watched is measured server wide by summing play counts across every user. It aims for 24 movies (9 recent, 9 rated, 6 watched) and 8 shows (3 recent, 3 rated, 2 watched), de-duplicated so a title that qualifies twice is counted once, and simply returns fewer when a source is thin. Series play as blocks of four consecutive episodes in air order, so a popular show airs a coherent run rather than scattered single episodes. Its own **Popular** tab lets you rename it, change its icon, cap the rating, set a subtitle rule, and tune the loop, or turn it off entirely. Only its number (always 0) and its content are fixed.
 
+### Filters
+
+A **Filters** section narrows what a channel includes. Every filter is optional and they combine, so you can stack them: an HBO comedy from the 90s rated 7.5 and up is just a handful of filters on one channel. Leave a filter empty or zero to ignore it.
+
+* **Minimum and maximum age rating** keep content within a rating band. Set both to make an adults only or a single band channel.
+* **Include unrated** is on by default. Turn it off to drop items that carry no rating.
+* **Years** limit the channel to certain production years, like a 90s channel. Enter years and ranges separated by commas, for example `1990-1999` or `1985, 1999, 2003`. For shows this uses each episode's own year, so a long running series contributes only its episodes from those years.
+* **Minimum community rating** (a 0 to 10 audience score) and **minimum critic rating** (a 0 to 100 critic score) keep only higher rated content, for a best of channel. Content carrying no such rating is dropped.
+* **Studios** limit the channel to one or more studios or networks, like an HBO channel. For shows this also matches the series' studio. Search by name to add.
+* **People** limit the channel to content featuring chosen actors or directors. Search by name to add.
+* **Audio language** includes only content whose default audio track is the chosen language.
+
 ### Channel settings
 
 Per channel you can also set:
 
 * **Logo** uploads an image cropped to a square. With no upload the plugin generates a square in a colour from the channel name, showing either the channel number or a Material Symbols icon you name (such as `movie`), with the channel name along the bottom when you want it.
-* **Minimum and maximum age rating** keep content within a rating band. Set both to make an adults only or a single band channel.
-* **Include unrated** is on by default. Turn it off to drop items that carry no rating.
-* **Kids rating** flags programs rated at or below it as Kids in the guide. Movies are flagged as movies automatically.
+* **Kids rating** flags programs rated at or below it as Kids in the guide.
 * **Episodes per block** plays a set number of consecutive episodes of a series before moving on.
 * **Keep multipart episodes together** never splits a two part episode across a block boundary.
 * **Include specials** opts season 0 in. Off by default.
-* **Include home videos** pulls in loose video files (Home Videos library content). Off by default, so existing channels are unchanged.
+* **Include home videos** enables Home and unassigned videos. Off by default, so existing channels are unchanged.
 * **Shuffle** is on by default and is fixed and repeatable, so the guide and the live stream always agree. Disable it to play everything alphabetically.
 * **Episode order** plays a series in air order or at random.
 * **Favor content type** weights a channel toward movies, shows, or music videos so that type plays more often, at a slight, moderate, or heavy strength. Shuffle must be on.
@@ -43,7 +53,7 @@ Per channel you can also set:
 
 ### Output
 
-Resolution, video codec, audio codec, and bitrate are set on the **Settings** tab and apply to every channel. The same tab, organised into collapsible sections, also holds the playback buffer length, where stream files are written, and your **Default language** (the language used to decide Forced subtitle burn in). Decoding and encoding both follow Jellyfin's own hardware acceleration, with a switch to force software when you want it. HDR sources are tone mapped to SDR so they never play washed out. 1080p is the practical sweet spot for a round the clock channel.
+Resolution, video codec, audio codec, and bitrate are set on the **Settings** tab and apply to every channel. The same tab, organised into collapsible sections, also holds the playback buffer length, a **pre-render** lead that starts the next item's encode a few seconds early so item transitions are seamless (lower it or set it to zero to save CPU on low power hardware), where stream files are written, and your **Default language** (the language used to decide Forced subtitle burn in). Decoding and encoding both follow Jellyfin's own hardware acceleration, with a switch to force software when you want it. HDR sources are tone mapped to SDR so they never play washed out. 1080p is the practical sweet spot for a round the clock channel.
 
 A **Sessions** section bounds how much a channel can cost the server. The **maximum concurrent streams** cap limits how many channels encode at once, closing the oldest stream when a new viewer would exceed it, so a client that quits without telling the server cannot leave encoders piling up. An optional **stream time limit** is a blunter backstop that closes any stream open longer than you allow, after which the client simply re-tunes. The **stream window** sets how many minutes of each channel are kept on disk: a larger window lets playback fall further behind the live edge without skipping, at the cost of more disk per active channel. The **producer rate** sets how fast the stream is built ahead of realtime, defaulting to 1.0 (exactly realtime); a higher rate keeps the server from falling behind but drifts the live edge forward over a long watch, so raise the stream window to match it. They default to sensible values and the limits can be turned off.
 

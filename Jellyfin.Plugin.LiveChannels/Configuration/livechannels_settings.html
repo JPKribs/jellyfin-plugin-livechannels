@@ -86,8 +86,8 @@
                         </button>
                         <div id="sectionPlayback" class="jpk-collapsible-content collapsed">
                             <div class="selectContainer">
-                                <label class="selectLabel" for="subtitleLanguage">Default language</label>
-                                <select id="subtitleLanguage" class="jpk-selector-dropdown"></select>
+                                <label class="selectLabel">Default language</label>
+                                <div class="lc-sublang-mount"></div>
                                 <div class="fieldDescription">Your native language. A channel set to Forced only burns in subtitles when its audio is in another language, so foreign content stays followable.</div>
                             </div>
 
@@ -166,6 +166,25 @@
             </form>
         </div>
     </div>
+
+    <style>
+        /* Language chip, matched to the channel editor's pickers (blue capsule) so the default-language chip is
+           not the unstyled grey default. */
+        .jpk-chip-select { display: flex; flex-direction: column; }
+        .jpk-chip-select .jpk-tags { gap: 6px; margin: 0 0 8px 0; }
+        .jpk-chip-select .jpk-tags:empty { display: none; margin: 0; }
+        .jpk-chip-select .jpk-tag {
+            gap: 8px; background: var(--jpk-blue-bg); color: #fff;
+            border: 1px solid rgba(52, 152, 219, 0.5); border-radius: 14px;
+            padding: 3px 4px 3px 12px; font-size: 0.9em; line-height: 1.6;
+        }
+        .jpk-chip-select .jpk-tag-remove {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 18px; height: 18px; padding: 0; border-radius: 50%;
+            background: rgba(255, 255, 255, 0.12); color: #fff; opacity: 1; font-size: 1em; line-height: 1;
+        }
+        .jpk-chip-select .jpk-tag-remove:hover { background: var(--jpk-red-fg); color: #fff; opacity: 1; }
+    </style>
 
     <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">
 </div>

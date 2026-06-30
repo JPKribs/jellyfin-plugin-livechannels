@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.7.0"
+version: "10.11.7.1"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV, with a ready-made Popular channel out of the box."
@@ -16,7 +16,5 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   features:
-  - Filter a channel by production year or decade, so you can build a 90s channel
-  - Filter a channel by studio or network, like an HBO channel, matching shows by their series too
-  - Filter a channel by people, so you can build a favourite actor or director channel
-  - Filter a channel by a minimum community or critic rating, for a best-of channel
+  - Find studios, people, and the audio or subtitle language by searching instead of scrolling a long list, so any studio such as HBO is reachable
+  - Group the channel content filters into their own Filters section for a tidier editor

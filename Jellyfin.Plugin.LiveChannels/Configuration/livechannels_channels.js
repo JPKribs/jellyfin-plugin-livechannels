@@ -26,9 +26,10 @@ export default function (view) {
     var logoContentType = '';
     var libraries = [];        // [{ Id, Name }]
     var ratings = [];          // [{ Name, Value }]
-    var studioChip = null;     // channel-level studio chip-select (created once)
+    var studioPicker = null;   // channel-level studio typeahead picker (created once)
     var peoplePicker = null;   // channel-level person typeahead picker (created once)
-    var studiosLoaded = false; // whether the studio name list has been fetched
+    var audioLangPicker = null;// channel-level audio-language single-select typeahead (created once)
+    var cultures = [];         // cached [{ key: ISO code, label: name }] for the language search
     var _bound = false;
 
     function el(id) { return view.querySelector('#' + id); }
@@ -190,20 +191,25 @@ export default function (view) {
         };
     }
 
-    // MARK: Person picker (people)
+    // MARK: Search chip picker (studios, people)
 
-    // A typeahead picker for people: too many to list in a dropdown, so it searches the server's Persons as you
-    // type and stores the selected { Id, Name } pairs as chips. Matching at resolve time is by id.
-    function createPersonPicker() {
-        var selected = []; // [{ Id, Name }]
+    // A typeahead chip picker for sets that are awkward in a dropdown (studios run to the thousands, people more,
+    // languages are a long fixed list): it searches as you type and stores the chosen { key, label } pairs as chips.
+    // options.search(term) resolves to an array of { key, label }; options.placeholder labels the box; options.single
+    // keeps at most one selection (for single-value fields like a language). The caller maps key/label to its own
+    // storage shape (studios store the name as the key; people store the person id; languages store the ISO code).
+    function createSearchChips(options) {
+        options = options || {};
+        var selected = []; // [{ key, label }]
 
         var wrap = document.createElement('div');
         wrap.className = 'jpk-chip-select';
         var chips = document.createElement('div');
         chips.className = 'jpk-tags';
         var searchHost = document.createElement('div');
-        searchHost.innerHTML = '<input type="text" is="emby-input" class="emby-input" placeholder="Search people…" autocomplete="off" />';
+        searchHost.innerHTML = '<input type="text" is="emby-input" class="emby-input" autocomplete="off" />';
         var search = searchHost.querySelector('input');
+        search.placeholder = options.placeholder || 'Search…';
         var results = document.createElement('div');
         results.className = 'jpk-table';
         results.style.display = 'none';
@@ -213,11 +219,11 @@ export default function (view) {
 
         function renderChips() {
             chips.innerHTML = '';
-            selected.forEach(function (person, index) {
+            selected.forEach(function (item, index) {
                 var tag = document.createElement('span');
                 tag.className = 'jpk-tag';
                 var label = document.createElement('span');
-                label.textContent = person.Name;
+                label.textContent = item.label;
                 var remove = document.createElement('span');
                 remove.className = 'jpk-tag-remove';
                 remove.textContent = '×';
@@ -229,37 +235,41 @@ export default function (view) {
             });
         }
 
-        function hasId(id) { return selected.some(function (p) { return p.Id === id; }); }
+        function hideResults() { results.innerHTML = ''; results.style.display = 'none'; }
 
-        function addPerson(person) {
-            if (person.Id && !hasId(person.Id)) { selected.push({ Id: person.Id, Name: person.Name }); renderChips(); }
+        function has(key) { return selected.some(function (s) { return s.key === key; }); }
+
+        function add(item) {
+            if (item.key != null && item.key !== '') {
+                if (options.single) { selected = [{ key: item.key, label: item.label }]; renderChips(); }
+                else if (!has(item.key)) { selected.push({ key: item.key, label: item.label }); renderChips(); }
+            }
             search.value = '';
-            results.innerHTML = '';
-            results.style.display = 'none';
+            hideResults();
         }
 
         function runSearch(term) {
-            ApiClient.getJSON(ApiClient.getUrl('Persons', { searchTerm: term, Limit: 25, userId: ApiClient.getCurrentUserId() })).then(function (res) {
-                var items = (res && res.Items) || [];
+            Promise.resolve(options.search(term)).then(function (rows) {
                 results.innerHTML = '';
-                if (!items.length) { results.style.display = 'none'; return; }
-                items.forEach(function (it) {
-                    var row = document.createElement('div');
-                    row.className = 'jpk-table-row';
-                    row.style.cursor = 'pointer';
-                    row.textContent = it.Name;
-                    row.addEventListener('click', function () { addPerson({ Id: it.Id, Name: it.Name }); });
-                    results.appendChild(row);
+                rows = rows || [];
+                if (!rows.length) { results.style.display = 'none'; return; }
+                rows.forEach(function (row) {
+                    var el = document.createElement('div');
+                    el.className = 'jpk-table-row';
+                    el.style.cursor = 'pointer';
+                    el.textContent = row.label;
+                    el.addEventListener('click', function () { add(row); });
+                    results.appendChild(el);
                 });
                 results.style.display = '';
-            }).catch(function () { results.innerHTML = ''; results.style.display = 'none'; });
+            }).catch(hideResults);
         }
 
         var timer = null;
         search.addEventListener('input', function () {
             if (timer) clearTimeout(timer);
             var term = search.value.trim();
-            if (!term) { results.innerHTML = ''; results.style.display = 'none'; return; }
+            if (!term) { hideResults(); return; }
             timer = setTimeout(function () { runSearch(term); }, 300);
         });
 
@@ -267,37 +277,47 @@ export default function (view) {
 
         return {
             element: wrap,
-            getValue: function () { return selected.map(function (p) { return { Id: p.Id, Name: p.Name }; }); },
+            getValue: function () { return selected.map(function (s) { return { key: s.key, label: s.label }; }); },
             setValue: function (v) {
-                selected = (v || []).filter(function (p) { return p && p.Id; }).map(function (p) { return { Id: p.Id, Name: p.Name }; });
+                selected = (v || []).filter(function (s) { return s && s.key != null && s.key !== ''; })
+                    .map(function (s) { return { key: s.key, label: s.label }; });
                 renderChips();
-                results.innerHTML = '';
-                results.style.display = 'none';
+                hideResults();
                 if (search) search.value = '';
             }
         };
     }
 
-    // Creates (once) the channel-level studio chip and person picker and mounts them into the editor, loading the
-    // studio name list on first use. Called before the editor is populated for a channel.
+    // Studio search: the server filters by name, so any studio is reachable (no truncated alphabetical list).
+    function searchStudios(term) {
+        return ApiClient.getJSON(ApiClient.getUrl('Studios', { searchTerm: term, Recursive: true, Limit: 25 }))
+            .then(function (res) { return ((res && res.Items) || []).map(function (s) { return { key: s.Name, label: s.Name }; }); });
+    }
+
+    // People search: stores the person id as the key (matched by id at resolve time) and the name as the label.
+    function searchPeople(term) {
+        return ApiClient.getJSON(ApiClient.getUrl('Persons', { searchTerm: term, Limit: 25, userId: ApiClient.getCurrentUserId() }))
+            .then(function (res) { return ((res && res.Items) || []).map(function (p) { return { key: p.Id, label: p.Name }; }); });
+    }
+
+    // Creates (once) the channel-level studio and people typeahead pickers and mounts them into the editor.
     function ensureFilterPickers() {
-        if (!studioChip) {
-            studioChip = createChipSelect({ placeholder: 'Add a studio…' });
+        if (!studioPicker) {
+            studioPicker = createSearchChips({ placeholder: 'Search studios…', search: searchStudios });
             var studioMount = view.querySelector('.lc-studio-mount');
-            if (studioMount) studioMount.appendChild(studioChip.element);
+            if (studioMount) studioMount.appendChild(studioPicker.element);
         }
 
         if (!peoplePicker) {
-            peoplePicker = createPersonPicker();
+            peoplePicker = createSearchChips({ placeholder: 'Search people…', search: searchPeople });
             var peopleMount = view.querySelector('.lc-people-mount');
             if (peopleMount) peopleMount.appendChild(peoplePicker.element);
         }
 
-        if (!studiosLoaded) {
-            studiosLoaded = true;
-            ApiClient.getJSON(ApiClient.getUrl('Studios', { IncludeItemTypes: 'Movie,Series', Recursive: true, Limit: 1000, SortBy: 'SortName' }))
-                .then(function (result) { studioChip.setAvailable(((result && result.Items) || []).map(function (s) { return s.Name; })); })
-                .catch(function () { /* leave the picker empty */ });
+        if (!audioLangPicker) {
+            audioLangPicker = createSearchChips({ placeholder: 'Any language', search: searchLanguages, single: true });
+            var audioMount = view.querySelector('.lc-audiolang-mount');
+            if (audioMount) audioMount.appendChild(audioLangPicker.element);
         }
     }
 
@@ -761,24 +781,32 @@ export default function (view) {
         });
     }
 
-    // Populates the per-channel audio-language dropdown from the server's known cultures. The value stored is the
-    // three-letter ISO code, matched against each item's default audio track on the server.
+    // Loads the server's known cultures once into a cache of { key: ISO code, label: display name }, so the audio
+    // language search can filter them locally (the value stored is the three-letter ISO code, matched against each
+    // item's default audio track on the server).
     function loadLanguages() {
-        var allOption = '<option value="">Allow all languages</option>';
         return ApiClient.getJSON(ApiClient.getUrl('Localization/Cultures')).then(function (list) {
             var seen = {};
-            var opts = (list || []).filter(function (c) {
+            cultures = (list || []).filter(function (c) {
                 var code = c && c.ThreeLetterISOLanguageName;
                 if (!code || seen[code]) return false;
                 seen[code] = true; return true;
-            }).sort(function (a, b) { return (a.DisplayName || a.Name || '').localeCompare(b.DisplayName || b.Name || ''); })
-              .map(function (c) {
-                return '<option value="' + Shared.escapeHtml(c.ThreeLetterISOLanguageName) + '">' + Shared.escapeHtml(c.DisplayName || c.Name) + '</option>';
-            }).join('');
-            el('audioLanguage').innerHTML = allOption + opts;
-        }).catch(function () {
-            el('audioLanguage').innerHTML = allOption;
-        });
+            }).map(function (c) {
+                return { key: c.ThreeLetterISOLanguageName, label: c.DisplayName || c.Name };
+            }).sort(function (a, b) { return a.label.localeCompare(b.label); });
+        }).catch(function () { cultures = []; });
+    }
+
+    // Filters the cached cultures by name for the language typeahead.
+    function searchLanguages(term) {
+        var lower = term.toLowerCase();
+        return cultures.filter(function (c) { return c.label.toLowerCase().indexOf(lower) >= 0; }).slice(0, 25);
+    }
+
+    // The display name for a stored language code, falling back to the code itself when cultures are unavailable.
+    function cultureLabel(code) {
+        for (var i = 0; i < cultures.length; i++) { if (cultures[i].key === code) return cultures[i].label; }
+        return code;
     }
 
     // Keep the rating band coherent: the minimum can never exceed the maximum. When the user picks one end past
@@ -808,6 +836,7 @@ export default function (view) {
     function loadEditor() {
         var ch = channels[currentIndex];
         if (!ch) return;
+        ensureFilterPickers();
         el('channelName').value = ch.Name || '';
         el('channelNumber').value = ch.Number || '';
         logoData = ch.LogoData || '';
@@ -819,7 +848,7 @@ export default function (view) {
 
         renderSources();
 
-        el('audioLanguage').value = ch.AudioLanguage || '';
+        audioLangPicker.setValue(ch.AudioLanguage ? [{ key: ch.AudioLanguage, label: cultureLabel(ch.AudioLanguage) }] : []);
         el('minRating').value = ch.MinOfficialRating || '';
         el('maxRating').value = ch.MaxOfficialRating || '';
         el('includeUnrated').checked = ch.IncludeUnrated !== false;
@@ -827,9 +856,8 @@ export default function (view) {
         el('years').value = yearsToText(ch.Years);
         el('minCommunityRating').value = ch.MinCommunityRating || '';
         el('minCriticRating').value = ch.MinCriticRating || '';
-        ensureFilterPickers();
-        studioChip.setValue(ch.Studios || []);
-        peoplePicker.setValue(ch.People || []);
+        studioPicker.setValue((ch.Studios || []).map(function (s) { return { key: s, label: s }; }));
+        peoplePicker.setValue((ch.People || []).map(function (p) { return { key: p.Id, label: p.Name }; }));
         el('episodesPerBlock').value = ch.EpisodesPerBlock || 1;
         el('keepMultiPart').checked = ch.KeepMultiPartTogether !== false;
         el('includeSpecials').checked = !!ch.IncludeSpecials;
@@ -853,7 +881,8 @@ export default function (view) {
         ch.LogoStyle = el('logoStyle').value;
         ch.LogoSymbol = el('logoSymbol').value.trim();
         ch.LogoShowName = el('logoShowName').checked;
-        ch.AudioLanguage = el('audioLanguage').value;
+        var audioLang = audioLangPicker ? audioLangPicker.getValue() : [];
+        ch.AudioLanguage = audioLang.length ? audioLang[0].key : '';
         ch.MinOfficialRating = el('minRating').value;
         ch.MaxOfficialRating = el('maxRating').value;
         ch.IncludeUnrated = el('includeUnrated').checked;
@@ -863,8 +892,8 @@ export default function (view) {
         ch.MinCommunityRating = isNaN(minCommunity) ? 0 : Math.min(10, Math.max(0, minCommunity));
         var minCritic = parseFloat(el('minCriticRating').value);
         ch.MinCriticRating = isNaN(minCritic) ? 0 : Math.min(100, Math.max(0, minCritic));
-        ch.Studios = studioChip ? studioChip.getValue() : (ch.Studios || []);
-        ch.People = peoplePicker ? peoplePicker.getValue() : (ch.People || []);
+        ch.Studios = studioPicker ? studioPicker.getValue().map(function (s) { return s.key; }) : (ch.Studios || []);
+        ch.People = peoplePicker ? peoplePicker.getValue().map(function (p) { return { Id: p.key, Name: p.label }; }) : (ch.People || []);
         ch.EpisodesPerBlock = Math.max(1, parseInt(el('episodesPerBlock').value, 10) || 1);
         ch.KeepMultiPartTogether = el('keepMultiPart').checked;
         ch.IncludeSpecials = el('includeSpecials').checked;
