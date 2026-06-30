@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.8.0",
+        "changelog": "## Features\r\n- Export and import your channels from the Channels tab, so you can copy a setup between servers\r\n- Keep channels varied by never repeating a series until every other series has aired, so one big show no longer dominates the loop\r\n- Make the Popular channel more diverse by choosing shows from your most-watched episodes and rotating a larger pool of movies and shows",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.8.0/jellyfin-plugin-livechannels-10.11.8.0.zip",
+        "checksum": "aecf0b9abf0de4d5cec100e46922b950",
+        "timestamp": "2026-06-30T19:25:40Z"
+      },
+      {
         "version": "10.11.7.1",
         "changelog": "## Features\r\n- Find studios, people, and the audio or subtitle language by searching instead of scrolling a long list, so any studio such as HBO is reachable\r\n- Group the channel content filters into their own Filters section for a tidier editor",
         "targetAbi": "10.11.9.0",
