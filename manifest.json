@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.8.2",
+        "changelog": "## Developer\r\n- Cleanup & 8.2 preparation",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.8.2/jellyfin-plugin-livechannels-10.11.8.2.zip",
+        "checksum": "431736658988efd06df49ebc5586ad46",
+        "timestamp": "2026-06-30T20:11:23Z"
+      },
+      {
         "version": "10.11.8.1",
         "changelog": "## Features\r\n- Give every channel real variety, each series plays one block then steps aside until the others have aired, cycling through the series over time so no show dominates\r\n- Make the Popular channel show 10 distinct series and 25 distinct movies instead of one big show filling it\r\n- Build Popular from what the server has watched most recently, so the channel follows your latest viewing\r\n- Keep only genuine two-part episodes together, extending a block by at most one episode",
         "targetAbi": "10.11.9.0",
