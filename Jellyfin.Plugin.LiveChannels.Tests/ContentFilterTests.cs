@@ -6,7 +6,7 @@ using Xunit;
 namespace Jellyfin.Plugin.LiveChannels.Tests;
 
 /// <summary>
-/// Covers the pure parts of the channel content filters added for 7.0: the community/critic rating floors and the
+/// Covers the pure parts of the channel content filters added for 7.0 - the community/critic rating floors and the
 /// studio overlap. (Year filtering has its own tests; the people filter is a library query, exercised end to end.)
 /// </summary>
 public class ContentFilterTests
