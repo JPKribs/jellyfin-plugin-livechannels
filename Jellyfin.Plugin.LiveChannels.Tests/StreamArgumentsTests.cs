@@ -53,43 +53,42 @@ public class StreamArgumentsTests
     }
 
     [Fact]
-    public void LaterItems_PaceAtRealtime_WithNoBurst()
+    public void OnScheduleItems_PaceAtExactlyRealtime_WithNoBurst()
     {
-        // A burst on anything but the first item shoves its content into the HLS playlist far faster than realtime,
-        // lurching the live edge forward until the player falls off the back of the delete window. Every item after
-        // the first runs at the configured read rate (default 1.0, exactly realtime) but with NO burst, which is
-        // the part that would lurch the edge.
+        // The read rate is fixed at exactly realtime on every path (a higher rate would advance the live edge
+        // faster than the player can follow, forever). An item started with no accumulated deficit gets NO burst:
+        // an unearned burst would lurch the live edge forward for no reason.
         var a = Build();
         Assert.True(Pair(a, "-readrate", "1.0"));
         Assert.DoesNotContain("-readrate_initial_burst", a);
+        var concat = StreamArguments.BuildConcat("/tmp/list.txt", default, 1280, 4000, SoftwareH264, "aac", 192);
+        Assert.True(Pair(concat, "-readrate", "1.0"));
     }
-
-    [Fact]
-    public void ReadRate_IsConfigurable_AndPassedThrough()
-    {
-        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, false, null, false, "1.01");
-        Assert.True(Pair(a, "-readrate", "1.01"));
-        var concat = StreamArguments.BuildConcat("/tmp/list.txt", default, 1280, 4000, SoftwareH264, "aac", 192, null, "1.5");
-        Assert.True(Pair(concat, "-readrate", "1.5"));
-    }
-
-    [Theory]
-    [InlineData(1.0, "1")]
-    [InlineData(1.01, "1.01")]
-    [InlineData(1.5, "1.5")]
-    [InlineData(0.5, "1")]        // below realtime is clamped up: the producer must never lag
-    [InlineData(9.0, "2")]        // absurdly fast is clamped down so the window cannot be drained
-    [InlineData(1.4567, "1.457")] // kept to three decimals, extra precision dropped
-    public void FormatReadRate_ClampsAndRoundsToThreeDecimals(double input, string expected)
-        => Assert.Equal(expected, StreamArguments.FormatReadRate(input));
 
     [Fact]
     public void FirstItem_BurstsATuneInHeadStart()
     {
         // The first item of a session fills the head start before the player has tuned in, so its burst is safe.
-        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, false, null, true);
-        Assert.Contains("-readrate_initial_burst", a);
+        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, false, null, StreamArguments.InitialBurstSeconds);
+        Assert.True(Pair(a, "-readrate_initial_burst", "30"));
     }
+
+    [Fact]
+    public void DeficitBurst_IsEmittedInSeconds_ThreeDecimals()
+    {
+        // A later item bursts exactly the session's accumulated wall-clock deficit, formatted like the read rate.
+        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, false, null, 2.5);
+        Assert.True(Pair(a, "-readrate_initial_burst", "2.5"));
+    }
+
+    [Theory]
+    [InlineData(0, 0, 30)]      // session start: the deficit IS the full head start
+    [InlineData(100, 130, 0)]   // exactly on schedule (elapsed + head start == produced): no burst
+    [InlineData(100, 125, 5)]   // 5s lost at boundaries so far: burst exactly that
+    [InlineData(500, 400, 30)]  // a large backlog is healed at most one head start per boundary
+    [InlineData(10, 45, 0)]     // ahead of schedule (warm splices): never burst further forward
+    public void BurstForDeficit_TracksTheSessionWallClock(double elapsedSeconds, double timelineSeconds, double expected)
+        => Assert.Equal(expected, StreamArguments.BurstForDeficit(TimeSpan.FromSeconds(elapsedSeconds), TimeSpan.FromSeconds(timelineSeconds)), 3);
 
     [Fact]
     public void SignalsProgressiveFieldOrder_OnBothPaths()
@@ -291,6 +290,15 @@ public class StreamArgumentsTests
         var a = Build();
         Assert.True(Pair(a, "-f", "mpegts"));
         Assert.Equal("pipe:1", a[^1]);
+    }
+
+    [Fact]
+    public void Segmenter_WritesThePlaylistAtomically()
+    {
+        // temp_file makes playlist rewrites atomic (write to .tmp, then rename) so a reader polling at the live
+        // edge can never catch a truncated in-place write, which fails its reload and crashes its HLS demuxer.
+        var a = StreamArguments.BuildHlsSegmenter("/s/seg%d.ts", "/s/stream.m3u8", 75);
+        Assert.Contains(a, x => x.Contains("temp_file", StringComparison.Ordinal));
     }
 
     [Fact]

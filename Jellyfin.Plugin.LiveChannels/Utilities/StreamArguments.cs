@@ -11,25 +11,31 @@ namespace Jellyfin.Plugin.LiveChannels.Utilities;
 /// </summary>
 public static class StreamArguments
 {
-    // How fast the producer reads is configurable (StreamReadRate, passed in as a formatted string). Its output is
-    // packaged by an HLS segmenter into a rolling window of small segments (the playlist), the buffer the player
-    // draws from. At 1.0 the producer feeds exactly realtime. A small margin over realtime keeps it from ever being
-    // the bottleneck, but reading faster pushes the live edge forward faster than the player consumes it, so the
-    // window must be enlarged to match or the player falls off the back as old segments are deleted. The burst is
-    // applied ONCE per session (the first item, or the single concat ffmpeg) to fill a head start before tune-in;
-    // it must never apply to a later item mid-stream.
-    private const string DefaultReadRate = "1.0";
-    private const string ReadRateInitialBurst = "30";
+    // The producer always reads at exactly realtime (-readrate 1.0), feeding the HLS segmenter's rolling window
+    // of small segments (the playlist) at the rate the player consumes it. A rate above realtime is never the
+    // answer to falling behind: it advances the live edge faster than the player can follow, forever, until the
+    // player falls off the back of the window as old segments are deleted. Catch-up is handled by bursts instead:
+    //
+    // Bursts are anchored to the session's wall clock. -readrate is a cumulative cap, so hiccups WITHIN one ffmpeg
+    // self-heal (it reads full speed until back on its own schedule) -- but each per-item ffmpeg re-anchors that
+    // schedule at its own start, so wall-clock time lost BETWEEN processes (cold starts, hardware-decode retries,
+    // subtitle extraction) is unrecoverable at realtime and accumulates until the player catches the live edge and
+    // stalls. The fix: the first item bursts the full head start, and every later item bursts exactly the session's
+    // accumulated deficit (see BurstForDeficit), which restores the live edge to schedule without ever lurching it
+    // past where a full-head-start session would be.
+    private const string RealtimeReadRate = "1.0";
+    private const double MinBurstSeconds = 0.05;
 
-    // The configurable producer rate is clamped to this band: never below realtime (the producer must keep up) and
-    // never absurdly fast (which would drain the window). Three decimals are kept, so e.g. 1.01 is possible.
-    private const double MinReadRate = 1.0;
-    private const double MaxReadRate = 2.0;
+    /// <summary>
+    /// The tune-in head start in seconds: how much content the first item (or the single concat ffmpeg) bursts
+    /// ahead of realtime before the player joins, and the cap on any later item's catch-up burst.
+    /// </summary>
+    public const double InitialBurstSeconds = 30;
 
     // The HLS segmenter packages the producer's continuous TS into a rolling, self-trimming playlist of fixed
-    // length segments. How many segments are retained (the window) is configurable; see SegmentsForWindow. The
-    // window has to cover the drift the 1.1x ReadRate creates (the live edge advances ~0.1s per second faster than
-    // the player consumes), and it is also the upper bound on disk use, so it trades catch-up headroom for space.
+    // length segments. How many segments are retained (the window) is fixed by the caller (see
+    // StreamSessionService.StreamToHlsAsync): it has to cover the tune-in head start plus the worst-case burst
+    // advance of the self-heal path, and it is also the upper bound on disk use per active channel.
     private const int HlsSegmentSeconds = 4;
 
     // Never keep fewer than this many segments, so even a tiny configured window leaves the player something to
@@ -65,11 +71,9 @@ public static class StreamArguments
         bool softwareDecode = false,
         bool isHdr = false,
         int? audioOrdinal = null,
-        bool initialBurst = false,
-        string readRate = DefaultReadRate)
+        double initialBurstSeconds = 0)
     {
         ArgumentNullException.ThrowIfNull(path);
-        ArgumentException.ThrowIfNullOrEmpty(readRate);
         ArgumentNullException.ThrowIfNull(video);
         ArgumentNullException.ThrowIfNull(audioEncoder);
 
@@ -135,18 +139,19 @@ public static class StreamArguments
             }
         }
 
-        // Read at realtime so the segments are produced at the rate the player consumes them, keeping the player a
-        // constant distance back from the live edge (see ReadRate). Only the first item of a session bursts a head
-        // start, and only before the player has tuned in: a burst on a later item would shove its content into the
-        // playlist faster than realtime, lurching the live edge forward until the player falls off the back of the
-        // delete window and the stream breaks.
-        if (initialBurst)
+        // Read at exactly realtime so the segments are produced at the rate the player consumes them, keeping the
+        // player a constant distance back from the live edge (see the pacing comment atop this class). The first
+        // item of a session bursts the full head start before the player has tuned in; later items burst only the
+        // session's accumulated wall-clock deficit (BurstForDeficit), which heals the time lost between processes
+        // at item boundaries. A deficit-sized burst cannot lurch the live edge past schedule by construction, so
+        // the player never falls off the back of the delete window.
+        if (initialBurstSeconds > MinBurstSeconds)
         {
-            Add(args, "-readrate", readRate, "-readrate_initial_burst", ReadRateInitialBurst);
+            Add(args, "-readrate", RealtimeReadRate, "-readrate_initial_burst", initialBurstSeconds.ToString("0.###", CultureInfo.InvariantCulture));
         }
         else
         {
-            Add(args, "-readrate", readRate);
+            Add(args, "-readrate", RealtimeReadRate);
         }
 
         args.Add("-i");
@@ -231,8 +236,11 @@ public static class StreamArguments
             args.Add(extra);
         }
 
+        // -g 60 is a 2-second GOP at the fixed 30 fps, an exact divisor of the 4-second HLS segments, so the
+        // segmenter cuts every segment at precisely 4.0s (with -g 50 the first keyframe past the 4s mark landed
+        // at 5.0s, stretching every segment and delaying the first one at tune-in).
         Add(args, "-b:v", br + "k", "-maxrate", br + "k",
-            "-bufsize", (bitrate * 2).ToString(CultureInfo.InvariantCulture) + "k", "-g", "50");
+            "-bufsize", (bitrate * 2).ToString(CultureInfo.InvariantCulture) + "k", "-g", "60");
 
         // Re-sample audio to a constant 48 kHz stereo track and let aresample fill or drop samples to keep it
         // locked to the video, so audio never drifts out of sync within or across items.
@@ -285,11 +293,9 @@ public static class StreamArguments
         VideoEncoderProfile video,
         string audioEncoder,
         int audioBitrate,
-        string? decodeHwaccel = null,
-        string readRate = DefaultReadRate)
+        string? decodeHwaccel = null)
     {
         ArgumentNullException.ThrowIfNull(listFilePath);
-        ArgumentException.ThrowIfNullOrEmpty(readRate);
         ArgumentNullException.ThrowIfNull(video);
         ArgumentNullException.ThrowIfNull(audioEncoder);
 
@@ -324,10 +330,10 @@ public static class StreamArguments
             args.Add(offset.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture));
         }
 
-        // Read at realtime (see ReadRate) so segments are produced at the player's consumption rate. This is one
+        // Read at exactly realtime so segments are produced at the player's consumption rate. This is one
         // long-lived ffmpeg with no item boundaries, so a single up-front burst safely fills the tune-in head start
         // without ever lurching the live edge mid-stream. Loop the whole playlist forever and read it as one input.
-        Add(args, "-readrate", readRate, "-readrate_initial_burst", ReadRateInitialBurst);
+        Add(args, "-readrate", RealtimeReadRate, "-readrate_initial_burst", InitialBurstSeconds.ToString("0.###", CultureInfo.InvariantCulture));
         Add(args, "-stream_loop", "-1", "-safe", "0", "-f", "concat", "-i", listFilePath);
 
         var height = (int)Math.Round(width * 9.0 / 16.0);
@@ -366,8 +372,9 @@ public static class StreamArguments
             args.Add(extra);
         }
 
+        // 2-second GOP: an exact divisor of the 4-second HLS segments, so segment cuts land at precisely 4.0s.
         Add(args, "-b:v", br + "k", "-maxrate", br + "k",
-            "-bufsize", (bitrate * 2).ToString(CultureInfo.InvariantCulture) + "k", "-g", "50");
+            "-bufsize", (bitrate * 2).ToString(CultureInfo.InvariantCulture) + "k", "-g", "60");
 
         var abr = audioBitrate.ToString(CultureInfo.InvariantCulture);
         Add(args, "-c:a", audioEncoder, "-b:a", abr + "k", "-ac", "2", "-ar", "48000", "-af", "aresample=async=1:min_hard_comp=0.100");
@@ -430,7 +437,7 @@ public static class StreamArguments
             Add(args, "-vf", "format=yuv420p");
         }
 
-        Add(args, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-b:v", br + "k", "-g", "50");
+        Add(args, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-b:v", br + "k", "-g", "60");
         Add(args, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000");
 
         if (timeline > TimeSpan.Zero)
@@ -453,16 +460,19 @@ public static class StreamArguments
         Math.Max(MinHlsSegments, Math.Max(1, windowMinutes) * 60 / HlsSegmentSeconds);
 
     /// <summary>
-    /// Formats the configured producer read rate into the ffmpeg <c>-readrate</c> string, clamped to a safe band
-    /// (never below realtime, never absurdly fast) and rounded to three decimals (so e.g. 1.01 is preserved).
+    /// Computes the catch-up burst for a per-item producer, anchored to the session's wall clock. The live edge
+    /// SHOULD sit at <c>elapsed + InitialBurstSeconds</c> of content; the session has actually produced
+    /// <paramref name="timeline"/>. The difference is wall-clock time lost between processes (cold starts,
+    /// hardware-decode retries, subtitle extraction) that a realtime read rate can never recover, so each new
+    /// producer bursts exactly that deficit. Clamped to zero (a producer ahead of schedule must not burst at all)
+    /// and to the head start (one boundary never lurches the edge more than the original tune-in burst; repeated
+    /// boundaries finish healing a larger backlog).
     /// </summary>
-    /// <param name="rate">The configured read rate (a multiple of realtime; 1.0 is exactly realtime).</param>
-    /// <returns>The ffmpeg <c>-readrate</c> value, e.g. <c>1</c>, <c>1.01</c>, or <c>1.5</c>.</returns>
-    public static string FormatReadRate(double rate)
-    {
-        var clamped = Math.Clamp(double.IsFinite(rate) ? rate : MinReadRate, MinReadRate, MaxReadRate);
-        return clamped.ToString("0.###", CultureInfo.InvariantCulture);
-    }
+    /// <param name="elapsed">Wall-clock time since the per-item session started.</param>
+    /// <param name="timeline">Content produced so far on the channel timeline (the next item's start position).</param>
+    /// <returns>The burst in seconds for the next producer, in [0, <see cref="InitialBurstSeconds"/>].</returns>
+    public static double BurstForDeficit(TimeSpan elapsed, TimeSpan timeline)
+        => Math.Clamp(elapsed.TotalSeconds + InitialBurstSeconds - timeline.TotalSeconds, 0, InitialBurstSeconds);
 
     /// <summary>
     /// Builds the ffmpeg arguments for the HLS segmenter: it reads the producer's continuous MPEG-TS on stdin and
@@ -482,13 +492,16 @@ public static class StreamArguments
 
         // Copy the incoming TS straight into HLS segments (no decode/encode), so this stage is nearly free.
         // delete_segments drops files once they leave the playlist window; omit_endlist keeps it a live playlist;
-        // independent_segments marks each segment as starting on a keyframe. The window length (segments * time)
-        // is the player's buffer and also the upper bound on disk use.
+        // independent_segments marks each segment as starting on a keyframe. temp_file makes every playlist
+        // rewrite atomic (write to .tmp, then rename): without it Jellyfin's reader polling at the live edge
+        // eventually catches a truncated in-place write, fails the reload, and its HLS demuxer crashes (observed
+        // as ffmpeg exit 139 killing playback). The window length (segments * time) is the player's buffer and
+        // the bound on disk use.
         Add(args, "-fflags", "+genpts", "-i", "pipe:0", "-c", "copy",
             "-f", "hls",
             "-hls_time", HlsSegmentSeconds.ToString(CultureInfo.InvariantCulture),
             "-hls_list_size", listSize.ToString(CultureInfo.InvariantCulture),
-            "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments",
+            "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments+temp_file",
             "-hls_segment_type", "mpegts",
             "-hls_segment_filename", segmentPattern,
             playlistPath);

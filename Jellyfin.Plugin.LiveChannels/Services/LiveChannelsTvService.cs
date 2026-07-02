@@ -28,11 +28,15 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     // Content added within this window is treated as new (not a repeat) in the guide.
     private const int NewWindowDays = 14;
 
-    // Default client pre-roll when the configured BufferSeconds is unreadable. A live channel is a re-encoded
-    // feed the player joins mid-stream, so without a head start it begins on an almost-empty buffer and stutters
-    // until it fills. Pre-rolling a few seconds (the declarative form of "pause briefly, then resume") starts
-    // playback on a full cushion instead; the amount is configurable in Settings.
-    private const int DefaultBufferSeconds = 3;
+    // How long a closed session keeps encoding so a viewer surfing back gets an instant re-tune (the warm
+    // session is adopted by the next open instead of a fresh encoder cold-starting). The trade is at most this
+    // much tail encoding per channel a viewer leaves; the session cap and timeout still bound the total.
+    private static readonly TimeSpan LingerGrace = TimeSpan.FromSeconds(30);
+
+    // Client pre-roll: the player buffers this much before playback starts, riding out tune-in jitter. The
+    // reader is not realtime-paced, so this fills at I/O speed from already-produced segments -- it costs a
+    // fraction of a second of wait, and adjusting it in either direction is imperceptible, so it is fixed.
+    private const int BufferSeconds = 3;
 
     private readonly ChannelService _channels;
     private readonly StreamSessionService _streams;
@@ -191,6 +195,51 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             ?? throw new InvalidOperationException("No enabled channel matches id " + channelId);
 
         _logger.LogInformation("Live Channels: opening live stream for {Name}", channel.Name);
+
+        // A still-running session for this channel — a re-tune, or a viewer surfing back within the linger
+        // grace — is ADOPTED instead of replaced: its segments and live edge already exist on disk, so the new
+        // open is served in milliseconds, and one channel never runs two encoders side by side. The session is
+        // re-keyed under the new live stream id so Jellyfin's later close (of either id) resolves correctly.
+        foreach (var (existingId, existing) in _live)
+        {
+            if (!string.Equals(existing.ChannelId, channelId, StringComparison.Ordinal) || existing.Worker.IsCompleted)
+            {
+                continue;
+            }
+
+            if (!_live.TryRemove(existingId, out var warm))
+            {
+                continue;
+            }
+
+            var adoptedId = "lc_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+            _live[adoptedId] = warm with { LingeringSinceUtc = null };
+            var warmPlaylist = Path.Combine(warm.Path, "stream.m3u8");
+            try
+            {
+                await WaitForPlaylistAsync(warmPlaylist, warm.Worker, cancellationToken).ConfigureAwait(false);
+                _logger.LogInformation("Live Channels: adopted the warm session for {Name}", channel.Name);
+                return BuildSource(adoptedId, warmPlaylist);
+            }
+            catch (OperationCanceledException)
+            {
+                // The tune was abandoned mid-adoption; the session stays live under the new id, ready for the
+                // next tune-in (the session timeout and cap still bound it if nobody ever comes back).
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // The warm session turned out to be broken; tear it down and fall through to a fresh start.
+                _logger.LogWarning(ex, "Live Channels: the warm session for {Name} was not playable; starting fresh", channel.Name);
+                if (_live.TryRemove(adoptedId, out var broken))
+                {
+                    CancelAndDispose(broken);
+                }
+
+                break;
+            }
+        }
+
         var liveStreamId = "lc_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
 
         // Each session gets its own directory holding the live playlist and its rolling segments; the whole
@@ -203,12 +252,14 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         var cts = new CancellationTokenSource();
         var stats = new SessionStats();
 
-        // Resolve the channel logo (uploaded or generated, cached on disk, usually already written at guide time)
-        // up front so the Sessions tab can show it without re-resolving on every poll. Not tied to the request
-        // token: a client cancelling the tune must not leave the session with no logo for its whole life.
-        var logoPath = await EnsureLogoAsync(channel, CancellationToken.None).ConfigureAwait(false);
-
+        // Start the producer FIRST so the segmenter is already filling segments while the logo resolves below;
+        // the logo is usually cached, but its first-ever generation must not sit on the tune-in critical path.
         var worker = StartProducer(channel, dir, cts, stats);
+
+        // Resolve the channel logo (uploaded or generated, cached on disk, usually already written at guide time)
+        // so the Sessions tab can show it without re-resolving on every poll. Not tied to the request token: a
+        // client cancelling the tune must not leave the session with no logo for its whole life.
+        var logoPath = await EnsureLogoAsync(channel, CancellationToken.None).ConfigureAwait(false);
 
         _live[liveStreamId] = new LiveSession(cts, worker, dir, channel.Name, channelId, channel.Number, DateTime.UtcNow, logoPath, stats);
 
@@ -274,37 +325,42 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task CloseLiveStream(string id, CancellationToken cancellationToken)
+    public Task CloseLiveStream(string id, CancellationToken cancellationToken)
     {
-        if (!_live.TryRemove(id, out var session))
+        // Keep the encoder warm briefly instead of tearing down: viewers surfing channels often come straight
+        // back, and adopting a warm session (see GetChannelStream) makes that re-tune essentially instant. The
+        // linger costs at most LingerGrace of tail encoding; the delayed teardown collects it if nobody returns.
+        if (_live.TryGetValue(id, out var session) && session.LingeringSinceUtc is null)
         {
-            return;
+            var lingering = session with { LingeringSinceUtc = DateTime.UtcNow };
+
+            // Value-equality update: if the session was adopted or removed concurrently, this close is stale
+            // (it refers to a life the session no longer leads) and must do nothing.
+            if (_live.TryUpdate(id, lingering, session))
+            {
+                _ = LingerTeardownAsync(id, lingering);
+            }
         }
 
-        _activity.Log(
-            "Live Channel: " + session.ChannelName + " has stopped",
-            "LiveChannels.ChannelStopped",
-            overview: "This channel has no viewers so encoding has been stopped.");
+        return Task.CompletedTask;
+    }
 
-        try
-        {
-            await session.Cts.CancelAsync().ConfigureAwait(false);
-        }
-        catch (ObjectDisposedException)
-        {
-            // Already finished.
-        }
+    // Tears a lingered session down after the grace period, unless it was adopted (re-keyed under a new id) or
+    // otherwise removed in the meantime.
+    private async Task LingerTeardownAsync(string id, LiveSession expected)
+    {
+        await Task.Delay(LingerGrace).ConfigureAwait(false);
 
-        try
+        if (_live.TryGetValue(id, out var current) && current == expected && _live.TryRemove(id, out var removed))
         {
-            await session.Worker.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Live stream {Id} did not stop promptly", id);
-        }
+            _activity.Log(
+                "Live Channel: " + removed.ChannelName + " has stopped",
+                "LiveChannels.ChannelStopped",
+                overview: "This channel has no viewers so encoding has been stopped.");
 
-        DisposeSession(session);
+            _logger.LogInformation("Live Channels: closing session {Id} ({Name}) after the linger grace", id, removed.ChannelName);
+            CancelAndDispose(removed);
+        }
     }
 
     /// <summary>
@@ -365,9 +421,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             {
                 foreach (var sessionDir in Directory.EnumerateDirectories(_streamRoot))
                 {
-                    // The schedule cache is a long-lived directory of per-channel files in this root, not an
-                    // orphaned session, so never reap it.
-                    if (IsScheduleDir(sessionDir))
+                    // The schedule and intro caches are long-lived directories in this root, not orphaned
+                    // sessions, so never reap them.
+                    if (IsReservedDir(sessionDir))
                     {
                         continue;
                     }
@@ -422,6 +478,18 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     private void ReapSessions()
     {
         ReapCompletedSessions();
+
+        // Safety net: a lingered session's delayed teardown normally collects it, but if that task was ever
+        // lost, this sweep makes sure a viewerless encoder cannot run forever.
+        foreach (var (id, session) in _live)
+        {
+            if (session.LingeringSinceUtc is { } since && DateTime.UtcNow - since > LingerGrace * 3
+                && _live.TryRemove(id, out var lingered))
+            {
+                _logger.LogWarning("Live Channels: reaping over-lingered session {Id} ({Name})", id, lingered.ChannelName);
+                CancelAndDispose(lingered);
+            }
+        }
 
         var timeoutMinutes = Plugin.Instance?.ReadConfiguration(c => c.SessionTimeoutMinutes) ?? 0;
         if (timeoutMinutes <= 0)
@@ -482,8 +550,8 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             {
                 foreach (var sessionDir in Directory.EnumerateDirectories(_streamRoot))
                 {
-                    // Never delete the schedule cache directory; it is not a session.
-                    if (active.Contains(sessionDir) || IsScheduleDir(sessionDir))
+                    // Never delete the schedule or intro cache directories; they are not sessions.
+                    if (active.Contains(sessionDir) || IsReservedDir(sessionDir))
                     {
                         continue;
                     }
@@ -624,9 +692,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
     }
 
-    // Whether a directory under the stream root is the schedule cache (a long-lived directory of per-channel
-    // schedule files), which the orphan and cleanup sweeps must never delete.
-    private static bool IsScheduleDir(string path)
+    // Whether a directory under the stream root is a long-lived cache (the per-channel schedule files) rather
+    // than a session, which the orphan and cleanup sweeps must never delete.
+    private static bool IsReservedDir(string path)
         => string.Equals(Path.GetFileName(path), ChannelService.ScheduleDirName, StringComparison.Ordinal);
 
     private void TryDeleteFile(string path)
@@ -735,6 +803,16 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             SampleRate = 48000
         };
 
+        // The OPENED source (path set) must be probed by Jellyfin, counter-intuitively: after GetChannelStream
+        // returns, Jellyfin's live-TV provider force-flags every provided video stream as interlaced (a legacy
+        // "make clients deinterlace" hack: IsInterlaced=true, NalLengthSize "0", DisplayTitle "1080i"), which
+        // makes clients re-encode the whole stream with "interlaced video is not supported". The open-stream
+        // probe runs AFTER that hack and its fresh result replaces the doctored streams, so the playback decision
+        // sees the output as it really is (progressive) and direct-streams. The handover already waited for the
+        // first segments, so the probe has real content to read. The unopened "menu" source (no path) cannot be
+        // probed, so it keeps the declared streams: without them a client that needs transcoding crashes
+        // Jellyfin's scale filter on null source dimensions.
+        var opened = path is not null;
         return new MediaSourceInfo
         {
             Id = id,
@@ -742,27 +820,34 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             Protocol = MediaProtocol.File,
             Container = "hls",
             IsInfiniteStream = true,
-            // Read the stream at native frame rate so Jellyfin's transcoder paces itself to realtime. The live
-            // playlist (no end tag) already paces it to segment availability; this keeps the transcoder honest.
-            ReadAtNativeFramerate = true,
-            // Pre-roll the configured number of seconds on the client so playback starts on a full buffer instead
-            // of stuttering while it fills (the declarative form of pausing briefly then resuming on tune-in).
-            BufferMs = Math.Max(0, Plugin.Instance?.ReadConfiguration(c => c.BufferSeconds) ?? DefaultBufferSeconds) * 1000,
+            // Deliberately NOT ReadAtNativeFramerate: the live playlist (no end tag) already paces Jellyfin's
+            // reader to segment availability at the live edge. Adding -re on top caps it at 1x realtime even when
+            // it is behind, so the client buffer could only ever fill at realtime (slow tune-in) and a reader that
+            // hiccuped could never catch back up before falling off the back of the delete window.
+            // Pre-roll a few seconds on the client so playback starts on a full buffer instead of stuttering
+            // while it fills (the declarative form of pausing briefly then resuming on tune-in).
+            BufferMs = BufferSeconds * 1000,
             RequiresOpening = path is null,
             RequiresClosing = true,
             SupportsDirectPlay = false,
             SupportsDirectStream = true,
-            SupportsProbing = false,
-            MediaStreams = new[] { video, audio }
+            SupportsProbing = opened,
+            // Keep the probe snappy: our TS declares its PAT/PMT and interleaves both streams within
+            // milliseconds, and the handover guarantees ~8s of segments exist, so one second of analysis is
+            // ample and every tune-in saves the difference.
+            AnalyzeDurationMs = opened ? 1000 : null,
+            MediaStreams = opened ? Array.Empty<MediaStream>() : new[] { video, audio }
         };
     }
 
     private static async Task WaitForPlaylistAsync(string playlist, Task worker, CancellationToken cancellationToken)
     {
-        // Hand Jellyfin the playlist only once the segmenter has written it and buffered a few segments, so
+        // Hand Jellyfin the playlist only once the segmenter has written it and buffered a couple of segments, so
         // playback starts on a small cushion (the per-item path spawns a fresh ffmpeg per item, and these
-        // buffered segments ride over the brief gap between items). The initial burst fills them fast.
-        const int MinSegments = 3;
+        // buffered segments ride over the brief gap between items). The initial burst fills them fast, and keeps
+        // filling well past this gate while Jellyfin spins up its own repackager, so two segments (8s) is enough
+        // to hand over on without risking an under-run.
+        const int MinSegments = 2;
         var dir = Path.GetDirectoryName(playlist) ?? string.Empty;
         var deadline = DateTime.UtcNow.AddSeconds(20);
         while (DateTime.UtcNow < deadline && !worker.IsCompleted)
@@ -777,10 +862,13 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             await Task.Delay(200, cancellationToken).ConfigureAwait(false);
         }
 
-        // The loop ended either because the segmenter is alive but still filling (deadline hit — hand over the
-        // playlist, it has segments and will keep growing) or because the producer finished. If it finished
-        // without producing a playable playlist, it produced nothing: fail loudly so the caller tears it down.
-        if (worker.IsCompleted && !(File.Exists(playlist) && CountSegments(dir) >= 1))
+        // The loop ended because the deadline passed or the producer finished. A deadline hit with SOME segments
+        // means a slow encoder still filling: hand the playlist over, it will keep growing. But with no playlist
+        // or no segments at all there is nothing Jellyfin can play — whether the producer finished (it made
+        // nothing) or is still "running" (it is stuck, e.g. on an unreachable mount): fail loudly so the caller
+        // tears the session down, instead of handing over an empty playlist that dies later with a cryptic
+        // probe error.
+        if (!File.Exists(playlist) || CountSegments(dir) < 1)
         {
             throw new InvalidOperationException("The channel produced no playable output.");
         }
@@ -866,5 +954,5 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
     }
 
-    private sealed record LiveSession(CancellationTokenSource Cts, Task Worker, string Path, string ChannelName, string ChannelId, int Number, DateTime StartedUtc, string? LogoPath, SessionStats Stats);
+    private sealed record LiveSession(CancellationTokenSource Cts, Task Worker, string Path, string ChannelName, string ChannelId, int Number, DateTime StartedUtc, string? LogoPath, SessionStats Stats, DateTime? LingeringSinceUtc = null);
 }

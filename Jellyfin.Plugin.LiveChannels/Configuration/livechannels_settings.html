@@ -91,17 +91,8 @@
                                 <div class="fieldDescription">Your native language. A channel set to Forced only burns in subtitles when its audio is in another language, so foreign content stays followable.</div>
                             </div>
 
-                            <div class="inputContainer">
-                                <label for="bufferSeconds">Playback buffer (seconds)</label>
-                                <input is="emby-input" type="number" id="bufferSeconds" min="0" max="30" step="1" autocomplete="off" />
-                                <div class="fieldDescription">How long a channel buffers before it starts playing. Raise it to ride out stutter when tuning in, lower it for a faster start.</div>
-                            </div>
 
-                            <div class="inputContainer">
-                                <label for="preRenderSeconds">Pre-render next item (seconds)</label>
-                                <input is="emby-input" type="number" id="preRenderSeconds" min="0" max="30" step="1" autocomplete="off" />
-                                <div class="fieldDescription">How many seconds before an item ends to start encoding the next one, so transitions are seamless. Higher is smoother but briefly runs two encoders at once (more CPU on low-power hardware). 0 turns it off. Applies only to channels that encode item by item (subtitle burn-in, high-resolution, HDR, or QSV/VAAPI).</div>
-                            </div>
+
                         </div>
                     </div>
 
@@ -123,17 +114,6 @@
                                 <div class="fieldDescription">Closes any stream open longer than this, even one you are watching. 0 turns it off.</div>
                             </div>
 
-                            <div class="inputContainer">
-                                <label for="streamWindow">Stream window (minutes)</label>
-                                <input is="emby-input" type="number" id="streamWindow" min="1" step="1" autocomplete="off" />
-                                <div class="fieldDescription">How much each live channel keeps on disk. A larger window lets playback fall further behind without skipping, at the cost of more disk per channel. 5 minutes is plenty for normal viewing.</div>
-                            </div>
-
-                            <div class="inputContainer">
-                                <label for="producerRate">Producer rate</label>
-                                <input is="emby-input" type="number" id="producerRate" min="1" max="2" step="0.01" autocomplete="off" />
-                                <div class="fieldDescription">How fast the stream is built ahead of realtime. 1.0 is exactly realtime. A higher rate keeps the server from falling behind but drifts ahead over time, so raise the stream window to match or playback may skip.</div>
-                            </div>
 
                             <div class="inputContainer">
                                 <label for="streamDirectory">Stream file location</label>

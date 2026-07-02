@@ -31,12 +31,6 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Gets or sets the viewer's native language, as a three-letter ISO code (e.g. <c>eng</c>). With a channel's subtitle rule set to Forced only, content whose default audio track is not this language burns in subtitles so foreign-language content stays followable.</summary>
     public string DefaultSubtitleLanguage { get; set; } = "eng";
 
-    /// <summary>Gets or sets how many seconds the client buffers before playback starts. A larger buffer rides out hiccups on tune-in at the cost of a longer wait before the picture appears.</summary>
-    public int BufferSeconds { get; set; } = 3;
-
-    /// <summary>Gets or sets how many seconds before an item ends the next item's encoder is started, so playback crosses the boundary with no gap. Higher values give smoother transitions but briefly run two encoders at once (more CPU, which matters on low-power hardware). 0 turns pre-rendering off, so each item cold-starts at its boundary. Applies only to the per-item pipeline (subtitle burn-in, high-resolution, HDR, or GPU-upload encoders); the continuous pipeline has no boundaries to bridge. Defaults to 3.</summary>
-    public int PreRenderSeconds { get; set; } = 3;
-
     /// <summary>Gets or sets the directory each channel's live playlist and its rolling stream segments are written to while playing. Empty (the default) uses a <c>livechannels</c> folder inside Jellyfin's cache. Only a short rolling window of segments is kept on disk at a time, so this stays small regardless of how long the channel runs.</summary>
     public string StreamDirectory { get; set; } = string.Empty;
 
@@ -45,12 +39,6 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>Gets or sets the maximum number of minutes any one channel stream may encode before it is closed automatically. A backstop for clients that never send the close on stop. It is blunt: a genuinely watched channel is also closed at the limit, after which the client simply re-tunes. Zero turns the limit off.</summary>
     public int SessionTimeoutMinutes { get; set; }
-
-    /// <summary>Gets or sets how many minutes of segments each channel keeps on disk (the rolling HLS window). A larger window lets playback fall further behind the live edge without skipping (the producer runs slightly above realtime, so the edge drifts ahead over a long watch), at the cost of more disk per active channel. Defaults to 5 minutes.</summary>
-    public int StreamWindowMinutes { get; set; } = 5;
-
-    /// <summary>Gets or sets how fast the producer reads ahead of realtime (ffmpeg <c>-readrate</c>). 1.0 feeds the player at exactly realtime. A higher rate (e.g. 1.01) keeps the producer from ever becoming the bottleneck, but the live edge then drifts ahead over a long watch, so a larger stream window is usually needed to avoid the player skipping. Clamped to 1.0 through 2.0.</summary>
-    public double StreamReadRate { get; set; } = 1.0;
 
     /// <summary>Gets or sets the built-in "Popular" channel's settings. It always lives at channel 0 and draws its content from the recent, top-rated, and most-watched movies and shows on the server, so its number and content are fixed; everything else (name, icon, rating band, subtitle rule, loop behaviour, and whether it is enabled) is configurable here.</summary>
     public Channel PopularChannel { get; set; } = new()
