@@ -81,14 +81,14 @@ public class EncoderResolver
                 return new VideoEncoderProfile(family + "_qsv", label + " (QSV)", true,
                     QsvInit, Empty, "format=nv12,hwupload=extra_hw_frames=64", false,
                     DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12|p010le,",
-                    GpuDevice: qsvDevice);
+                    GpuDevice: qsvDevice, VppBrightness: VppBrightness(options), VppContrast: VppContrast(options));
             case "vaapi":
                 var device = string.IsNullOrEmpty(options?.VaapiDevice) ? "/dev/dri/renderD128" : options!.VaapiDevice;
                 return new VideoEncoderProfile(family + "_vaapi", label + " (VAAPI)", true,
                     new[] { "-init_hw_device", "vaapi=va:" + device, "-filter_hw_device", "va" }, Empty,
                     "format=nv12,hwupload", false,
                     DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: "hwdownload,format=nv12|p010le,",
-                    GpuDevice: device);
+                    GpuDevice: device, VppBrightness: VppBrightness(options), VppContrast: VppContrast(options));
             default:
                 return Software(codec);
         }
@@ -115,6 +115,15 @@ public class EncoderResolver
             _ => ("Software (no hardware acceleration configured in Jellyfin)", false)
         };
     }
+
+    // The brightness/contrast gain Jellyfin applies after its own VAAPI tone map (Dashboard > Playback >
+    // "VPP Tone mapping brightness gain"). Intel's fixed-function HDR->SDR LUT renders dark, so the channel
+    // streams honour the same setting the user tuned for regular playback. Clamped to procamp_vaapi's ranges.
+    private static double VppBrightness(EncodingOptions? options)
+        => Math.Clamp(options?.VppTonemappingBrightness ?? 0, -100, 100);
+
+    private static double VppContrast(EncodingOptions? options)
+        => Math.Clamp(options?.VppTonemappingContrast ?? 1, 0, 10);
 
     private EncodingOptions? ReadOptions()
     {

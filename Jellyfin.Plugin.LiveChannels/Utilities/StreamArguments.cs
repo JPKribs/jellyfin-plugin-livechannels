@@ -81,20 +81,10 @@ public static class StreamArguments
         var burnIn = forcedSubtitle.HasValue;
 
         // The fully GPU-resident Intel pipeline: when the encoder is Intel (QSV/VAAPI) and Jellyfin's render
-        // node is known, decode, deinterlace, scale, tone map, and encode ALL stay in VRAM. Benchmarked on an
-        // N100 iGPU against 4K HDR10 HEVC: ~3.2x realtime for SDR/10-bit and ~3.4x for HDR (scale-first VPP
-        // tone map), versus 1.2x for the download-to-CPU chain and 1.8x for the old tonemap-at-4K HDR path.
-        // This also eliminates the Intel 10-bit/interlaced software-decode workarounds: they existed only to
-        // dodge the p010/interlaced hwdownload, and this graph never downloads. Subtitle burn-in stays on this
-        // pipeline too (overlay_vaapi composite; see AppendIntelGpuSubtitleFilter); only the software-decode
-        // retry uses the CPU chains below.
-        var isIntel = IsIntelHardware(video.Name);
-        var intelGpu = isIntel && !softwareDecode && !string.IsNullOrEmpty(video.GpuDevice);
-
-        // Legacy HDR fallback for Intel WITHOUT a known render node (non-Linux): the old vendor_id-matched
-        // VAAPI tone-map chain, unchanged.
-        var useHdrVaapi = isHdr && !burnIn && !softwareDecode && isIntel && !intelGpu;
-        var hwDecode = !intelGpu && !useHdrVaapi && !softwareDecode && !string.IsNullOrEmpty(video.DecodeHwaccel);
+        // node is known (Linux), decode, deinterlace, scale, tone map, subtitle overlay, and encode all stay
+        // in VRAM. Only the software-decode retry uses the CPU chains below.
+        var intelGpu = IsIntelHardware(video.Name) && !softwareDecode && !string.IsNullOrEmpty(video.GpuDevice);
+        var hwDecode = !intelGpu && !softwareDecode && !string.IsNullOrEmpty(video.DecodeHwaccel);
 
         // +genpts fills in any missing presentation timestamps so each item starts from a clean, monotonic
         // timeline before the offset is applied.
@@ -103,9 +93,9 @@ public static class StreamArguments
         var args = new List<string> { "-hide_banner", "-loglevel", "error", "-progress", "pipe:2", "-fflags", "+genpts" };
 
         // Hardware device initialisation goes before the input. The GPU-resident Intel pipeline binds Jellyfin's
-        // configured render node explicitly (never vendor_id matching, which is ambiguous on dual-Intel boxes
-        // like an N100 + Arc) and, for a QSV encoder, derives the QSV device from it so filters and encoder
-        // share frames. The legacy HDR path keeps its vendor_id init; everything else uses the profile's own.
+        // configured render node explicitly (a device path is unambiguous on dual-Intel boxes, where vendor
+        // matching is not) and, for a QSV encoder, derives the QSV device from it so filters and encoder
+        // share frames. Everything else uses the profile's own init arguments.
         if (intelGpu)
         {
             Add(args, "-init_hw_device", "vaapi=va:" + video.GpuDevice);
@@ -123,18 +113,19 @@ public static class StreamArguments
         }
         else
         {
-            foreach (var init in useHdrVaapi ? HdrVaapiInit : video.InitArgs)
+            foreach (var init in video.InitArgs)
             {
                 args.Add(init);
             }
         }
 
-        // Hardware-assisted decoding offloads the heavy decode of 4K/HEVC sources from the CPU. The HDR path
-        // decodes on VAAPI and keeps frames on the GPU through the tone-map. Otherwise QSV/VAAPI keep frames on
+        // Hardware-assisted decoding offloads the heavy decode of 4K/HEVC sources from the CPU. The GPU-resident
+        // pipeline decodes on VAAPI and keeps frames in VRAM end to end. Otherwise QSV/VAAPI keep frames on
         // the GPU (an output format plus a leading hwdownload, below, brings them back for the software scale);
-        // VideoToolbox auto-downloads. The caller can force software decode (the per-item fallback when a hardware
-        // decode fails, and for subtitle burn-in whose overlay needs system frames the simple way).
-        if (intelGpu || useHdrVaapi)
+        // VideoToolbox auto-downloads. The caller forces software decode for the per-item retry after a failed
+        // hardware decode, and for subtitle burn-in outside the GPU-resident pipeline (the overlay needs system
+        // frames there).
+        if (intelGpu)
         {
             Add(args, "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi");
         }
@@ -216,29 +207,23 @@ public static class StreamArguments
             gpuTail = video.Name.Contains("qsv", StringComparison.Ordinal) ? ",hwmap=derive_device=qsv,format=qsv" : string.Empty;
             if (isHdr)
             {
-                // Scale FIRST (at p010, on the GPU), tone map the small frames: measured 3.4x vs 1.8x for the
-                // old tonemap-at-4K order, with identical output (the engine and parameters are unchanged).
+                // Scale first so the tone map runs on the small frames, then PAD LAST: the letterbox bars must
+                // be painted onto the SDR frame — painted before the tone map (in PQ/bt2020 space) the LUT turns
+                // them green. procamp applies Jellyfin's VPP brightness/contrast gain before the bars exist, so
+                // the gain lifts the picture without greying the bars.
                 scale = "scale_vaapi=w=" + w + ":h=" + h + ":force_original_aspect_ratio=decrease:format=p010,"
-                    + "pad_vaapi=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,"
-                    + "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,fps=30";
+                    + "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709," + Procamp(video)
+                    + "pad_vaapi=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30";
             }
             else
             {
                 // deinterlace_vaapi only touches flagged frames (like yadif's deint=1), so progressive content
-                // passes through untouched; scale_vaapi converts p010 to nv12 ON the GPU, which is what removes
-                // the old 10-bit software-decode workaround.
+                // passes through untouched; scale_vaapi converts 10-bit p010 surfaces to nv12 ON the GPU, so
+                // 10-bit sources never need a software decode.
                 scale = "deinterlace_vaapi=rate=frame:auto=1,"
                     + "scale_vaapi=w=" + w + ":h=" + h + ":force_original_aspect_ratio=decrease:format=nv12,"
                     + "pad_vaapi=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30";
             }
-        }
-        else if (useHdrVaapi)
-        {
-            // Full GPU HDR pipeline: tone-map PQ/HLG to SDR bt709, scale and letterbox on VAAPI, then map onto a
-            // QSV frame for the encoder. fps pins the constant frame rate; pad_vaapi keeps a 1:1 aspect.
-            scale = "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,"
-                + "scale_vaapi=w=" + w + ":h=" + h + ":force_original_aspect_ratio=decrease,"
-                + "pad_vaapi=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30,hwmap=derive_device=qsv,format=qsv";
         }
         else
         {
@@ -247,8 +232,8 @@ public static class StreamArguments
             // untouched. The encoder is also told the output is progressive via -field_order below. When the decoder
             // kept frames on the GPU, bring them back to system memory before the software scale.
             var download = hwDecode ? video.DecodeDownload : string.Empty;
-            // Software tone-map fallback for HDR off the VAAPI path (non-Intel encoders, burn-in, the retry): the
-            // zscale->tonemap(hable)->zscale chain (ErsatzTV/Tunarr). Decoded in software so the 10-bit survives.
+            // Software tone map for HDR outside the GPU-resident pipeline (non-Intel encoders and the retry):
+            // the zscale->tonemap(hable)->zscale chain. Decoded in software so the 10-bit depth survives.
             var tonemap = isHdr
                 ? "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
                 : string.Empty;
@@ -319,7 +304,7 @@ public static class StreamArguments
         Add(args, "-max_muxing_queue_size", "1024");
 
         // Continue the timeline from where the previous item ended so timestamps never jump backwards at a
-        // boundary (the cause of downstream non-monotonic DTS and audio desync). When the burn-in seek used
+        // boundary (backward jumps cause downstream non-monotonic DTS and audio desync). When the burn-in seek used
         // -copyts the source PTS starts at `offset`, so subtract it to land this item on the channel timeline.
         var tsOffset = timeline.TotalSeconds - (burnIn && hasOffset ? offset.TotalSeconds : 0);
         if (Math.Abs(tsOffset) > 0.0005)
@@ -576,16 +561,7 @@ public static class StreamArguments
         return args;
     }
 
-    // Device init for the HDR path: a VAAPI device (Intel iHD) with a QSV device derived from it, so the VAAPI
-    // tone-map/scale filters and the QSV encoder share GPU frames through a hwmap.
-    private static readonly string[] HdrVaapiInit =
-    {
-        "-init_hw_device", "vaapi=va:,vendor_id=0x8086,driver=iHD",
-        "-init_hw_device", "qsv=qs@va",
-        "-filter_hw_device", "qs"
-    };
-
-    // Whether the encoder is an Intel hardware encoder (QSV or VAAPI), which can run the GPU HDR tone-map path.
+    // Whether the encoder is an Intel hardware encoder (QSV or VAAPI), which can run the GPU-resident pipeline.
     private static bool IsIntelHardware(string encoderName)
         => encoderName.Contains("qsv", StringComparison.Ordinal) || encoderName.Contains("vaapi", StringComparison.Ordinal);
 
@@ -668,6 +644,27 @@ public static class StreamArguments
         args.Add("[v]");
         args.Add("-map");
         args.Add(AudioMap(audioOrdinal));
+    }
+
+    // The brightness/contrast gain stage after a VAAPI tone map (tonemap_vaapi has no brightness knob of its
+    // own and Intel's LUT renders dark). Values come from Jellyfin's VPP tone-mapping settings via the encoder
+    // profile; neutral values (b=0, c=1) add no stage. Returns "procamp_vaapi=...," or "" for chain splicing.
+    private static string Procamp(VideoEncoderProfile video)
+    {
+        var hasBrightness = Math.Abs(video.VppBrightness) > 0.0005;
+        var hasContrast = Math.Abs(video.VppContrast - 1) > 0.0005;
+        if (!hasBrightness && !hasContrast)
+        {
+            return string.Empty;
+        }
+
+        var stage = "procamp_vaapi=b=" + video.VppBrightness.ToString("0.###", CultureInfo.InvariantCulture);
+        if (hasContrast)
+        {
+            stage += ":c=" + video.VppContrast.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        return stage + ",";
     }
 
     // libavfilter parses the subtitles filename: backslash, single quote, and colon must be escaped so the

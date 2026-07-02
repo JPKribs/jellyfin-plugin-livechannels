@@ -472,8 +472,8 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             {
                 foreach (var sessionDir in Directory.EnumerateDirectories(_streamRoot))
                 {
-                    // The schedule and intro caches are long-lived directories in this root, not orphaned
-                    // sessions, so never reap them.
+                    // The schedule cache is a long-lived directory in this root, not an orphaned
+                    // session, so never reap it.
                     if (IsReservedDir(sessionDir))
                     {
                         continue;
@@ -601,7 +601,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             {
                 foreach (var sessionDir in Directory.EnumerateDirectories(_streamRoot))
                 {
-                    // Never delete the schedule or intro cache directories; they are not sessions.
+                    // Never delete the schedule cache directory; it is not a session.
                     if (active.Contains(sessionDir) || IsReservedDir(sessionDir))
                     {
                         continue;

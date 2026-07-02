@@ -98,8 +98,8 @@ public class StreamSessionService
 
         // Whether any item is HDR (which forces the per-item tone-map path). Each item's HDR flag is probed once at
         // guide refresh and cached on the schedule entry, so this is a pure in-memory scan with no media-stream
-        // queries -- it no longer stalls a large channel's start-up. The short-circuit still skips it when the
-        // channel is already per-item for another reason (burn-in, a >1080p item, or a GPU-upload encoder).
+        // queries on the tune-in critical path. The short-circuit skips even the scan when the channel is
+        // already per-item for another reason (burn-in, a >1080p item, or a GPU-upload encoder).
         var alreadyPerItem = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never || highRes || usesHwUpload;
         var hasHdr = !alreadyPerItem && programs.Any(p => p.IsHdr);
         var perItem = alreadyPerItem || hasHdr;
@@ -338,9 +338,7 @@ public class StreamSessionService
     // subtitle burn-in, high-resolution, HDR, or GPU-upload encoders, which need a per-item pipeline the concat
     // path cannot provide. Every item cold-starts at its boundary; the wall clock a cold start costs is healed by
     // that producer's deficit burst, and the viewer rides the tune-in head start well behind the live edge, so
-    // boundaries stay invisible without ever running two encoders at once. (This replaced a pre-render/warm-splice
-    // pipeline: warming was only worth its complexity when boundary losses were unrecoverable, and its parked
-    // producers accrued read allowance that crept the live edge forward a few seconds every boundary.)
+    // boundaries stay invisible without ever running two encoders at once.
     private async Task StreamPerItemLoopAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, int index, TimeSpan offset, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
     {
         var startOffset = offset;
@@ -410,18 +408,17 @@ public class StreamSessionService
         var profile = _encoders.ResolveVideo(videoCodec, allowHardware: true);
         var (audioEncoder, _) = EncoderResolver.ResolveAudio(audioCodec);
 
-        // Decode follows the server's hardware acceleration. The per-item path hardware-decodes each item, except
-        // subtitle burn-in on a GPU-resident decoder (QSV/VAAPI), which composites in software. The continuous
-        // pipeline hardware-decodes only when every item is the same resolution. Either way, software is used when
-        // no hardware decoder is configured (and the paths fall back to software if a hardware decode fails).
+        // Decode follows the server's hardware acceleration. The decode plan is decided PER ITEM, so the label
+        // must not overstate the channel-level flags: on the GPU-resident pipeline subtitle burn-in stays on the
+        // GPU (overlay_vaapi composite); elsewhere burn-in and HDR route items to software decode. The continuous
+        // pipeline hardware-decodes only when every item is the same resolution, and every path falls back to
+        // software when a hardware decode fails.
         var burnIn = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never;
         var pipeline = perItem ? "per-item" : "continuous";
         var burnInForcesSoftware = burnIn && !string.IsNullOrEmpty(profile.DecodeDownload);
         var intelHardware = profile.Name.Contains("qsv", StringComparison.Ordinal) || profile.Name.Contains("vaapi", StringComparison.Ordinal);
         var gpuCapable = intelHardware && !string.IsNullOrEmpty(profile.GpuDevice);
         var hwDecode = !hasHdr && profile.DecodeHwaccel is not null && (perItem ? !burnInForcesSoftware : uniform);
-        // The decode plan is decided PER ITEM, so the label must not overstate the channel-level flags. On the
-        // GPU-resident pipeline even subtitle burn-in stays on the GPU (overlay_vaapi composite).
         string decode;
         if (perItem && gpuCapable)
         {
@@ -429,7 +426,7 @@ public class StreamSessionService
         }
         else if (hasHdr)
         {
-            decode = intelHardware && !burnIn ? "vaapi (HDR)" : "software (HDR)";
+            decode = "software (HDR)";
         }
         else
         {
@@ -480,7 +477,7 @@ public class StreamSessionService
             }
         }
 
-        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, program.IsHdr, program.IsInterlaced, program.IsTenBit, program.DefaultAudioOrdinal, burstSeconds());
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds());
         var total = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
@@ -488,7 +485,7 @@ public class StreamSessionService
         if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
-            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.IsInterlaced, program.IsTenBit, program.DefaultAudioOrdinal, burstSeconds());
+            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds());
             total = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
         }
 
@@ -653,15 +650,13 @@ public class StreamSessionService
     /// <param name="path">The media file path.</param>
     /// <param name="sourceHeight">The video height, driving the same decode decisions a channel makes.</param>
     /// <param name="isHdr">Whether the item is HDR (PQ/HLG).</param>
-    /// <param name="isInterlaced">Whether the item is interlaced.</param>
-    /// <param name="isTenBit">Whether the item is 10-bit or deeper.</param>
     /// <param name="offset">Seek offset into the item, so concurrent copies read different sections.</param>
     /// <param name="duration">How much content to encode.</param>
     /// <returns>The ffmpeg argument list and whether it hardware-decodes.</returns>
-    public (List<string> Args, bool HardwareDecode) BuildStressArguments(string path, int sourceHeight, bool isHdr, bool isInterlaced, bool isTenBit, TimeSpan offset, TimeSpan duration)
-        => BuildArguments(path, offset, TimeSpan.Zero, null, sourceHeight, null, softwareDecode: false, isHdr, isInterlaced, isTenBit, null, initialBurstSeconds: 0, duration);
+    public (List<string> Args, bool HardwareDecode) BuildStressArguments(string path, int sourceHeight, bool isHdr, TimeSpan offset, TimeSpan duration)
+        => BuildArguments(path, offset, TimeSpan.Zero, null, sourceHeight, null, softwareDecode: false, isHdr, null, initialBurstSeconds: 0, duration);
 
-    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, bool isInterlaced, bool isTenBit, int? audioOrdinal, double initialBurstSeconds, TimeSpan? durationLimit = null)
+    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal, double initialBurstSeconds, TimeSpan? durationLimit = null)
     {
         // Read just the scalars we need inside the config lock, rather than holding a reference to the live
         // (mutable, shared) configuration object after the lock releases.
@@ -681,31 +676,21 @@ public class StreamSessionService
         var (audioEncoder, audioBitrate) = EncoderResolver.ResolveAudio(audioCodec);
         var intelHardware = video.Name.Contains("qsv", StringComparison.Ordinal) || video.Name.Contains("vaapi", StringComparison.Ordinal);
 
-        // Intel with a known render node runs the fully GPU-resident pipeline (built inside Build): decode,
-        // deinterlace, scale, tone map, subtitle overlay, and encode all in VRAM, for SDR, 10-bit, interlaced,
-        // and HDR alike.
+        // Intel with a known render node (Linux) runs the fully GPU-resident pipeline (built inside Build):
+        // decode, deinterlace, scale, tone map, subtitle overlay, and encode all in VRAM, for SDR, 10-bit,
+        // interlaced, and HDR alike.
         var intelGpu = intelHardware && !string.IsNullOrEmpty(video.GpuDevice) && !softwareDecode;
 
-        // LEGACY Intel workarounds, needed only when the GPU-resident graph is unavailable (no known render
-        // node, e.g. Windows QSV): the download-to-CPU path fails on interlaced QSV frames and on 10-bit (p010)
-        // surfaces (exit 234), so those sources are software-decoded; the hardware ENCODER still runs via the
-        // profile's hwupload pixel stage. The GPU-resident graph never downloads, so none of this applies there.
-        var intelInterlaced = intelHardware && !intelGpu && isInterlaced;
-        var intelTenBit = intelHardware && !intelGpu && isTenBit && !isHdr;
-
-        // HDR: the GPU-resident graph tone-maps on the GPU (scale-first VPP); Intel without a render node keeps
-        // the legacy VAAPI tone-map chain; HDR anywhere else (VideoToolbox/NVENC/software) and non-GPU-resident
-        // HDR burn-in tone-map in software, which needs software-decoded frames. Burn-in outside the
-        // GPU-resident graph forces software when the decoder keeps frames in VRAM (the CPU overlay needs
-        // system frames). The caller forces software for the per-item retry.
-        var usesHdrVaapi = isHdr && intelHardware && !intelGpu && !forcedSubtitle.HasValue && !softwareDecode && !intelInterlaced;
-        var hdrNeedsSoftware = isHdr && !intelGpu && !usesHdrVaapi;
-        var forceSoftware = softwareDecode || hdrNeedsSoftware || intelInterlaced || intelTenBit
+        // Outside the GPU-resident pipeline, HDR tone-maps in software (the zscale chain needs software-decoded
+        // frames so the 10-bit depth survives), and burn-in forces software when the decoder would keep frames
+        // in VRAM (the CPU overlay needs system frames). The caller forces software for the per-item retry.
+        var hdrNeedsSoftware = isHdr && !intelGpu;
+        var forceSoftware = softwareDecode || hdrNeedsSoftware
             || (forcedSubtitle.HasValue && !intelGpu && !string.IsNullOrEmpty(video.DecodeDownload));
 
-        // Every hardware pipeline (GPU-resident, legacy HDR, or plain hardware decode) reports as such, so a
-        // no-output failure retries the item in software (StreamItemAsync) instead of blanking the channel.
-        var hardwareDecode = intelGpu || usesHdrVaapi || (!forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel));
+        // Every hardware pipeline reports as such, so a no-output failure retries the item in software
+        // (StreamItemAsync) instead of blanking the channel.
+        var hardwareDecode = intelGpu || (!forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel));
         var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurstSeconds, durationLimit);
         return (args, hardwareDecode);
     }

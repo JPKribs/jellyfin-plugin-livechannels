@@ -136,17 +136,37 @@ public class StreamArgumentsTests
     }
 
     [Fact]
-    public void IntelGpuPipeline_Hdr_ScalesFirst_ThenToneMaps()
+    public void IntelGpuPipeline_Hdr_ScalesFirst_ToneMaps_PadsLast()
     {
-        // The benchmarked STEP 5 graph: scale at p010 on the GPU FIRST, tone map the small frames (3.4x vs 1.8x
-        // for the old tonemap-at-4K order), same VPP engine and bt709 parameters as before.
+        // Scale at p010 on the GPU first (tone map runs on the small frames), and pad LAST: letterbox bars
+        // painted before the tone map sit in PQ/bt2020 space and the LUT renders them green instead of black.
         var a = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, null, null, false, isHdr: true);
         var vf = a[a.IndexOf("-vf") + 1];
         Assert.Contains("scale_vaapi=w=1920:h=1080:force_original_aspect_ratio=decrease:format=p010", vf, StringComparison.Ordinal);
         Assert.Contains("tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709", vf, StringComparison.Ordinal);
         Assert.True(vf.IndexOf("scale_vaapi", StringComparison.Ordinal) < vf.IndexOf("tonemap_vaapi", StringComparison.Ordinal));
+        Assert.True(vf.IndexOf("tonemap_vaapi", StringComparison.Ordinal) < vf.IndexOf("pad_vaapi", StringComparison.Ordinal));
         Assert.Contains("hwmap=derive_device=qsv,format=qsv", vf, StringComparison.Ordinal);
         Assert.DoesNotContain("zscale", vf, StringComparison.Ordinal);
+        Assert.DoesNotContain("procamp_vaapi", vf, StringComparison.Ordinal); // neutral gain adds no stage
+    }
+
+    [Fact]
+    public void IntelGpuPipeline_Hdr_AppliesJellyfinVppBrightness_BeforeThePad()
+    {
+        // Jellyfin's VPP tone-mapping brightness gain rides the profile; the procamp stage sits between the
+        // tone map and the pad so the gain lifts the picture without greying the letterbox bars.
+        var bright = QsvLinux with { VppBrightness = 16, VppContrast = 1 };
+        var a = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, bright, "aac", 192, null, null, false, isHdr: true);
+        var vf = a[a.IndexOf("-vf") + 1];
+        Assert.Contains("tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,procamp_vaapi=b=16,pad_vaapi", vf, StringComparison.Ordinal);
+
+        // Contrast joins the same stage only when non-neutral, and SDR content gets no procamp at all.
+        var contrast = QsvLinux with { VppBrightness = 16, VppContrast = 1.2 };
+        var b = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, contrast, "aac", 192, null, null, false, isHdr: true);
+        Assert.Contains("procamp_vaapi=b=16:c=1.2,", b[b.IndexOf("-vf") + 1], StringComparison.Ordinal);
+        var sdr = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, bright, "aac", 192, null);
+        Assert.DoesNotContain("procamp_vaapi", sdr[sdr.IndexOf("-vf") + 1], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -276,21 +296,13 @@ public class StreamArgumentsTests
     }
 
     [Fact]
-    public void Hdr_OnIntelHardware_UsesVaapiTonemapPipeline()
+    public void Hdr_OnIntelWithoutRenderNode_UsesNoVaapiGraph()
     {
-        // HDR on a QSV/VAAPI encoder must tone-map on the GPU (validated at ~2x realtime on an N100): VAAPI decode,
-        // tonemap_vaapi, scale/pad on VAAPI, hwmap to QSV. No software zscale tone-map.
+        // Intel without a known render node has no GPU-resident graph; HDR keeps the profile's own init (no
+        // vendor-matched VAAPI device) so the caller's software route handles the tone map.
         var a = StreamArguments.Build("/m.mkv", default, default, 1920, 8000, QsvStyle, "aac", 192, null, null, false, isHdr: true);
-        Assert.True(Pair(a, "-hwaccel", "vaapi"));
-        Assert.Contains("vaapi=va:,vendor_id=0x8086,driver=iHD", a);
-        var vf = a[a.IndexOf("-vf") + 1];
-        Assert.Contains("tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709", vf, StringComparison.Ordinal);
-        Assert.Contains("scale_vaapi=w=1920:h=1080:force_original_aspect_ratio=decrease", vf, StringComparison.Ordinal);
-        Assert.Contains("pad_vaapi=1920:1080", vf, StringComparison.Ordinal);
-        Assert.Contains("fps=30,hwmap=derive_device=qsv,format=qsv", vf, StringComparison.Ordinal);
-        Assert.DoesNotContain("zscale", vf, StringComparison.Ordinal);
-        Assert.True(Pair(a, "-c:v", "h264_qsv"));
-        Assert.True(Pair(a, "-field_order", "progressive"));
+        Assert.DoesNotContain(a, x => x.Contains("vendor_id", StringComparison.Ordinal));
+        Assert.DoesNotContain(a, x => x.Contains("tonemap_vaapi", StringComparison.Ordinal));
     }
 
     [Fact]

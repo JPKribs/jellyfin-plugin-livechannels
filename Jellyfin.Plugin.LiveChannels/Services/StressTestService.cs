@@ -116,8 +116,6 @@ public sealed class StressTestService : IDisposable
 
         var height = video?.Height ?? 0;
         var isHdr = ChannelService.ComputeIsHdr(video);
-        var isInterlaced = video?.IsInterlaced ?? false;
-        var isTenBit = ChannelService.ComputeIsTenBit(video);
         var runtime = item.RunTimeTicks is long ticks ? TimeSpan.FromTicks(ticks) : TimeSpan.Zero;
 
         CancellationToken token;
@@ -140,7 +138,7 @@ public sealed class StressTestService : IDisposable
         }
 
         _logger.LogInformation("Live Channels: stress test starting against \"{Name}\" ({Height}p, HDR {Hdr})", item.Name, height, isHdr);
-        _ = Task.Run(() => RunAsync(ffmpeg, path, height, isHdr, isInterlaced, isTenBit, runtime, token), CancellationToken.None);
+        _ = Task.Run(() => RunAsync(ffmpeg, path, height, isHdr, runtime, token), CancellationToken.None);
         return null;
     }
 
@@ -175,7 +173,7 @@ public sealed class StressTestService : IDisposable
         _cts?.Dispose();
     }
 
-    private async Task RunAsync(string ffmpeg, string path, int height, bool isHdr, bool isInterlaced, bool isTenBit, TimeSpan runtime, CancellationToken token)
+    private async Task RunAsync(string ffmpeg, string path, int height, bool isHdr, TimeSpan runtime, CancellationToken token)
     {
         try
         {
@@ -186,7 +184,7 @@ public sealed class StressTestService : IDisposable
                     _currentStreams = streams;
                 }
 
-                var minFps = await RunRoundAsync(ffmpeg, path, height, isHdr, isInterlaced, isTenBit, runtime, streams, token).ConfigureAwait(false);
+                var minFps = await RunRoundAsync(ffmpeg, path, height, isHdr, runtime, streams, token).ConfigureAwait(false);
                 var round = new StressRound(streams, Math.Round(minFps, 1), minFps >= PassFps);
                 _logger.LogInformation("Live Channels: stress round {Streams} stream(s) -> slowest {Fps:F1} fps ({Verdict})", streams, minFps, round.Passed ? "pass" : "fail");
 
@@ -226,13 +224,13 @@ public sealed class StressTestService : IDisposable
 
     // Runs one round: N concurrent copies of the production command, each seeked to a different section, and
     // returns the slowest stream's output frame rate.
-    private async Task<double> RunRoundAsync(string ffmpeg, string path, int height, bool isHdr, bool isInterlaced, bool isTenBit, TimeSpan runtime, int streams, CancellationToken token)
+    private async Task<double> RunRoundAsync(string ffmpeg, string path, int height, bool isHdr, TimeSpan runtime, int streams, CancellationToken token)
     {
         var tasks = new List<Task<double>>(streams);
         for (var i = 0; i < streams; i++)
         {
             var offset = OffsetFor(i, runtime);
-            var (args, _) = _streams.BuildStressArguments(path, height, isHdr, isInterlaced, isTenBit, offset, SliceLength);
+            var (args, _) = _streams.BuildStressArguments(path, height, isHdr, offset, SliceLength);
             tasks.Add(RunProducerAsync(ffmpeg, args, token));
         }
 

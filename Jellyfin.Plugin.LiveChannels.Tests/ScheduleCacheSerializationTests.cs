@@ -36,8 +36,6 @@ public class ScheduleCacheSerializationTests
             CommunityRating = 7.3f,
             PremiereDate = new DateTime(2005, 2, 6, 0, 0, 0, DateTimeKind.Utc),
             IsHdr = true,
-            IsInterlaced = true,
-            IsTenBit = true,
             DefaultAudioOrdinal = 2,
             DefaultAudioLanguage = "jpn",
             Subtitles = new[]
@@ -73,8 +71,6 @@ public class ScheduleCacheSerializationTests
         Assert.Equal(original.CommunityRating, entry.CommunityRating);
         Assert.Equal(original.PremiereDate, entry.PremiereDate);
         Assert.True(entry.IsHdr);
-        Assert.True(entry.IsInterlaced);
-        Assert.True(entry.IsTenBit);
         Assert.Equal(2, entry.DefaultAudioOrdinal);
         Assert.Equal("jpn", entry.DefaultAudioLanguage);
         Assert.Equal(2, entry.Subtitles.Count);
@@ -122,8 +118,6 @@ public class ScheduleCacheSerializationTests
         Assert.Null(entry.PremiereDate);
         Assert.Empty(entry.Genres);
         Assert.False(entry.IsHdr);
-        Assert.False(entry.IsInterlaced);
-        Assert.False(entry.IsTenBit);
         Assert.Null(entry.DefaultAudioOrdinal);
         Assert.Null(entry.DefaultAudioLanguage);
         Assert.Empty(entry.Subtitles);

@@ -87,12 +87,6 @@ public sealed class ProgramEntry
     /// <summary>Gets a value indicating whether the source video carries an HDR (PQ/HLG) transfer, so the stream pipeline tone-maps it to SDR. Probed once at guide refresh and cached here, so the live stream never re-queries the media streams to decide its decode pipeline.</summary>
     public bool IsHdr { get; init; }
 
-    /// <summary>Gets a value indicating whether the source video stream is interlaced, used to keep it off the Intel hardware-decode path. Probed once at guide refresh and cached here.</summary>
-    public bool IsInterlaced { get; init; }
-
-    /// <summary>Gets a value indicating whether the source video stream is 10-bit (or deeper), used to keep it off the Intel hardware-decode path. Probed once at guide refresh and cached here.</summary>
-    public bool IsTenBit { get; init; }
-
     /// <summary>Gets the position, among the item's audio streams ordered by index, of the track Jellyfin marks as default (0 when none, <c>null</c> when unknown), so the stream pipeline maps the same audio Jellyfin would play. Probed once at guide refresh and cached here.</summary>
     public int? DefaultAudioOrdinal { get; init; }
 

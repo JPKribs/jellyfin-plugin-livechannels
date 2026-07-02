@@ -108,36 +108,13 @@ public class ChannelService
         }
     }
 
-    // Whether the video is HDR (PQ or HLG), keyed off the colour transfer like every mature pseudo-TV pipeline
-    // does (ErsatzTV/Tunarr): smpte2084 = HDR10/PQ, arib-std-b67 = HLG.
+    // Whether the video is HDR (PQ or HLG), keyed off the colour transfer: smpte2084 = HDR10/PQ,
+    // arib-std-b67 = HLG.
     internal static bool ComputeIsHdr(MediaStream? video)
     {
         var transfer = video?.ColorTransfer;
         return string.Equals(transfer, "smpte2084", StringComparison.OrdinalIgnoreCase)
             || string.Equals(transfer, "arib-std-b67", StringComparison.OrdinalIgnoreCase);
-    }
-
-    // Whether the video stream is 10-bit (or deeper). Prefers the explicit bit depth; falls back to the pixel
-    // format name when the probe did not populate BitDepth, matching only true depth suffixes (e.g. yuv420p10le,
-    // yuv444p12le, p010le) so common 8-bit formats are NOT misread: a loose Contains("10")/Contains("12") would
-    // wrongly match nv12 (8-bit, contains "12") and yuv410p (contains "10"), needlessly software-decoding 8-bit.
-    internal static bool ComputeIsTenBit(MediaStream? video)
-    {
-        if (video is null)
-        {
-            return false;
-        }
-
-        if (video.BitDepth is int depth)
-        {
-            return depth >= 10;
-        }
-
-        var pix = video.PixelFormat;
-        return !string.IsNullOrEmpty(pix)
-            && (pix.Contains("10le", StringComparison.Ordinal) || pix.Contains("10be", StringComparison.Ordinal)
-                || pix.Contains("12le", StringComparison.Ordinal) || pix.Contains("12be", StringComparison.Ordinal)
-                || pix.Contains("p010", StringComparison.OrdinalIgnoreCase) || pix.Contains("p012", StringComparison.OrdinalIgnoreCase));
     }
 
     // The default audio track (the one Jellyfin would play) and its ordinal among the item's audio streams, or
@@ -1497,8 +1474,6 @@ public class ChannelService
             CommunityRating = item.CommunityRating,
             PremiereDate = item.PremiereDate,
             IsHdr = ComputeIsHdr(video),
-            IsInterlaced = video?.IsInterlaced ?? false,
-            IsTenBit = ComputeIsTenBit(video),
             DefaultAudioOrdinal = defaultAudio?.Ordinal ?? 0,
             DefaultAudioLanguage = defaultAudio?.Stream.Language,
             Subtitles = BuildSubtitleInfos(streams)

@@ -18,8 +18,11 @@ namespace Jellyfin.Plugin.LiveChannels.Models;
 /// <param name="DecodeDownload">The leading filter that brings hardware-decoded frames back to system memory for the software scale stage (e.g. <c>hwdownload,format=nv12,</c>), or empty when the decoder already delivers system frames.</param>
 /// <param name="GpuDevice">The DRM render node backing an Intel encoder (Jellyfin's configured VAAPI device,
 /// e.g. <c>/dev/dri/renderD128</c>), or <c>null</c> off Linux. When set, per-item streams run the fully
-/// GPU-resident VAAPI pipeline (decode, deinterlace, scale, tone map, and encode all in VRAM) — benchmarked at
-/// ~3x realtime for 4K HDR10 on an N100 iGPU versus ~1.2-1.9x for the download-to-CPU chains it replaces.</param>
+/// GPU-resident VAAPI pipeline: decode, deinterlace, scale, tone map, and encode all in VRAM.</param>
+/// <param name="VppBrightness">Brightness gain applied after the VAAPI tone map (Jellyfin's "VPP Tone mapping
+/// brightness gain" setting). Intel's fixed-function HDR→SDR LUT renders dark; Jellyfin recommends 16.</param>
+/// <param name="VppContrast">Contrast gain applied after the VAAPI tone map (Jellyfin's VPP tone-mapping
+/// contrast setting); 1 is neutral.</param>
 public sealed record VideoEncoderProfile(
     string Name,
     string DisplayName,
@@ -31,4 +34,6 @@ public sealed record VideoEncoderProfile(
     string? DecodeHwaccel = null,
     string? DecodeOutputFormat = null,
     string DecodeDownload = "",
-    string? GpuDevice = null);
+    string? GpuDevice = null,
+    double VppBrightness = 0,
+    double VppContrast = 1);
