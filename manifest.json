@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.9.6",
+        "changelog": "## Developer\r\n- Item boundaries are now timestamp-continuous - each item's timeline chains from where the previous item actually ended instead of the scheduled boundary, so seams carry no PTS jump for a client's video decoder to stall on (seen as frozen video with continuing audio on VLCKit-based players like Swiftfin)",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.9.6/jellyfin-plugin-livechannels-10.11.9.6.zip",
+        "checksum": "edd7280b5b4cc2d3673b4dda1fddeac3",
+        "timestamp": "2026-07-02T23:19:12Z"
+      },
+      {
         "version": "10.11.9.5",
         "changelog": "## Developer\r\n- Dolby Vision Profile 5 items are now excluded from schedules with a clear log line - Profile 5 has no HDR10-compatible base layer, so it renders green/purple through any tone mapper; Profile 8 and HDR10 versions play correctly and stay included\r\n- Schedules now heal metadata runtime drift - when a full item plays through, its real length is recorded and used from the next guide refresh, closing the timestamp gap (or overlap) at item boundaries when a file's metadata runtime is wrong",
         "targetAbi": "10.11.9.0",
