@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.9.0",
+        "changelog": "## Developer\r\n- Channels now play with a lossless remux instead of a full re-encode, fixing the false Interlaced video is not supported transcode Jellyfin forces on every live-TV stream (the opened stream is probed so the real, progressive format wins)\r\n- Much faster channel start-up, with the client buffer filling at full speed instead of realtime\r\n- Streams no longer fall behind over long watches - every encoder start bursts exactly the wall-clock time the session has lost, so item transitions self-heal\r\n- Fixed a playlist write race that could crash Jellyfin's stream reader (ffmpeg exit 139) and kill playback mid-session\r\n- Channels degrade gracefully - standby appears within seconds when a library is unreachable, and a repeatedly failing encoder backs off instead of relaunching forever\r\n- Removed the pre-render/warm-splice pipeline and the playback buffer, pre-render, stream window, and producer rate settings - pacing, buffering, and the disk window are now automatic and self-tuning\r\n- Item transitions cut segments exactly on the 4-second boundary (2-second GOP alignment)\r\n- Re-tuning a channel within 30 seconds is now instant - the still-warm encoder is adopted by the new stream instead of cold-starting a fresh one\r\n- Faster tune-in - the stream probe analysis window was halved, and the channel logo no longer resolves before the encoder starts",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.9.0/jellyfin-plugin-livechannels-10.11.9.0.zip",
+        "checksum": "fce83ca8a5e2134d98519d250e24d4e2",
+        "timestamp": "2026-07-02T04:30:45Z"
+      },
+      {
         "version": "10.11.8.2",
         "changelog": "## Developer\r\n- Cleanup & 8.2 preparation",
         "targetAbi": "10.11.9.0",
