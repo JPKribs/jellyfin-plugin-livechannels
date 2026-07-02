@@ -358,13 +358,17 @@ public class StreamSessionService
             var program = programs[index];
             _logger.LogDebug("Channel {Name}: item {Index}/{Count} \"{Title}\"", channel.Name, index + 1, programs.Count, program.Title);
 
-            var streamed = await StreamItemAsync(ffmpeg, channel, program, startOffset, timeline, output, BurstNow, cancellationToken, stats).ConfigureAwait(false);
+            var (streamed, endSeconds) = await StreamItemAsync(ffmpeg, channel, program, startOffset, timeline, output, BurstNow, cancellationToken, stats).ConfigureAwait(false);
 
             if (streamed)
             {
-                // Advance the timeline only by what actually played, so skipped items don't desync the offset.
+                // Chain the next item's timeline from where this one ACTUALLY ended (the producer's final
+                // output timestamp), not from the scheduled boundary: content is already continuous across
+                // the seam, so scheduled anchoring only injects a PTS jump the size of the metadata drift --
+                // a jump hardware video decoders (VLCKit in Swiftfin) can stall on. The schedule advance is
+                // the fallback when no usable reading exists, so skipped items still can't desync the offset.
                 var played = TimeSpan.FromTicks(program.DurationTicks) - startOffset;
-                timeline += played > TimeSpan.Zero ? played : TimeSpan.Zero;
+                timeline = NextTimeline(timeline, played > TimeSpan.Zero ? played : TimeSpan.Zero, endSeconds);
                 itemsPlayed++;
                 consecutiveFailures = 0;
             }
@@ -450,13 +454,15 @@ public class StreamSessionService
 
     // Streams one item to the output, cold-starting its ffmpeg. The deficit burst is a callback so it is
     // evaluated at the moment each producer actually starts (the software retry re-evaluates it: the failed
-    // hardware attempt burned wall clock that retry should recover).
-    private async Task<bool> StreamItemAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan timeline, Stream output, Func<double> burstSeconds, CancellationToken cancellationToken, SessionStats? stats = null)
+    // hardware attempt burned wall clock that retry should recover). Returns whether the item produced output
+    // and the producer's final output timestamp in seconds (-1 when none was parsed), which the loop chains
+    // the next item's timeline from.
+    private async Task<(bool Streamed, double EndSeconds)> StreamItemAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan timeline, Stream output, Func<double> burstSeconds, CancellationToken cancellationToken, SessionStats? stats = null)
     {
         if (string.IsNullOrEmpty(program.Path) || !File.Exists(program.Path))
         {
             _logger.LogWarning("Skipping missing media for {Title}", program.Title);
-            return false;
+            return (false, -1);
         }
 
         var subtitle = ChannelService.FindBurnInSubtitle(program, channel.SubtitleBurnIn);
@@ -504,7 +510,7 @@ public class StreamSessionService
             }
         }
 
-        return total > 0;
+        return (total > 0, lastOut);
     }
 
     // Streams a standby slate (colour bars + silence), looped, until the client disconnects. Shown when a
@@ -794,6 +800,22 @@ public class StreamSessionService
         {
             tail.Remove(0, tail.Length - MaxTail);
         }
+    }
+
+    // Where the next item's timeline starts: the previous item's actual final output timestamp plus one
+    // output frame (so the next first PTS lands strictly after the last one), falling back to the scheduled
+    // advance when the reading is missing, did not move past the current timeline (a failed or instantly-dead
+    // producer), or is implausibly far out (a garbage timestamp must never fling the channel timeline).
+    internal static TimeSpan NextTimeline(TimeSpan timeline, TimeSpan scheduledAdvance, double producerEndSeconds)
+    {
+        var scheduled = timeline + scheduledAdvance;
+        if (producerEndSeconds <= 0)
+        {
+            return scheduled;
+        }
+
+        var end = TimeSpan.FromSeconds(producerEndSeconds + (1.0 / 30.0));
+        return end > timeline && end < timeline + TimeSpan.FromHours(24) ? end : scheduled;
     }
 
     // An item's playable length from its producer's final -progress timestamp: out_time includes the

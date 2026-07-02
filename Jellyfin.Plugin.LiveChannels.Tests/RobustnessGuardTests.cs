@@ -30,6 +30,34 @@ public class RobustnessGuardTests
     }
 
     [Fact]
+    public void NextTimeline_ChainsFromTheActualEnd_PlusOneFrame()
+    {
+        // The item was scheduled for 1746.341s but actually ended at 1746.200s: the next item starts one
+        // output frame after the real end, so the seam carries no PTS jump for the decoder to stall on.
+        var next = StreamSessionService.NextTimeline(TimeSpan.Zero, TimeSpan.FromSeconds(1746.341), 1746.200);
+        Assert.Equal(1746.200 + (1.0 / 30.0), next.TotalSeconds, 3);
+
+        // Also when the file ran LONGER than its metadata (the overlap case that regresses timestamps).
+        var longer = StreamSessionService.NextTimeline(TimeSpan.Zero, TimeSpan.FromSeconds(1700), 1746.200);
+        Assert.Equal(1746.200 + (1.0 / 30.0), longer.TotalSeconds, 3);
+    }
+
+    [Fact]
+    public void NextTimeline_FallsBackToTheSchedule_ForUnusableReadings()
+    {
+        var timeline = TimeSpan.FromSeconds(5000);
+        var advance = TimeSpan.FromSeconds(1200);
+        var scheduled = timeline + advance;
+
+        // No reading parsed (no stats sink, or the producer never reported progress).
+        Assert.Equal(scheduled, StreamSessionService.NextTimeline(timeline, advance, -1));
+        // A reading that never moved past the current timeline (an instantly-dead producer).
+        Assert.Equal(scheduled, StreamSessionService.NextTimeline(timeline, advance, 4000));
+        // A garbage timestamp must never fling the channel timeline.
+        Assert.Equal(scheduled, StreamSessionService.NextTimeline(timeline, advance, 5000 + 90000));
+    }
+
+    [Fact]
     public void ObservedItemSeconds_RejectsUnusableReadings()
     {
         // No progress parsed at all.

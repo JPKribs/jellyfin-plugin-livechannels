@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.9.5"
+version: "10.11.9.6"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -16,6 +16,5 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   developer:
-  - Dolby Vision Profile 5 items are now excluded from schedules with a clear log line - Profile 5 has no HDR10-compatible base layer, so it renders green/purple through any tone mapper; Profile 8 and HDR10 versions play correctly and stay included
-  - Schedules now heal metadata runtime drift - when a full item plays through, its real length is recorded and used from the next guide refresh, closing the timestamp gap (or overlap) at item boundaries when a file's metadata runtime is wrong
+  - Item boundaries are now timestamp-continuous - each item's timeline chains from where the previous item actually ended instead of the scheduled boundary, so seams carry no PTS jump for a client's video decoder to stall on (seen as frozen video with continuing audio on VLCKit-based players like Swiftfin)
 
