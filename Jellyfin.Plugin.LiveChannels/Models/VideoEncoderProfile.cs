@@ -16,6 +16,10 @@ namespace Jellyfin.Plugin.LiveChannels.Models;
 /// <param name="DecodeHwaccel">The ffmpeg <c>-hwaccel</c> decoder to assist decoding (e.g. <c>videotoolbox</c>, <c>qsv</c>), or <c>null</c> for software decode.</param>
 /// <param name="DecodeOutputFormat">The <c>-hwaccel_output_format</c> for the decoder (e.g. <c>qsv</c>), or <c>null</c>. Decoders that keep frames on the GPU set this and a matching <see cref="DecodeDownload"/>; VideoToolbox auto-downloads and leaves both unset.</param>
 /// <param name="DecodeDownload">The leading filter that brings hardware-decoded frames back to system memory for the software scale stage (e.g. <c>hwdownload,format=nv12,</c>), or empty when the decoder already delivers system frames.</param>
+/// <param name="GpuDevice">The DRM render node backing an Intel encoder (Jellyfin's configured VAAPI device,
+/// e.g. <c>/dev/dri/renderD128</c>), or <c>null</c> off Linux. When set, per-item streams run the fully
+/// GPU-resident VAAPI pipeline (decode, deinterlace, scale, tone map, and encode all in VRAM) — benchmarked at
+/// ~3x realtime for 4K HDR10 on an N100 iGPU versus ~1.2-1.9x for the download-to-CPU chains it replaces.</param>
 public sealed record VideoEncoderProfile(
     string Name,
     string DisplayName,
@@ -26,4 +30,5 @@ public sealed record VideoEncoderProfile(
     bool UsePreset,
     string? DecodeHwaccel = null,
     string? DecodeOutputFormat = null,
-    string DecodeDownload = "");
+    string DecodeDownload = "",
+    string? GpuDevice = null);

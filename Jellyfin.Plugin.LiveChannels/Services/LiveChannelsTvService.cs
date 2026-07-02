@@ -345,6 +345,26 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Stops a session immediately, bypassing the linger grace. The Sessions tab's kill button is an explicit
+    /// administrator action ("free this encoder NOW"), so unlike a client close it must never keep the encoder
+    /// warm for a possible re-tune.
+    /// </summary>
+    /// <param name="id">The live stream id to kill.</param>
+    public void KillSession(string id)
+    {
+        if (_live.TryRemove(id, out var session))
+        {
+            _activity.Log(
+                "Live Channel: " + session.ChannelName + " has stopped",
+                "LiveChannels.ChannelStopped",
+                overview: "This channel's stream was stopped from the dashboard.");
+
+            _logger.LogInformation("Live Channels: session {Id} ({Name}) killed from the dashboard", id, session.ChannelName);
+            CancelAndDispose(session);
+        }
+    }
+
     // Tears a lingered session down after the grace period, unless it was adopted (re-keyed under a new id) or
     // otherwise removed in the meantime.
     private async Task LingerTeardownAsync(string id, LiveSession expected)
@@ -376,11 +396,19 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
                 kv.Value.Number,
                 kv.Value.ChannelName,
                 kv.Value.StartedUtc,
-                Math.Round(kv.Value.Stats.Speed, 2)))
+                Math.Round(kv.Value.Stats.Speed, 2),
+                StopsIn(kv.Value)))
             .OrderBy(s => s.Number)
             .ThenBy(s => s.StartedUtc)
             .ToList();
     }
+
+    // Seconds until a lingered (viewer-closed) session is torn down, or null while it still has a viewer.
+    // Clamped at zero: the delayed teardown can run a beat behind the clock.
+    private static int? StopsIn(LiveSession session)
+        => session.LingeringSinceUtc is { } since
+            ? (int)Math.Max(0, (LingerGrace - (DateTime.UtcNow - since)).TotalSeconds)
+            : null;
 
     /// <summary>Returns the on-disk logo path for an active session, or <c>null</c> if the session is gone.</summary>
     /// <param name="id">The live stream id.</param>
@@ -875,11 +903,12 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     }
 
     // Counts the current HLS segments in a session directory (the rolling window the segmenter keeps on disk).
+    // Enumerates rather than materialising an array: this runs in the 200ms tune-in poll loop.
     private static int CountSegments(string dir)
     {
         try
         {
-            return Directory.Exists(dir) ? Directory.GetFiles(dir, "*.ts").Length : 0;
+            return Directory.Exists(dir) ? Directory.EnumerateFiles(dir, "*.ts").Count() : 0;
         }
         catch (IOException)
         {

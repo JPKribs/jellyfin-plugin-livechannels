@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.9.0"
+version: "10.11.9.1"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV, with a ready-made Popular channel out of the box."
@@ -16,12 +16,6 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   developer:
-  - Channels now play with a lossless remux instead of a full re-encode, fixing the false "Interlaced video is not supported" transcode Jellyfin forces on every live-TV stream (the opened stream is probed so the real, progressive format wins)
-  - Much faster channel start-up, with the client buffer filling at full speed instead of realtime
-  - Streams no longer fall behind over long watches - every encoder start bursts exactly the wall-clock time the session has lost, so item transitions self-heal
-  - Fixed a playlist write race that could crash Jellyfin's stream reader (ffmpeg exit 139) and kill playback mid-session
-  - Channels degrade gracefully - standby appears within seconds when a library is unreachable, and a repeatedly failing encoder backs off instead of relaunching forever
-  - Removed the pre-render/warm-splice pipeline and the playback buffer, pre-render, stream window, and producer rate settings - pacing, buffering, and the disk window are now automatic and self-tuning
-  - Item transitions cut segments exactly on the 4-second boundary (2-second GOP alignment)
-  - Re-tuning a channel within 30 seconds is now instant - the still-warm encoder is adopted by the new stream instead of cold-starting a fresh one
-  - Faster tune-in - the stream probe analysis window was halved, and the channel logo no longer resolves before the encoder starts
+  - The Sessions tab shows when a viewerless stream is winding down (with its countdown), and its Kill button now stops the encoder immediately instead of waiting out the wind-down
+  - New encoder stress test on the Settings tab - pick a demanding library item and the server measures how many concurrent streams it can sustain with the real channel pipeline, recommending the Maximum concurrent streams value
+  - Fully GPU-resident Intel pipeline (Linux QSV/VAAPI) - decode, deinterlace, scale, tone map, and encode all stay in VRAM on Jellyfin's configured render node. Benchmarked on an N100 iGPU with 4K HDR10 HEVC, 2.6x faster than the old download-to-CPU chain; the Intel 10-bit and interlaced software-decode workarounds are gone, and HDR tone maps scale-first (1.9x faster, same picture)

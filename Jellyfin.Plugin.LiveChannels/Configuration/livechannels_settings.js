@@ -199,9 +199,162 @@ export default function (view) {
         });
     }
 
+    // --- Stress test: measures how many concurrent streams the encoder sustains, using the production pipeline.
+
+    var _stressTimer = null;
+
+    // The stress-test item picker: the same single-select typeahead chip the channel editor uses for its
+    // pickers (search as you type, click a row, the choice becomes a removable chip), so choosing a test item
+    // feels identical to choosing channel content. Searches recursively across all libraries and returns only
+    // individual playable files (movies and episodes). Nothing here is saved — the test is ad hoc.
+    var stressPicker = null;
+
+    function ensureStressPicker() {
+        if (stressPicker) { return; }
+        var selected = null;
+        var wrap = document.createElement('div');
+        wrap.className = 'jpk-chip-select';
+        var chips = document.createElement('div');
+        chips.className = 'jpk-tags';
+        var searchHost = document.createElement('div');
+        searchHost.innerHTML = '<input type="text" is="emby-input" class="emby-input" autocomplete="off" />';
+        var search = searchHost.querySelector('input');
+        search.placeholder = 'Search movies and episodes…';
+        var results = document.createElement('div');
+        results.className = 'jpk-table';
+        results.style.display = 'none';
+        wrap.appendChild(chips);
+        wrap.appendChild(search);
+        wrap.appendChild(results);
+
+        function hideResults() { results.innerHTML = ''; results.style.display = 'none'; }
+
+        function renderChip() {
+            chips.innerHTML = '';
+            if (!selected) { return; }
+            var tag = document.createElement('span');
+            tag.className = 'jpk-tag';
+            var label = document.createElement('span');
+            label.textContent = selected.label;
+            var remove = document.createElement('span');
+            remove.className = 'jpk-tag-remove';
+            remove.textContent = '×';
+            remove.title = 'Remove';
+            remove.addEventListener('click', function () { selected = null; renderChip(); });
+            tag.appendChild(label);
+            tag.appendChild(remove);
+            chips.appendChild(tag);
+        }
+
+        function runSearch(term) {
+            ApiClient.getJSON(ApiClient.getUrl('Items', {
+                searchTerm: term, recursive: true, includeItemTypes: 'Movie,Episode', limit: 25, fields: 'ProductionYear'
+            })).then(function (r) {
+                results.innerHTML = '';
+                var items = (r && r.Items) || [];
+                if (!items.length) { results.style.display = 'none'; return; }
+                items.forEach(function (i) {
+                    var row = document.createElement('div');
+                    row.className = 'jpk-table-row';
+                    row.style.cursor = 'pointer';
+                    row.textContent = i.Name + (i.ProductionYear ? ' (' + i.ProductionYear + ')' : '') + (i.SeriesName ? ' — ' + i.SeriesName : '');
+                    row.addEventListener('click', function () {
+                        selected = { key: i.Id, label: row.textContent };
+                        renderChip();
+                        search.value = '';
+                        hideResults();
+                    });
+                    results.appendChild(row);
+                });
+                results.style.display = '';
+            }).catch(hideResults);
+        }
+
+        var timer = null;
+        search.addEventListener('input', function () {
+            if (timer) { clearTimeout(timer); }
+            var term = search.value.trim();
+            if (!term) { hideResults(); return; }
+            timer = setTimeout(function () { runSearch(term); }, 300);
+        });
+
+        var mount = view.querySelector('.lc-stressitem-mount');
+        if (mount) { mount.appendChild(wrap); }
+        stressPicker = { getId: function () { return selected ? selected.key : ''; } };
+    }
+
+    function renderStress(s) {
+        var lines = (s.Rounds || []).map(function (r) {
+            return r.Streams + ' stream' + (r.Streams === 1 ? '' : 's') + ': slowest ' + r.MinFps + ' fps ' + (r.Passed ? '✓' : '✗');
+        });
+        if (s.Running && s.CurrentStreams > 0) {
+            lines.push('Testing ' + s.CurrentStreams + ' concurrent stream' + (s.CurrentStreams === 1 ? '' : 's') + '…');
+        }
+        var html = lines.join('<br>');
+        if (!s.Running && typeof s.Recommended === 'number' && (s.Rounds || []).length) {
+            html += '<br><b>' + (s.Recommended > 0
+                ? 'Recommended Maximum concurrent streams: ' + s.Recommended
+                : 'Even one stream could not hold realtime with this item; consider lowering resolution or bitrate.') + '</b>';
+            if (s.Recommended > 0) {
+                html += ' <a is="emby-linkbutton" href="#" id="stressApply" class="button-link">Apply</a>';
+            }
+        }
+        if (s.Error) { html += '<br>' + Shared.escapeHtml(s.Error); }
+        el('stressResult').innerHTML = html;
+        var apply = el('stressApply');
+        if (apply) {
+            apply.addEventListener('click', function (e) {
+                e.preventDefault();
+                el('maxSessions').value = s.Recommended;
+                Shared.setStatus('stressStatus', 'Set to ' + s.Recommended + ' — remember to Save.', false);
+            });
+        }
+        Shared.setVisible('stressCancel', s.Running);
+        el('stressRun').disabled = !!s.Running;
+    }
+
+    function pollStress() {
+        return ApiClient.getJSON(ApiClient.getUrl('livechannels/stresstest')).then(function (s) {
+            renderStress(s);
+            if (!s.Running) { stopStressPolling(); }
+        }).catch(function () { /* transient; keep polling */ });
+    }
+
+    function startStressPolling() {
+        stopStressPolling();
+        _stressTimer = setInterval(pollStress, 3000);
+        pollStress();
+    }
+
+    function stopStressPolling() {
+        if (_stressTimer) { clearInterval(_stressTimer); _stressTimer = null; }
+    }
+
+    function stressRun() {
+        var id = stressPicker ? stressPicker.getId() : '';
+        if (!id) { Shared.setStatus('stressStatus', 'Search for and pick a test item first.', true); return; }
+        Shared.setStatus('stressStatus', 'Starting…', false);
+        el('stressResult').innerHTML = '';
+        ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('livechannels/stresstest/' + encodeURIComponent(id)) }).then(function () {
+            Shared.setStatus('stressStatus', '', false);
+            startStressPolling();
+        }).catch(function (err) {
+            var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
+            read.then(function (t) {
+                Shared.setStatus('stressStatus', t ? t.replace(/^"|"$/g, '') : 'Could not start the test (are streams still running?).', true);
+            });
+        });
+    }
+
+    function stressCancel() {
+        ApiClient.ajax({ type: 'DELETE', url: ApiClient.getUrl('livechannels/stresstest') }).then(pollStress);
+    }
+
     function bind() {
         el('btnSaveSettings').addEventListener('click', saveSettings);
         el('btnResetSchedule').addEventListener('click', resetSchedule);
+        el('stressRun').addEventListener('click', stressRun);
+        el('stressCancel').addEventListener('click', stressCancel);
     }
 
     view.addEventListener('viewshow', function () {
@@ -213,6 +366,12 @@ export default function (view) {
             loadLanguages().then(function () {
                 Shared.getConfig().then(loadSettings);
             });
+            // A stress test may already be running (started earlier, page revisited): resume its display. The
+            // poll stops itself on the first response when no test is running.
+            ensureStressPicker();
+            startStressPolling();
         });
     });
+
+    view.addEventListener('viewhide', stopStressPolling);
 }

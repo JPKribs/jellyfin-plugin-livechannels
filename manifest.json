@@ -1,333 +1,341 @@
 [
-  {
-    "guid": "ac6940fb-aac6-4de8-b622-55a662e23658",
-    "name": "Live Channels",
-    "overview": "Build looping virtual TV channels that appear natively in Jellyfin's Live TV.",
-    "description": "Live Channels lets administrators build looping virtual TV channels from genres and official ratings or from a hand-picked list of items. Each channel, its guide, and its stream are served in-process through Jellyfin's own Live TV, so the channels appear automatically with no tuner to add, no URLs to paste, and no exposed endpoints.",
-    "imageUrl": "https://raw.githubusercontent.com/JPKribs/jellyfin-plugin-livechannels/master/Jellyfin.Plugin.LiveChannels/Assets/Logo.png",
-    "owner": "JPKribs",
-    "category": "LiveTV",
-    "versions": [
-      {
-        "version": "10.11.9.0",
-        "changelog": "## Developer\r\n- Channels now play with a lossless remux instead of a full re-encode, fixing the false Interlaced video is not supported transcode Jellyfin forces on every live-TV stream (the opened stream is probed so the real, progressive format wins)\r\n- Much faster channel start-up, with the client buffer filling at full speed instead of realtime\r\n- Streams no longer fall behind over long watches - every encoder start bursts exactly the wall-clock time the session has lost, so item transitions self-heal\r\n- Fixed a playlist write race that could crash Jellyfin's stream reader (ffmpeg exit 139) and kill playback mid-session\r\n- Channels degrade gracefully - standby appears within seconds when a library is unreachable, and a repeatedly failing encoder backs off instead of relaunching forever\r\n- Removed the pre-render/warm-splice pipeline and the playback buffer, pre-render, stream window, and producer rate settings - pacing, buffering, and the disk window are now automatic and self-tuning\r\n- Item transitions cut segments exactly on the 4-second boundary (2-second GOP alignment)\r\n- Re-tuning a channel within 30 seconds is now instant - the still-warm encoder is adopted by the new stream instead of cold-starting a fresh one\r\n- Faster tune-in - the stream probe analysis window was halved, and the channel logo no longer resolves before the encoder starts",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.9.0/jellyfin-plugin-livechannels-10.11.9.0.zip",
-        "checksum": "fce83ca8a5e2134d98519d250e24d4e2",
-        "timestamp": "2026-07-02T04:30:45Z"
-      },
-      {
-        "version": "10.11.8.2",
-        "changelog": "## Developer\r\n- Cleanup & 8.2 preparation",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.8.2/jellyfin-plugin-livechannels-10.11.8.2.zip",
-        "checksum": "431736658988efd06df49ebc5586ad46",
-        "timestamp": "2026-06-30T20:11:23Z"
-      },
-      {
-        "version": "10.11.8.1",
-        "changelog": "## Features\r\n- Give every channel real variety, each series plays one block then steps aside until the others have aired, cycling through the series over time so no show dominates\r\n- Make the Popular channel show 10 distinct series and 25 distinct movies instead of one big show filling it\r\n- Build Popular from what the server has watched most recently, so the channel follows your latest viewing\r\n- Keep only genuine two-part episodes together, extending a block by at most one episode",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.8.1/jellyfin-plugin-livechannels-10.11.8.1.zip",
-        "checksum": "a4e003474e1f5c6eb5662ace2b29573f",
-        "timestamp": "2026-06-30T20:04:04Z"
-      },
-      {
-        "version": "10.11.8.0",
-        "changelog": "## Features\r\n- Export and import your channels from the Channels tab, so you can copy a setup between servers\r\n- Keep channels varied by never repeating a series until every other series has aired, so one big show no longer dominates the loop\r\n- Make the Popular channel more diverse by choosing shows from your most-watched episodes and rotating a larger pool of movies and shows",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.8.0/jellyfin-plugin-livechannels-10.11.8.0.zip",
-        "checksum": "aecf0b9abf0de4d5cec100e46922b950",
-        "timestamp": "2026-06-30T19:25:40Z"
-      },
-      {
-        "version": "10.11.7.1",
-        "changelog": "## Features\r\n- Find studios, people, and the audio or subtitle language by searching instead of scrolling a long list, so any studio such as HBO is reachable\r\n- Group the channel content filters into their own Filters section for a tidier editor",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.7.1/jellyfin-plugin-livechannels-10.11.7.1.zip",
-        "checksum": "51ab74c585056ca017afcfab7bac8db3",
-        "timestamp": "2026-06-30T08:28:20Z"
-      },
-      {
-        "version": "10.11.7.0",
-        "changelog": "## Features\r\n- Filter a channel by production year or decade, so you can build a 90s channel\r\n- Filter a channel by studio or network, like an HBO channel, matching shows by their series too\r\n- Filter a channel by people, so you can build a favourite actor or director channel\r\n- Filter a channel by a minimum community or critic rating, for a best-of channel",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.7.0/jellyfin-plugin-livechannels-10.11.7.0.zip",
-        "checksum": "c921449bf2edf8c9966a6d5ed52afb67",
-        "timestamp": "2026-06-30T07:24:01Z"
-      },
-      {
-        "version": "10.11.6.6",
-        "changelog": "## Features\r\n- Start channels quickly even right after a restart by saving each item's video details with the schedule, so tune-in no longer re-scans the library\r\n- Keep each channel's schedule in its own file and release it from memory once the channel stops, so large setups use less memory\r\n- Add a pre-render setting to control how early the next item starts encoding, which can be lowered or turned off to save CPU on low-power hardware",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.6/jellyfin-plugin-livechannels-10.11.6.6.zip",
-        "checksum": "4bde071db60e74acb5b516c95487507f",
-        "timestamp": "2026-06-29T22:13:59Z"
-      },
-      {
-        "version": "10.11.6.5",
-        "changelog": "## Features\r\n- Build each channel schedule once and reuse it so large channels start quickly instead of failing to load",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.5/jellyfin-plugin-livechannels-10.11.6.5.zip",
-        "checksum": "c5be73bdb8b62759838af112855660de",
-        "timestamp": "2026-06-29T18:32:52Z"
-      },
-      {
-        "version": "10.11.6.4",
-        "changelog": "## Features\r\n- Play 10 bit content on Intel by decoding it in software so it no longer fails to start\r\n- Restore hardware accelerated playback on Intel after the previous build left it unable to start",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.4/jellyfin-plugin-livechannels-10.11.6.4.zip",
-        "checksum": "fdb654c3902237127fc5bfd365754113",
-        "timestamp": "2026-06-29T16:33:37Z"
-      },
-      {
-        "version": "10.11.6.3",
-        "changelog": "## Features\r\n- Run the whole Intel QSV and VAAPI pipeline on the GPU the way Jellyfin does, so interlaced and 10-bit content plays instead of failing to start\r\n- Add a producer rate setting that feeds the player at realtime by default and can be raised to keep the server from falling behind\r\n- Limit the plugin API to administrators so only the dashboard can list or close live sessions\r\n- Close the encoder when a tune in is cancelled so an abandoned stream stops leaking",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.3/jellyfin-plugin-livechannels-10.11.6.3.zip",
-        "checksum": "aa06c5ec7a71655f16a400fc023525d4",
-        "timestamp": "2026-06-29T09:34:56Z"
-      },
-      {
-        "version": "10.11.6.2",
-        "changelog": "## Features\r\n- Play interlaced content on Intel QSV and VAAPI by decoding it in software for the whole file, so it no longer fails to start\r\n- Run the producer a little above realtime so it can recover a boundary gap and never become the bottleneck",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.2/jellyfin-plugin-livechannels-10.11.6.2.zip",
-        "checksum": "c911a95af5a7a9572b4abbbdc8a988a1",
-        "timestamp": "2026-06-29T08:38:39Z"
-      },
-      {
-        "version": "10.11.6.1",
-        "changelog": "## Features\r\n- Add a per channel option to include home videos and other loose video files alongside movies, episodes, and music videos\r\n- Start large channels far faster by skipping a full per item HDR scan when it cannot change how the channel plays",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.1/jellyfin-plugin-livechannels-10.11.6.1.zip",
-        "checksum": "df34d14dff21cdd70760b301d3097d96",
-        "timestamp": "2026-06-29T07:44:40Z"
-      },
-      {
-        "version": "10.11.6.0",
-        "changelog": "## Features\r\n- Add a Sessions tab that lists every active stream with its channel, start time, run time, and live encode speed, and a button to stop it\r\n- Warm up the next item while the current one is still playing so per-item channels switch files without a gap\r\n- Cap how many channels stream at once so a client that never disconnects cannot pile up encoders and overload the server\r\n- Add a stream time limit that closes any channel left running too long as a backstop for clients that never send a stop\r\n- Organise the Settings tab into collapsible sections",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.0/jellyfin-plugin-livechannels-10.11.6.0.zip",
-        "checksum": "92fd29b1b779c12b81884ce2f971c1d5",
-        "timestamp": "2026-06-29T07:03:56Z"
-      },
-      {
-        "version": "10.11.5.0",
-        "changelog": "## Features\r\n- Give the Popular channel its own tab to set its name, icon, rating limit, subtitle rule, and loop behaviour\r\n- Build the Popular channel from your recent, top rated, and most watched movies and shows\r\n- Measure most watched across the whole server by combining every user's play counts\r\n- Choose a default language in Settings that decides when Forced subtitles burn in",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.5.0/jellyfin-plugin-livechannels-10.11.5.0.zip",
-        "checksum": "6f1cdbb705de1b683d604598102af573",
-        "timestamp": "2026-06-29T03:40:05Z"
-      },
-      {
-        "version": "10.11.4.0",
-        "changelog": "## Features\r\n- Add a built in Popular channel that loops your top movies and shows blended with recent additions\r\n- Fill the guide with episode titles, ratings, original air dates, and an HD marker\r\n- Show landscape artwork in the guide, backdrops for movies and thumbnails for episodes and music videos",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.4.0/jellyfin-plugin-livechannels-10.11.4.0.zip",
-        "checksum": "5e6130777002e6ec121ac25424584689",
-        "timestamp": "2026-06-29T02:40:09Z"
-      },
-      {
-        "version": "10.11.3.3",
-        "changelog": "## Features\r\n- Exclude genres from a channel, with series level genres applied across their episodes\r\n- Limit a channel to a single audio language by its default audio track\r\n- Set the playback buffer length and the stream file location in Settings\r\n- Clean up leftover stream files with a scheduled task in Live TV\r\n\r\n## Fixes\r\n- Stream channels as a rolling playlist of small segments so disk use stays bounded no matter how long they run\r\n- Pre-roll a few seconds on tune-in so playback starts on a full buffer\r\n- Tidy the channel editor genre dropdown and favor layout",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.3.3/jellyfin-plugin-livechannels-10.11.3.3.zip",
-        "checksum": "bcb278ce600751528f95e32856cbb44a",
-        "timestamp": "2026-06-29T00:57:47Z"
-      },
-      {
-        "version": "10.11.3.2",
-        "changelog": "## Fixes\r\n- Remove the trim and zero disk settings that could cause stutter",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.3.2/jellyfin-plugin-livechannels-10.11.3.2.zip",
-        "checksum": "02ddd376b3305ac805b8c00dff39eb64",
-        "timestamp": "2026-06-28T22:24:21Z"
-      },
-      {
-        "version": "10.11.3.1",
-        "changelog": "## Fixes\r\n- Decode 10-bit HEVC and 4K sources on the GPU instead of falling back to software",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.3.1/jellyfin-plugin-livechannels-10.11.3.1.zip",
-        "checksum": "377a648bf8b63b4e614a9e7755836fdc",
-        "timestamp": "2026-06-28T21:52:39Z"
-      },
-      {
-        "version": "10.11.3.0",
-        "changelog": "## Fixes\r\n- Build channels internally through Jellyfin Live TV again so playback works\r\n- Keep the stream building ahead of playback to reduce stutter",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.3.0/jellyfin-plugin-livechannels-10.11.3.0.zip",
-        "checksum": "897a54ca43275d98c0a95f3998b9ec1d",
-        "timestamp": "2026-06-28T20:55:17Z"
-      },
-      {
-        "version": "10.11.2.10",
-        "changelog": "## Fixes\r\n- Run the Intel pipeline the same way Jellyfin does, decoding on VAAPI and encoding on QSV, so 10-bit and HDR channels play\r\n- Read the GPU render device from the Jellyfin configuration and log the producer command",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.10/jellyfin-plugin-livechannels-10.11.2.10.zip",
-        "checksum": "7ddbde432d44e6e88f930feed6263a0f",
-        "timestamp": "2026-06-28T19:36:08Z"
-      },
-      {
-        "version": "10.11.2.9",
-        "changelog": "## Fixes\r\n- Pin the Intel iHD driver on the VAAPI device so the GPU pipeline initialises on multi-GPU systems\r\n- Log the producer command so playback failures are visible",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.9/jellyfin-plugin-livechannels-10.11.2.9.zip",
-        "checksum": "59420094bcad87813f17c81bd4712f30",
-        "timestamp": "2026-06-28T09:45:18Z"
-      },
-      {
-        "version": "10.11.2.8",
-        "changelog": "## Fixes\r\n- Rebuild the Intel decode pipeline to run entirely on the GPU through VAAPI, fixing 10-bit and HDR playback\r\n- Channels start fast again instead of probing every item on tune-in",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.8/jellyfin-plugin-livechannels-10.11.2.8.zip",
-        "checksum": "628b3ff7769f98c011a69d95e3ed640e",
-        "timestamp": "2026-06-28T09:31:46Z"
-      },
-      {
-        "version": "10.11.2.7",
-        "changelog": "## Fixes\r\n- Decode 10-bit sources in software so they no longer fail on QSV",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.7/jellyfin-plugin-livechannels-10.11.2.7.zip",
-        "checksum": "f9f77339ac13cfbf3c0149405607156d",
-        "timestamp": "2026-06-28T08:39:28Z"
-      },
-      {
-        "version": "10.11.2.6",
-        "changelog": "## Features\r\n- Serve channels through a self configuring M3U tuner with an XMLTV guide\r\n- Channel logos and program artwork in the guide\r\n\r\n## Fixes\r\n- Remove the old native channels",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.6/jellyfin-plugin-livechannels-10.11.2.6.zip",
-        "checksum": "ffc2967b82bb0646eb0103c95f368687",
-        "timestamp": "2026-06-28T07:53:33Z"
-      },
-      {
-        "version": "10.11.2.5",
-        "changelog": "## Fixes\r\n- Serve channels as an M3U tuner on a private loopback port",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.5/jellyfin-plugin-livechannels-10.11.2.5.zip",
-        "checksum": "025c146cd75d3264e7f6cbc2b626216d",
-        "timestamp": "2026-06-28T07:22:06Z"
-      },
-      {
-        "version": "10.11.2.4",
-        "changelog": "## Fixes\r\n- Stop abandoned channel sessions from piling up",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.4/jellyfin-plugin-livechannels-10.11.2.4.zip",
-        "checksum": "1015015b2300cd263d3b702824fa37cb",
-        "timestamp": "2026-06-28T05:17:49Z"
-      },
-      {
-        "version": "10.11.2.3",
-        "changelog": "## Fixes\r\n- Forced subtitles now show for non-English audio",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.3/jellyfin-plugin-livechannels-10.11.2.3.zip",
-        "checksum": "5ee66ceceae9bd681864b210bde155f3",
-        "timestamp": "2026-06-28T04:14:18Z"
-      },
-      {
-        "version": "10.11.2.2",
-        "changelog": "## Fixes\r\n- Activity cleanup\r\n- Better subtitle defaults",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.2/jellyfin-plugin-livechannels-10.11.2.2.zip",
-        "checksum": "011d147c8faee6fad807565235b0fc8d",
-        "timestamp": "2026-06-28T03:57:43Z"
-      },
-      {
-        "version": "10.11.2.1",
-        "changelog": "## Fixes\r\n- Use Jellyfin's default audio track instead of assuming",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.1/jellyfin-plugin-livechannels-10.11.2.1.zip",
-        "checksum": "062ceeecc725b70248387114632670b3",
-        "timestamp": "2026-06-28T03:38:03Z"
-      },
-      {
-        "version": "10.11.2.0",
-        "changelog": "## Features\r\n- File trimming\r\n- Prioritize file types",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.0/jellyfin-plugin-livechannels-10.11.2.0.zip",
-        "checksum": "0b8753a92daea9727bf35d66e838ef79",
-        "timestamp": "2026-06-28T01:17:43Z"
-      },
-      {
-        "version": "10.11.1.9",
-        "changelog": "## Fixes\r\n- Codec fixes",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.9/jellyfin-plugin-livechannels-10.11.1.9.zip",
-        "checksum": "316cd5ad70e87450edcf649c567e5b27",
-        "timestamp": "2026-06-27T23:19:33Z"
-      },
-      {
-        "version": "10.11.1.8",
-        "changelog": "## Fixes\r\n- Codec fixes",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.8/jellyfin-plugin-livechannels-10.11.1.8.zip",
-        "checksum": "65f63a2f0f2e66de60b46703632b8d27",
-        "timestamp": "2026-06-27T22:09:19Z"
-      },
-      {
-        "version": "10.11.1.7",
-        "changelog": "## Fixes\r\n- Smaller file work to make music videos actually work\r\n- HDR nonsense",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.7/jellyfin-plugin-livechannels-10.11.1.7.zip",
-        "checksum": "6ba6550a9da8140744e5a988838b8edf",
-        "timestamp": "2026-06-27T21:24:31Z"
-      },
-      {
-        "version": "10.11.1.6",
-        "changelog": "## Fixes\r\n- Even more QSV nonsense...",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.6/jellyfin-plugin-livechannels-10.11.1.6.zip",
-        "checksum": "2bd49830964708447d32e94e78bef466",
-        "timestamp": "2026-06-27T19:53:51Z"
-      },
-      {
-        "version": "10.11.1.5",
-        "changelog": "## Fixes\r\n- Even more QSV nonsense",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.5/jellyfin-plugin-livechannels-10.11.1.5.zip",
-        "checksum": "552f00c09e6a561aee897047a563ffa4",
-        "timestamp": "2026-06-27T19:30:59Z"
-      },
-      {
-        "version": "10.11.1.4",
-        "changelog": "## Fixes\r\n- Even more QSV nonsense",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.4/jellyfin-plugin-livechannels-10.11.1.4.zip",
-        "checksum": "74ce2b5101ef4ab405dc90ee7aed1193",
-        "timestamp": "2026-06-27T18:54:55Z"
-      },
-      {
-        "version": "10.11.1.3",
-        "changelog": "## Fixes\r\n- More QSV nonsense",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.3/jellyfin-plugin-livechannels-10.11.1.3.zip",
-        "checksum": "d188e4d843cbf204434803778127ed7f",
-        "timestamp": "2026-06-27T18:34:07Z"
-      },
-      {
-        "version": "10.11.1.2",
-        "changelog": "## Fixes\r\n- QSV nonsense",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.2/jellyfin-plugin-livechannels-10.11.1.2.zip",
-        "checksum": "ba94f314f5efb94c49a481166b74767d",
-        "timestamp": "2026-06-27T18:08:35Z"
-      },
-      {
-        "version": "10.11.1.1",
-        "changelog": "## Fixes\r\n- HWA decode fixes for non-MacOS devices\r\n- Icon fixes",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.1/jellyfin-plugin-livechannels-10.11.1.1.zip",
-        "checksum": "8198e05f285e83b355803b6e3a403b00",
-        "timestamp": "2026-06-27T17:38:18Z"
-      },
-      {
-        "version": "10.11.1.0",
-        "changelog": "## Initial Release!\r\n\r\nThis plugin exists because I need to test Live TV for Swiftfin and I wanted a simple(r) tuner configuration as I found a lot of the alternatives to be a little too involved for what I wanted.",
-        "targetAbi": "10.11.9.0",
-        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.0/jellyfin-plugin-livechannels-10.11.1.0.zip",
-        "checksum": "0bd8dc812998dd0ae0b292133f2cf33a",
-        "timestamp": "2026-06-27T08:51:03Z"
-      }
-    ]
-  }
+    {
+        "guid": "ac6940fb-aac6-4de8-b622-55a662e23658",
+        "name": "Live Channels",
+        "overview": "Build looping virtual TV channels that appear natively in Jellyfin's Live TV.",
+        "description": "Live Channels lets administrators build looping virtual TV channels from genres and official ratings or from a hand-picked list of items. Each channel, its guide, and its stream are served in-process through Jellyfin's own Live TV, so the channels appear automatically with no tuner to add, no URLs to paste, and no exposed endpoints.",
+        "imageUrl": "https://raw.githubusercontent.com/JPKribs/jellyfin-plugin-livechannels/master/Jellyfin.Plugin.LiveChannels/Assets/Logo.png",
+        "owner": "JPKribs",
+        "category": "LiveTV",
+        "versions": [
+            {
+                "version": "10.11.9.1",
+                "changelog": "## Developer\r\n- The Sessions tab shows when a viewerless stream is winding down (with its countdown), and its Kill button now stops the encoder immediately instead of waiting out the wind-down\r\n- New encoder stress test on the Settings tab - pick a demanding library item and the server measures how many concurrent streams it can sustain with the real channel pipeline, recommending the Maximum concurrent streams value\r\n- Fully GPU-resident Intel pipeline (Linux QSV/VAAPI) - decode, deinterlace, scale, tone map, and encode all stay in VRAM on Jellyfin's configured render node. Benchmarked on an N100 iGPU with 4K HDR10 HEVC, 2.6x faster than the old download-to-CPU chain; the Intel 10-bit and interlaced software-decode workarounds are gone, and HDR tone maps scale-first (1.9x faster, same picture)",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.9.1/jellyfin-plugin-livechannels-10.11.9.1.zip",
+                "checksum": "f2b3bb28a60e386e749ac01b024cdd5b",
+                "timestamp": "2026-07-02T17:01:50Z"
+            },
+            {
+                "version": "10.11.9.0",
+                "changelog": "## Developer\r\n- Channels now play with a lossless remux instead of a full re-encode, fixing the false Interlaced video is not supported transcode Jellyfin forces on every live-TV stream (the opened stream is probed so the real, progressive format wins)\r\n- Much faster channel start-up, with the client buffer filling at full speed instead of realtime\r\n- Streams no longer fall behind over long watches - every encoder start bursts exactly the wall-clock time the session has lost, so item transitions self-heal\r\n- Fixed a playlist write race that could crash Jellyfin's stream reader (ffmpeg exit 139) and kill playback mid-session\r\n- Channels degrade gracefully - standby appears within seconds when a library is unreachable, and a repeatedly failing encoder backs off instead of relaunching forever\r\n- Removed the pre-render/warm-splice pipeline and the playback buffer, pre-render, stream window, and producer rate settings - pacing, buffering, and the disk window are now automatic and self-tuning\r\n- Item transitions cut segments exactly on the 4-second boundary (2-second GOP alignment)\r\n- Re-tuning a channel within 30 seconds is now instant - the still-warm encoder is adopted by the new stream instead of cold-starting a fresh one\r\n- Faster tune-in - the stream probe analysis window was halved, and the channel logo no longer resolves before the encoder starts",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.9.0/jellyfin-plugin-livechannels-10.11.9.0.zip",
+                "checksum": "fce83ca8a5e2134d98519d250e24d4e2",
+                "timestamp": "2026-07-02T04:30:45Z"
+            },
+            {
+                "version": "10.11.8.2",
+                "changelog": "## Developer\r\n- Cleanup & 8.2 preparation",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.8.2/jellyfin-plugin-livechannels-10.11.8.2.zip",
+                "checksum": "431736658988efd06df49ebc5586ad46",
+                "timestamp": "2026-06-30T20:11:23Z"
+            },
+            {
+                "version": "10.11.8.1",
+                "changelog": "## Features\r\n- Give every channel real variety, each series plays one block then steps aside until the others have aired, cycling through the series over time so no show dominates\r\n- Make the Popular channel show 10 distinct series and 25 distinct movies instead of one big show filling it\r\n- Build Popular from what the server has watched most recently, so the channel follows your latest viewing\r\n- Keep only genuine two-part episodes together, extending a block by at most one episode",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.8.1/jellyfin-plugin-livechannels-10.11.8.1.zip",
+                "checksum": "a4e003474e1f5c6eb5662ace2b29573f",
+                "timestamp": "2026-06-30T20:04:04Z"
+            },
+            {
+                "version": "10.11.8.0",
+                "changelog": "## Features\r\n- Export and import your channels from the Channels tab, so you can copy a setup between servers\r\n- Keep channels varied by never repeating a series until every other series has aired, so one big show no longer dominates the loop\r\n- Make the Popular channel more diverse by choosing shows from your most-watched episodes and rotating a larger pool of movies and shows",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.8.0/jellyfin-plugin-livechannels-10.11.8.0.zip",
+                "checksum": "aecf0b9abf0de4d5cec100e46922b950",
+                "timestamp": "2026-06-30T19:25:40Z"
+            },
+            {
+                "version": "10.11.7.1",
+                "changelog": "## Features\r\n- Find studios, people, and the audio or subtitle language by searching instead of scrolling a long list, so any studio such as HBO is reachable\r\n- Group the channel content filters into their own Filters section for a tidier editor",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.7.1/jellyfin-plugin-livechannels-10.11.7.1.zip",
+                "checksum": "51ab74c585056ca017afcfab7bac8db3",
+                "timestamp": "2026-06-30T08:28:20Z"
+            },
+            {
+                "version": "10.11.7.0",
+                "changelog": "## Features\r\n- Filter a channel by production year or decade, so you can build a 90s channel\r\n- Filter a channel by studio or network, like an HBO channel, matching shows by their series too\r\n- Filter a channel by people, so you can build a favourite actor or director channel\r\n- Filter a channel by a minimum community or critic rating, for a best-of channel",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.7.0/jellyfin-plugin-livechannels-10.11.7.0.zip",
+                "checksum": "c921449bf2edf8c9966a6d5ed52afb67",
+                "timestamp": "2026-06-30T07:24:01Z"
+            },
+            {
+                "version": "10.11.6.6",
+                "changelog": "## Features\r\n- Start channels quickly even right after a restart by saving each item's video details with the schedule, so tune-in no longer re-scans the library\r\n- Keep each channel's schedule in its own file and release it from memory once the channel stops, so large setups use less memory\r\n- Add a pre-render setting to control how early the next item starts encoding, which can be lowered or turned off to save CPU on low-power hardware",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.6/jellyfin-plugin-livechannels-10.11.6.6.zip",
+                "checksum": "4bde071db60e74acb5b516c95487507f",
+                "timestamp": "2026-06-29T22:13:59Z"
+            },
+            {
+                "version": "10.11.6.5",
+                "changelog": "## Features\r\n- Build each channel schedule once and reuse it so large channels start quickly instead of failing to load",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.5/jellyfin-plugin-livechannels-10.11.6.5.zip",
+                "checksum": "c5be73bdb8b62759838af112855660de",
+                "timestamp": "2026-06-29T18:32:52Z"
+            },
+            {
+                "version": "10.11.6.4",
+                "changelog": "## Features\r\n- Play 10 bit content on Intel by decoding it in software so it no longer fails to start\r\n- Restore hardware accelerated playback on Intel after the previous build left it unable to start",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.4/jellyfin-plugin-livechannels-10.11.6.4.zip",
+                "checksum": "fdb654c3902237127fc5bfd365754113",
+                "timestamp": "2026-06-29T16:33:37Z"
+            },
+            {
+                "version": "10.11.6.3",
+                "changelog": "## Features\r\n- Run the whole Intel QSV and VAAPI pipeline on the GPU the way Jellyfin does, so interlaced and 10-bit content plays instead of failing to start\r\n- Add a producer rate setting that feeds the player at realtime by default and can be raised to keep the server from falling behind\r\n- Limit the plugin API to administrators so only the dashboard can list or close live sessions\r\n- Close the encoder when a tune in is cancelled so an abandoned stream stops leaking",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.3/jellyfin-plugin-livechannels-10.11.6.3.zip",
+                "checksum": "aa06c5ec7a71655f16a400fc023525d4",
+                "timestamp": "2026-06-29T09:34:56Z"
+            },
+            {
+                "version": "10.11.6.2",
+                "changelog": "## Features\r\n- Play interlaced content on Intel QSV and VAAPI by decoding it in software for the whole file, so it no longer fails to start\r\n- Run the producer a little above realtime so it can recover a boundary gap and never become the bottleneck",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.2/jellyfin-plugin-livechannels-10.11.6.2.zip",
+                "checksum": "c911a95af5a7a9572b4abbbdc8a988a1",
+                "timestamp": "2026-06-29T08:38:39Z"
+            },
+            {
+                "version": "10.11.6.1",
+                "changelog": "## Features\r\n- Add a per channel option to include home videos and other loose video files alongside movies, episodes, and music videos\r\n- Start large channels far faster by skipping a full per item HDR scan when it cannot change how the channel plays",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.1/jellyfin-plugin-livechannels-10.11.6.1.zip",
+                "checksum": "df34d14dff21cdd70760b301d3097d96",
+                "timestamp": "2026-06-29T07:44:40Z"
+            },
+            {
+                "version": "10.11.6.0",
+                "changelog": "## Features\r\n- Add a Sessions tab that lists every active stream with its channel, start time, run time, and live encode speed, and a button to stop it\r\n- Warm up the next item while the current one is still playing so per-item channels switch files without a gap\r\n- Cap how many channels stream at once so a client that never disconnects cannot pile up encoders and overload the server\r\n- Add a stream time limit that closes any channel left running too long as a backstop for clients that never send a stop\r\n- Organise the Settings tab into collapsible sections",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.6.0/jellyfin-plugin-livechannels-10.11.6.0.zip",
+                "checksum": "92fd29b1b779c12b81884ce2f971c1d5",
+                "timestamp": "2026-06-29T07:03:56Z"
+            },
+            {
+                "version": "10.11.5.0",
+                "changelog": "## Features\r\n- Give the Popular channel its own tab to set its name, icon, rating limit, subtitle rule, and loop behaviour\r\n- Build the Popular channel from your recent, top rated, and most watched movies and shows\r\n- Measure most watched across the whole server by combining every user's play counts\r\n- Choose a default language in Settings that decides when Forced subtitles burn in",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.5.0/jellyfin-plugin-livechannels-10.11.5.0.zip",
+                "checksum": "6f1cdbb705de1b683d604598102af573",
+                "timestamp": "2026-06-29T03:40:05Z"
+            },
+            {
+                "version": "10.11.4.0",
+                "changelog": "## Features\r\n- Add a built in Popular channel that loops your top movies and shows blended with recent additions\r\n- Fill the guide with episode titles, ratings, original air dates, and an HD marker\r\n- Show landscape artwork in the guide, backdrops for movies and thumbnails for episodes and music videos",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.4.0/jellyfin-plugin-livechannels-10.11.4.0.zip",
+                "checksum": "5e6130777002e6ec121ac25424584689",
+                "timestamp": "2026-06-29T02:40:09Z"
+            },
+            {
+                "version": "10.11.3.3",
+                "changelog": "## Features\r\n- Exclude genres from a channel, with series level genres applied across their episodes\r\n- Limit a channel to a single audio language by its default audio track\r\n- Set the playback buffer length and the stream file location in Settings\r\n- Clean up leftover stream files with a scheduled task in Live TV\r\n\r\n## Fixes\r\n- Stream channels as a rolling playlist of small segments so disk use stays bounded no matter how long they run\r\n- Pre-roll a few seconds on tune-in so playback starts on a full buffer\r\n- Tidy the channel editor genre dropdown and favor layout",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.3.3/jellyfin-plugin-livechannels-10.11.3.3.zip",
+                "checksum": "bcb278ce600751528f95e32856cbb44a",
+                "timestamp": "2026-06-29T00:57:47Z"
+            },
+            {
+                "version": "10.11.3.2",
+                "changelog": "## Fixes\r\n- Remove the trim and zero disk settings that could cause stutter",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.3.2/jellyfin-plugin-livechannels-10.11.3.2.zip",
+                "checksum": "02ddd376b3305ac805b8c00dff39eb64",
+                "timestamp": "2026-06-28T22:24:21Z"
+            },
+            {
+                "version": "10.11.3.1",
+                "changelog": "## Fixes\r\n- Decode 10-bit HEVC and 4K sources on the GPU instead of falling back to software",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.3.1/jellyfin-plugin-livechannels-10.11.3.1.zip",
+                "checksum": "377a648bf8b63b4e614a9e7755836fdc",
+                "timestamp": "2026-06-28T21:52:39Z"
+            },
+            {
+                "version": "10.11.3.0",
+                "changelog": "## Fixes\r\n- Build channels internally through Jellyfin Live TV again so playback works\r\n- Keep the stream building ahead of playback to reduce stutter",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.3.0/jellyfin-plugin-livechannels-10.11.3.0.zip",
+                "checksum": "897a54ca43275d98c0a95f3998b9ec1d",
+                "timestamp": "2026-06-28T20:55:17Z"
+            },
+            {
+                "version": "10.11.2.10",
+                "changelog": "## Fixes\r\n- Run the Intel pipeline the same way Jellyfin does, decoding on VAAPI and encoding on QSV, so 10-bit and HDR channels play\r\n- Read the GPU render device from the Jellyfin configuration and log the producer command",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.10/jellyfin-plugin-livechannels-10.11.2.10.zip",
+                "checksum": "7ddbde432d44e6e88f930feed6263a0f",
+                "timestamp": "2026-06-28T19:36:08Z"
+            },
+            {
+                "version": "10.11.2.9",
+                "changelog": "## Fixes\r\n- Pin the Intel iHD driver on the VAAPI device so the GPU pipeline initialises on multi-GPU systems\r\n- Log the producer command so playback failures are visible",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.9/jellyfin-plugin-livechannels-10.11.2.9.zip",
+                "checksum": "59420094bcad87813f17c81bd4712f30",
+                "timestamp": "2026-06-28T09:45:18Z"
+            },
+            {
+                "version": "10.11.2.8",
+                "changelog": "## Fixes\r\n- Rebuild the Intel decode pipeline to run entirely on the GPU through VAAPI, fixing 10-bit and HDR playback\r\n- Channels start fast again instead of probing every item on tune-in",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.8/jellyfin-plugin-livechannels-10.11.2.8.zip",
+                "checksum": "628b3ff7769f98c011a69d95e3ed640e",
+                "timestamp": "2026-06-28T09:31:46Z"
+            },
+            {
+                "version": "10.11.2.7",
+                "changelog": "## Fixes\r\n- Decode 10-bit sources in software so they no longer fail on QSV",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.7/jellyfin-plugin-livechannels-10.11.2.7.zip",
+                "checksum": "f9f77339ac13cfbf3c0149405607156d",
+                "timestamp": "2026-06-28T08:39:28Z"
+            },
+            {
+                "version": "10.11.2.6",
+                "changelog": "## Features\r\n- Serve channels through a self configuring M3U tuner with an XMLTV guide\r\n- Channel logos and program artwork in the guide\r\n\r\n## Fixes\r\n- Remove the old native channels",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.6/jellyfin-plugin-livechannels-10.11.2.6.zip",
+                "checksum": "ffc2967b82bb0646eb0103c95f368687",
+                "timestamp": "2026-06-28T07:53:33Z"
+            },
+            {
+                "version": "10.11.2.5",
+                "changelog": "## Fixes\r\n- Serve channels as an M3U tuner on a private loopback port",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.5/jellyfin-plugin-livechannels-10.11.2.5.zip",
+                "checksum": "025c146cd75d3264e7f6cbc2b626216d",
+                "timestamp": "2026-06-28T07:22:06Z"
+            },
+            {
+                "version": "10.11.2.4",
+                "changelog": "## Fixes\r\n- Stop abandoned channel sessions from piling up",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.4/jellyfin-plugin-livechannels-10.11.2.4.zip",
+                "checksum": "1015015b2300cd263d3b702824fa37cb",
+                "timestamp": "2026-06-28T05:17:49Z"
+            },
+            {
+                "version": "10.11.2.3",
+                "changelog": "## Fixes\r\n- Forced subtitles now show for non-English audio",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.3/jellyfin-plugin-livechannels-10.11.2.3.zip",
+                "checksum": "5ee66ceceae9bd681864b210bde155f3",
+                "timestamp": "2026-06-28T04:14:18Z"
+            },
+            {
+                "version": "10.11.2.2",
+                "changelog": "## Fixes\r\n- Activity cleanup\r\n- Better subtitle defaults",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.2/jellyfin-plugin-livechannels-10.11.2.2.zip",
+                "checksum": "011d147c8faee6fad807565235b0fc8d",
+                "timestamp": "2026-06-28T03:57:43Z"
+            },
+            {
+                "version": "10.11.2.1",
+                "changelog": "## Fixes\r\n- Use Jellyfin's default audio track instead of assuming",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.1/jellyfin-plugin-livechannels-10.11.2.1.zip",
+                "checksum": "062ceeecc725b70248387114632670b3",
+                "timestamp": "2026-06-28T03:38:03Z"
+            },
+            {
+                "version": "10.11.2.0",
+                "changelog": "## Features\r\n- File trimming\r\n- Prioritize file types",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.2.0/jellyfin-plugin-livechannels-10.11.2.0.zip",
+                "checksum": "0b8753a92daea9727bf35d66e838ef79",
+                "timestamp": "2026-06-28T01:17:43Z"
+            },
+            {
+                "version": "10.11.1.9",
+                "changelog": "## Fixes\r\n- Codec fixes",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.9/jellyfin-plugin-livechannels-10.11.1.9.zip",
+                "checksum": "316cd5ad70e87450edcf649c567e5b27",
+                "timestamp": "2026-06-27T23:19:33Z"
+            },
+            {
+                "version": "10.11.1.8",
+                "changelog": "## Fixes\r\n- Codec fixes",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.8/jellyfin-plugin-livechannels-10.11.1.8.zip",
+                "checksum": "65f63a2f0f2e66de60b46703632b8d27",
+                "timestamp": "2026-06-27T22:09:19Z"
+            },
+            {
+                "version": "10.11.1.7",
+                "changelog": "## Fixes\r\n- Smaller file work to make music videos actually work\r\n- HDR nonsense",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.7/jellyfin-plugin-livechannels-10.11.1.7.zip",
+                "checksum": "6ba6550a9da8140744e5a988838b8edf",
+                "timestamp": "2026-06-27T21:24:31Z"
+            },
+            {
+                "version": "10.11.1.6",
+                "changelog": "## Fixes\r\n- Even more QSV nonsense...",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.6/jellyfin-plugin-livechannels-10.11.1.6.zip",
+                "checksum": "2bd49830964708447d32e94e78bef466",
+                "timestamp": "2026-06-27T19:53:51Z"
+            },
+            {
+                "version": "10.11.1.5",
+                "changelog": "## Fixes\r\n- Even more QSV nonsense",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.5/jellyfin-plugin-livechannels-10.11.1.5.zip",
+                "checksum": "552f00c09e6a561aee897047a563ffa4",
+                "timestamp": "2026-06-27T19:30:59Z"
+            },
+            {
+                "version": "10.11.1.4",
+                "changelog": "## Fixes\r\n- Even more QSV nonsense",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.4/jellyfin-plugin-livechannels-10.11.1.4.zip",
+                "checksum": "74ce2b5101ef4ab405dc90ee7aed1193",
+                "timestamp": "2026-06-27T18:54:55Z"
+            },
+            {
+                "version": "10.11.1.3",
+                "changelog": "## Fixes\r\n- More QSV nonsense",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.3/jellyfin-plugin-livechannels-10.11.1.3.zip",
+                "checksum": "d188e4d843cbf204434803778127ed7f",
+                "timestamp": "2026-06-27T18:34:07Z"
+            },
+            {
+                "version": "10.11.1.2",
+                "changelog": "## Fixes\r\n- QSV nonsense",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.2/jellyfin-plugin-livechannels-10.11.1.2.zip",
+                "checksum": "ba94f314f5efb94c49a481166b74767d",
+                "timestamp": "2026-06-27T18:08:35Z"
+            },
+            {
+                "version": "10.11.1.1",
+                "changelog": "## Fixes\r\n- HWA decode fixes for non-MacOS devices\r\n- Icon fixes",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.1/jellyfin-plugin-livechannels-10.11.1.1.zip",
+                "checksum": "8198e05f285e83b355803b6e3a403b00",
+                "timestamp": "2026-06-27T17:38:18Z"
+            },
+            {
+                "version": "10.11.1.0",
+                "changelog": "## Initial Release!\r\n\r\nThis plugin exists because I need to test Live TV for Swiftfin and I wanted a simple(r) tuner configuration as I found a lot of the alternatives to be a little too involved for what I wanted.",
+                "targetAbi": "10.11.9.0",
+                "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.1.0/jellyfin-plugin-livechannels-10.11.1.0.zip",
+                "checksum": "0bd8dc812998dd0ae0b292133f2cf33a",
+                "timestamp": "2026-06-27T08:51:03Z"
+            }
+        ]
+    }
 ]

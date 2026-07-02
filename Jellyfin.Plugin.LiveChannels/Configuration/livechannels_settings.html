@@ -129,6 +129,25 @@
                     <span id="settingsStatus" class="jpk-status-text"></span>
 
                     <div class="jpk-collapsible-section">
+                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionStress">
+                            <span class="jpk-collapsible-title">Stress test</span>
+                            <span class="jpk-collapsible-icon">&#9660;</span>
+                        </button>
+                        <div id="sectionStress" class="jpk-collapsible-content collapsed">
+                            <div class="fieldDescription">Measures how many channels this server can encode at once, using the exact channel pipeline. Pick a demanding item (4K or HDR is ideal), then run: each round encodes a minute of it with one more concurrent stream than the last, until a stream can no longer hold realtime (30 fps). The result is the number to use for Maximum concurrent streams. Each round takes about a minute, the server will be busy while it runs, and all channel streams must be stopped first.</div>
+                            <div class="selectContainer">
+                                <label class="selectLabel">Test item</label>
+                                <div class="lc-stressitem-mount"></div>
+                                <div class="fieldDescription">Search for a single movie or episode; a demanding one (4K or HDR) gives the honest number. The choice is not saved anywhere &mdash; the test is ad hoc.</div>
+                            </div>
+                            <button is="emby-button" type="button" id="stressRun" class="raised block button-submit"><span>Run stress test</span></button>
+                            <button is="emby-button" type="button" id="stressCancel" class="raised block jpk-button-destructive hide"><span>Cancel test</span></button>
+                            <span id="stressStatus" class="jpk-status-text"></span>
+                            <div id="stressResult" class="fieldDescription"></div>
+                        </div>
+                    </div>
+
+                    <div class="jpk-collapsible-section">
                         <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionReset">
                             <span class="jpk-collapsible-title">Reset</span>
                             <span class="jpk-collapsible-icon">&#9660;</span>

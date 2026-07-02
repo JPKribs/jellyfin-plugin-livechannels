@@ -62,13 +62,21 @@ export default function (view) {
     function sessionCard(s) {
         // The logo is served by our controller; pass the token in the URL since an <img> sends no auth header.
         var logoUrl = ApiClient.getUrl('livechannels/sessions/' + encodeURIComponent(s.Id) + '/logo', { api_key: ApiClient.accessToken() });
-        return '<div class="jpk-record-card lc-session">' +
+        // A winding-down session (its viewer left; the encoder stays warm briefly so a returning viewer re-tunes
+        // instantly) is dimmed and labelled with its countdown. Kill still stops it right away.
+        var winding = typeof s.StopsInSeconds === 'number';
+        var windingNote = winding
+            ? '<div class="lc-session-stopping" style="color:#d29922;font-size:0.82em;margin-top:2px;" title="The viewer left; the encoder stays warm briefly so tuning back in is instant. Kill stops it now.">' +
+                'No viewers — stopping in ~' + s.StopsInSeconds + 's</div>'
+            : '';
+        return '<div class="jpk-record-card lc-session"' + (winding ? ' style="opacity:0.6"' : '') + '>' +
             '<div class="lc-session-head">' +
                 '<img class="lc-session-logo" src="' + logoUrl + '" alt="" />' +
                 '<div class="lc-session-title">' +
                     '<div class="lc-session-name"><span class="lc-session-number">' + s.Number + '</span>' + Shared.escapeHtml(s.Name || '') + '</div>' +
+                    windingNote +
                 '</div>' +
-                '<button is="emby-button" type="button" class="raised jpk-icon-btn jpk-button-destructive lc-kill" data-id="' + Shared.escapeHtml(s.Id) + '" title="Stop this stream">' +
+                '<button is="emby-button" type="button" class="raised jpk-icon-btn jpk-button-destructive lc-kill" data-id="' + Shared.escapeHtml(s.Id) + '" title="Stop this stream now">' +
                     '<span class="material-icons" aria-hidden="true">stop</span><span>Kill</span>' +
                 '</button>' +
             '</div>' +

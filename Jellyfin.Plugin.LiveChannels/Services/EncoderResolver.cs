@@ -73,15 +73,22 @@ public class EncoderResolver
                 return new VideoEncoderProfile(family + "_amf", label + " (AMF)", true,
                     Empty, Empty, "format=yuv420p", false);
             case "qsv":
+                // On Linux, QSV sits on a VAAPI render node: expose Jellyfin's configured device so the per-item
+                // pipeline can run fully GPU-resident (VAAPI decode/filters, QSV encode via hwmap).
+                var qsvDevice = OperatingSystem.IsLinux()
+                    ? (string.IsNullOrEmpty(options?.VaapiDevice) ? "/dev/dri/renderD128" : options!.VaapiDevice)
+                    : null;
                 return new VideoEncoderProfile(family + "_qsv", label + " (QSV)", true,
                     QsvInit, Empty, "format=nv12,hwupload=extra_hw_frames=64", false,
-                    DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12|p010le,");
+                    DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12|p010le,",
+                    GpuDevice: qsvDevice);
             case "vaapi":
-                var device = string.IsNullOrEmpty(options?.VaapiDevice) ? "/dev/dri/renderD128" : options.VaapiDevice;
+                var device = string.IsNullOrEmpty(options?.VaapiDevice) ? "/dev/dri/renderD128" : options!.VaapiDevice;
                 return new VideoEncoderProfile(family + "_vaapi", label + " (VAAPI)", true,
                     new[] { "-init_hw_device", "vaapi=va:" + device, "-filter_hw_device", "va" }, Empty,
                     "format=nv12,hwupload", false,
-                    DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: "hwdownload,format=nv12|p010le,");
+                    DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: "hwdownload,format=nv12|p010le,",
+                    GpuDevice: device);
             default:
                 return Software(codec);
         }

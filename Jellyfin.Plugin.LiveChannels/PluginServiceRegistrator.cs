@@ -19,6 +19,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<ChannelService>();
         serviceCollection.AddSingleton<EncoderResolver>();
         serviceCollection.AddSingleton<StreamSessionService>();
+        serviceCollection.AddSingleton<StressTestService>();
         serviceCollection.AddSingleton<DefaultLogoService>();
         serviceCollection.AddSingleton<ActivityLogger>();
 

@@ -109,7 +109,7 @@ public class ChannelService
 
     // Whether the video is HDR (PQ or HLG), keyed off the colour transfer like every mature pseudo-TV pipeline
     // does (ErsatzTV/Tunarr): smpte2084 = HDR10/PQ, arib-std-b67 = HLG.
-    private static bool ComputeIsHdr(MediaStream? video)
+    internal static bool ComputeIsHdr(MediaStream? video)
     {
         var transfer = video?.ColorTransfer;
         return string.Equals(transfer, "smpte2084", StringComparison.OrdinalIgnoreCase)
@@ -120,7 +120,7 @@ public class ChannelService
     // format name when the probe did not populate BitDepth, matching only true depth suffixes (e.g. yuv420p10le,
     // yuv444p12le, p010le) so common 8-bit formats are NOT misread: a loose Contains("10")/Contains("12") would
     // wrongly match nv12 (8-bit, contains "12") and yuv410p (contains "10"), needlessly software-decoding 8-bit.
-    private static bool ComputeIsTenBit(MediaStream? video)
+    internal static bool ComputeIsTenBit(MediaStream? video)
     {
         if (video is null)
         {
