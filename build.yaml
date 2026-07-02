@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.9.4"
+version: "10.11.9.5"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -16,7 +16,6 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   developer:
-  - HDR letterbox bars are now true black on the Intel GPU pipeline - padding happens after the tone map, so the bars are painted in SDR space instead of being run through the HDR-to-SDR LUT (which rendered them green)
-  - HDR brightness now honours Jellyfin's VPP Tone mapping brightness/contrast gain (Dashboard > Playback > Transcoding), applied after the GPU tone map, so channels match regular playback instead of rendering dark
-  - Internal cleanup - removed the unused Windows QSV legacy paths (vendor-matched HDR chain, interlaced/10-bit decode workarounds), refreshed comments to describe current behaviour, and rewrote the README to be concise and current
+  - Dolby Vision Profile 5 items are now excluded from schedules with a clear log line - Profile 5 has no HDR10-compatible base layer, so it renders green/purple through any tone mapper; Profile 8 and HDR10 versions play correctly and stay included
+  - Schedules now heal metadata runtime drift - when a full item plays through, its real length is recorded and used from the next guide refresh, closing the timestamp gap (or overlap) at item boundaries when a file's metadata runtime is wrong
 

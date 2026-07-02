@@ -252,7 +252,7 @@ public class StreamSessionService
                 var args = StreamArguments.BuildConcat(listFile, seek, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel);
 
                 var started = DateTime.UtcNow;
-                var total = await RunFfmpegAsync(ffmpeg, args, channel.Name, output, cancellationToken, stats).ConfigureAwait(false);
+                var (total, _, _) = await RunFfmpegAsync(ffmpeg, args, channel.Name, output, cancellationToken, stats).ConfigureAwait(false);
                 if (cancellationToken.IsCancellationRequested)
                 {
                     break;
@@ -478,7 +478,7 @@ public class StreamSessionService
         }
 
         var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds());
-        var total = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
+        var (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
         // nothing (e.g. a codec the GPU can't decode) once in software, so one bad item can't blank the channel.
@@ -486,7 +486,22 @@ public class StreamSessionService
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
             var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds());
-            total = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
+            (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
+        }
+
+        // A clean (exit 0), uncancelled run of a WHOLE item (no tune-in seek) reveals the item's true
+        // playable length. When it drifts from the metadata runtime the schedule was built on, record it so
+        // the next guide refresh schedules the real length -- closing the timestamp gap (or overlap) at this
+        // item's seam. The exit gate matters: a producer that crashed mid-item produced output too, and its
+        // partial length must not be recorded as truth.
+        if (total > 0 && exitCode == 0 && offset == TimeSpan.Zero && !cancellationToken.IsCancellationRequested)
+        {
+            var observed = ObservedItemSeconds(lastOut, timeline);
+            var metadataSeconds = TimeSpan.FromTicks(program.DurationTicks).TotalSeconds;
+            if (observed is { } seconds && Math.Abs(seconds - metadataSeconds) > 2)
+            {
+                _channels.RecordObservedDuration(program.ItemId, seconds, program.Title, metadataSeconds);
+            }
         }
 
         return total > 0;
@@ -507,7 +522,7 @@ public class StreamSessionService
         {
             var args = StreamArguments.BuildSlate(width, bitrate, clipSeconds, timeline, font);
             var started = DateTime.UtcNow;
-            var total = await RunFfmpegAsync(ffmpeg, args, "standby", output, cancellationToken).ConfigureAwait(false);
+            var (total, _, _) = await RunFfmpegAsync(ffmpeg, args, "standby", output, cancellationToken).ConfigureAwait(false);
             if (total == 0)
             {
                 break; // ffmpeg could not even produce the slate; avoid a hot loop.
@@ -532,21 +547,25 @@ public class StreamSessionService
     }
 
     // Runs ffmpeg with the given arguments, pumping its stdout to the output stream. Returns the bytes
-    // written; zero means the item produced nothing (a real failure), which is logged with ffmpeg's stderr.
-    private async Task<long> RunFfmpegAsync(string ffmpeg, IReadOnlyList<string> args, string label, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
+    // written (zero means the item produced nothing -- a real failure, logged with ffmpeg's stderr) and the
+    // last output timestamp ffmpeg reported (-1 when no progress was parsed), which the per-item path uses
+    // to observe an item's true playable length.
+    private async Task<(long Total, double LastOutSeconds, int ExitCode)> RunFfmpegAsync(string ffmpeg, IReadOnlyList<string> args, string label, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
     {
-        var (process, stderrTask) = StartProducer(ffmpeg, args, label, stats, cancellationToken);
+        var tracker = stats is null ? null : new SpeedTracker();
+        var (process, stderrTask) = StartProducer(ffmpeg, args, label, stats, cancellationToken, tracker);
         if (process is null)
         {
-            return 0;
+            return (0, -1, -1);
         }
 
-        return await PumpProducerAsync(process, stderrTask, label, output, cancellationToken, stats).ConfigureAwait(false);
+        var (total, exitCode) = await PumpProducerAsync(process, stderrTask, label, output, cancellationToken, stats).ConfigureAwait(false);
+        return (total, tracker?.LastContentSeconds ?? -1, exitCode);
     }
 
     // Starts a producer ffmpeg and immediately begins draining its stderr (so it can never block on a full stderr
     // pipe), but does NOT read its stdout; PumpProducerAsync does that. Returns a null process if it could not start.
-    private (Process? Process, Task<string> Stderr) StartProducer(string ffmpeg, IReadOnlyList<string> args, string label, SessionStats? stats, CancellationToken cancellationToken)
+    private (Process? Process, Task<string> Stderr) StartProducer(string ffmpeg, IReadOnlyList<string> args, string label, SessionStats? stats, CancellationToken cancellationToken, SpeedTracker? tracker = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -581,13 +600,15 @@ public class StreamSessionService
             return (null, Task.FromResult(string.Empty));
         }
 
-        return (process, ReadStandardErrorAsync(process, stats, cancellationToken));
+        return (process, ReadStandardErrorAsync(process, stats, cancellationToken, tracker));
     }
 
     // Pumps a started producer's stdout into the output stream until it ends, then kills and disposes it.
-    private async Task<long> PumpProducerAsync(Process process, Task<string> stderrTask, string label, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
+    // Returns the bytes written and the producer's exit code (-1 when it had to be killed).
+    private async Task<(long Total, int ExitCode)> PumpProducerAsync(Process process, Task<string> stderrTask, string label, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
     {
         long total = 0;
+        var exitCode = -1;
         var buffer = new byte[BufferSize];
         try
         {
@@ -617,7 +638,7 @@ public class StreamSessionService
             }
 
             var stderr = await stderrTask.ConfigureAwait(false);
-            var exitCode = process.HasExited ? process.ExitCode : -1;
+            exitCode = process.HasExited ? process.ExitCode : -1;
             if (total == 0 && !cancellationToken.IsCancellationRequested)
             {
                 // Output of nothing is a real failure (e.g. ffmpeg rejected a stream); surface its error and code.
@@ -639,7 +660,7 @@ public class StreamSessionService
             process.Dispose();
         }
 
-        return total;
+        return (total, exitCode);
     }
 
     /// <summary>
@@ -695,7 +716,7 @@ public class StreamSessionService
         return (args, hardwareDecode);
     }
 
-    private static async Task<string> ReadStandardErrorAsync(Process process, SessionStats? stats, CancellationToken cancellationToken)
+    private static async Task<string> ReadStandardErrorAsync(Process process, SessionStats? stats, CancellationToken cancellationToken, SpeedTracker? tracker = null)
     {
         // Without a stats sink, the whole of stderr is only needed once, at exit, for diagnostics.
         if (stats is null)
@@ -720,7 +741,7 @@ public class StreamSessionService
         var tail = new StringBuilder();
         var line = new StringBuilder();
         var buffer = new char[512];
-        var tracker = new SpeedTracker();
+        tracker ??= new SpeedTracker();
         try
         {
             int read;
@@ -775,16 +796,34 @@ public class StreamSessionService
         }
     }
 
+    // An item's playable length from its producer's final -progress timestamp: out_time includes the
+    // -output_ts_offset timeline base, so subtract it. Rejects unusable readings (no progress parsed, or a
+    // length too short/long to be a real item) by returning null.
+    internal static double? ObservedItemSeconds(double lastOutSeconds, TimeSpan timeline)
+    {
+        if (lastOutSeconds < 0)
+        {
+            return null;
+        }
+
+        var seconds = lastOutSeconds - timeline.TotalSeconds;
+        return seconds > 10 && seconds < 86400 ? seconds : null;
+    }
+
     // Computes a live encode speed from ffmpeg's -progress output. ffmpeg's own "speed=" field is a cumulative
     // average since the stream began, so it barely moves once a stream has run a while (and the start-up burst
     // skews it for a long time). Instead this measures the content time advanced (out_time_us) between progress
     // blocks against wall-clock, giving an instantaneous rate that actually tracks whether the box keeps up.
     // One instance per producer process, lightly smoothed so the reading stays steady. Producers run one at a
     // time per session, so only ever one tracker writes the shared SessionStats.
-    private sealed class SpeedTracker
+    internal sealed class SpeedTracker
     {
         private double _prevContentSeconds = -1;
         private long _prevStamp;
+
+        // The last output timestamp parsed from -progress, in seconds. Includes the -output_ts_offset base,
+        // so an item's playable length is this minus its timeline offset. -1 until a block is parsed.
+        public double LastContentSeconds => _prevContentSeconds;
 
         public void Observe(string line, SessionStats stats)
         {

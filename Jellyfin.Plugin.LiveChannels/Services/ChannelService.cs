@@ -117,6 +117,134 @@ public class ChannelService
             || string.Equals(transfer, "arib-std-b67", StringComparison.OrdinalIgnoreCase);
     }
 
+    // Whether the video is Dolby Vision Profile 5, the one DV flavour with no HDR10-compatible base layer:
+    // its IPT-colour frames render green/purple through every tone mapper (VPP and software alike), so such
+    // items are excluded from schedules with a loud log instead of airing broken.
+    internal static bool IsDolbyVisionProfile5(MediaStream? video)
+        => video?.DvProfile == 5;
+
+    // Observed item durations (seconds by item id), recorded when a full item plays through and its real
+    // length drifts from the metadata runtime schedules are built on. Loaded once from a small JSON file
+    // beside the schedule cache; schedule builds prefer these, so seams stop carrying the drift as a
+    // timestamp gap (or, worse, an overlap when a file runs LONGER than its metadata claims).
+    private readonly ConcurrentDictionary<Guid, ObservedDuration> _observedDurations = new();
+    private readonly object _durationsLock = new();
+    private bool _durationsLoaded;
+
+    private const string DurationsFileName = "durations.json";
+
+    private string DurationsFile => Path.Combine(_scheduleDir, DurationsFileName);
+
+    // One observation: the real playable length, plus the metadata runtime it was recorded against
+    // (the staleness key -- see ObservedDurationTicks).
+    private sealed record ObservedDuration(double Seconds, double MetadataSeconds);
+
+    /// <summary>
+    /// Records an item's observed playable length so the next schedule build uses the real duration.
+    /// </summary>
+    /// <param name="itemId">The library item.</param>
+    /// <param name="seconds">The observed length in seconds.</param>
+    /// <param name="title">The item title, for the log line.</param>
+    /// <param name="scheduledSeconds">The length the schedule had used, for the log line.</param>
+    public void RecordObservedDuration(Guid itemId, double seconds, string title, double scheduledSeconds)
+    {
+        // The staleness key is the item's CURRENT metadata runtime, read from the library here -- NOT the
+        // scheduled length, which may itself already be an observed override (storing that would fail the
+        // metadata-match check at the next refresh and discard a perfectly good observation).
+        var metadataTicks = _libraryManager.GetItemById(itemId)?.RunTimeTicks;
+        if (metadataTicks is not > 0)
+        {
+            return; // The item vanished from the library, or has no runtime to validate against later.
+        }
+
+        var metadataSeconds = TimeSpan.FromTicks(metadataTicks.Value).TotalSeconds;
+        EnsureDurationsLoaded();
+        if (_observedDurations.TryGetValue(itemId, out var existing)
+            && Math.Abs(existing.Seconds - seconds) < 1
+            && Math.Abs(existing.MetadataSeconds - metadataSeconds) < 1)
+        {
+            return;
+        }
+
+        _observedDurations[itemId] = new ObservedDuration(seconds, metadataSeconds);
+        _logger.LogInformation(
+            "Live Channels: \"{Title}\" actually plays for {Observed:F1}s (schedule had used {Scheduled:F1}s, metadata says {Metadata:F1}s); schedules use the observed length from the next guide refresh",
+            title,
+            seconds,
+            scheduledSeconds,
+            metadataSeconds);
+
+        lock (_durationsLock)
+        {
+            try
+            {
+                Directory.CreateDirectory(_scheduleDir);
+                var temp = DurationsFile + ".tmp";
+                File.WriteAllText(temp, JsonSerializer.Serialize(_observedDurations.ToDictionary(kv => kv.Key, kv => kv.Value), ScheduleCacheJson));
+                File.Move(temp, DurationsFile, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not persist observed durations; the in-memory values still apply this run");
+            }
+        }
+    }
+
+    // The observed override for an item, or null. An observation only applies while the item's CURRENT
+    // metadata runtime still matches the one it was recorded against: a mismatch means the file was
+    // replaced or re-probed since, so the stale observation is discarded rather than overriding fresh truth.
+    private long? ObservedDurationTicks(Guid itemId, long metadataTicks)
+    {
+        EnsureDurationsLoaded();
+        if (!_observedDurations.TryGetValue(itemId, out var observed) || observed.Seconds <= 10)
+        {
+            return null;
+        }
+
+        var metadataSeconds = TimeSpan.FromTicks(metadataTicks).TotalSeconds;
+        if (Math.Abs(observed.MetadataSeconds - metadataSeconds) > 1)
+        {
+            _observedDurations.TryRemove(itemId, out _);
+            return null;
+        }
+
+        return (long)(observed.Seconds * TimeSpan.TicksPerSecond);
+    }
+
+    private void EnsureDurationsLoaded()
+    {
+        if (_durationsLoaded)
+        {
+            return;
+        }
+
+        lock (_durationsLock)
+        {
+            if (_durationsLoaded)
+            {
+                return;
+            }
+
+            try
+            {
+                if (File.Exists(DurationsFile))
+                {
+                    var loaded = JsonSerializer.Deserialize<Dictionary<Guid, ObservedDuration>>(File.ReadAllText(DurationsFile), ScheduleCacheJson);
+                    foreach (var (id, observed) in loaded ?? new Dictionary<Guid, ObservedDuration>())
+                    {
+                        _observedDurations[id] = observed;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not read the observed-durations file; starting empty");
+            }
+
+            _durationsLoaded = true;
+        }
+    }
+
     // The default audio track (the one Jellyfin would play) and its ordinal among the item's audio streams, or
     // null when the item has no audio.
     private static (int Ordinal, MediaStream Stream)? DefaultAudio(IReadOnlyList<MediaStream> streams)
@@ -472,7 +600,16 @@ public class ChannelService
                 var dir = ScheduleDir(paths);
                 if (Directory.Exists(dir))
                 {
-                    Directory.Delete(dir, recursive: true);
+                    // Delete only the per-channel schedule files. The observed-durations file survives a
+                    // channel edit: the durations describe the media files, not the channel configuration,
+                    // and each one costs a full airing to re-learn.
+                    foreach (var file in Directory.EnumerateFiles(dir, "*.json"))
+                    {
+                        if (!string.Equals(Path.GetFileName(file), DurationsFileName, StringComparison.Ordinal))
+                        {
+                            File.Delete(file);
+                        }
+                    }
                 }
             }
         }
@@ -1426,14 +1563,17 @@ public class ChannelService
         return allowed;
     }
 
-    private static ProgramEntry? ToEntry(BaseItem? item, int? kidsScore, IReadOnlyList<MediaStream> streams)
+    private ProgramEntry? ToEntry(BaseItem? item, int? kidsScore, IReadOnlyList<MediaStream> streams)
     {
         if (item is null)
         {
             return null;
         }
 
-        var ticks = item.RunTimeTicks ?? 0;
+        // Prefer an observed real duration over the metadata runtime; drifted metadata otherwise puts a
+        // timestamp gap or overlap at this item's seam every loop.
+        var metadataTicks = item.RunTimeTicks ?? 0;
+        var ticks = ObservedDurationTicks(item.Id, metadataTicks) ?? metadataTicks;
         if (ticks <= 0 || string.IsNullOrEmpty(item.Path))
         {
             return null;
@@ -1454,6 +1594,14 @@ public class ChannelService
         // here at refresh, from the streams already read. The stream pipeline reads these off the cached entry and
         // never queries the media streams itself.
         var video = streams.FirstOrDefault(s => s.Type == MediaStreamType.Video);
+        if (IsDolbyVisionProfile5(video))
+        {
+            _logger.LogWarning(
+                "Live Channels: excluding \"{Title}\": Dolby Vision Profile 5 has no HDR10-compatible base layer, so every tone mapper renders it with wrong (green/purple) colours. A Profile 8 or HDR10 version of it will play correctly.",
+                title);
+            return null;
+        }
+
         var defaultAudio = DefaultAudio(streams);
 
         return new ProgramEntry(item.Id, title, item.Overview, ticks, item.Path)
