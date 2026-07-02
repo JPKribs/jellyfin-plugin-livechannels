@@ -69,7 +69,7 @@ Every program is filled out from your library: description, genres, ratings, yea
 
 ## Versioning
 
-Releases use a four-part version, `JJ.JJ.F.B`:
+Releases use a four part version, `JJ.JJ.F.B`, that matches the supported Jellyfin version with the plugin's own feature and bug count:
 
 ```
 10.11.1.0
@@ -78,7 +78,7 @@ JJ JJ F B
 
 * `JJ.JJ` is the Jellyfin version this build was tested and released for.
 * `F` is the plugin feature release.
-* `B` is the bug or patch release within that feature.
+* `B` is the plugin bug or patch release within that feature.
 
 Targets **Jellyfin 10.11.x** (`net9.0`, ABI `10.11.9.0`). Requires ffmpeg, which Jellyfin already bundles and configures.
 
@@ -88,21 +88,24 @@ Targets **Jellyfin 10.11.x** (`net9.0`, ABI `10.11.9.0`). Requires ffmpeg, which
 
 * Open Jellyfin and navigate to Dashboard → Plugins → Repositories
 * Click Add Repository
-* Enter the repository URL: `https://raw.githubusercontent.com/JPKribs/jellyfin-plugin-livechannels/master/manifest.json`
+* Enter the following repository URL: `https://raw.githubusercontent.com/JPKribs/jellyfin-plugin-livechannels/master/manifest.json`
 * Click Save
 
 ### Step 2: Install Plugin
 
-* Find Live Channels in the Catalog tab of the Plugins section
+* Go to the Catalog tab in the Plugins section
+* Find Live Channels in the catalog
 * Click Install
+* Wait for installation to complete
 
 ### Step 3: Restart Jellyfin
 
-* Restart the server and let it fully start up
+* Restart your Jellyfin server completely
+* Wait for Jellyfin to fully start up
 
 ### Verification Check
 
-* Navigate to Dashboard → Plugins → Live Channels, create a channel, run **Refresh Guide**, then open **Live TV** to confirm the channel appears.
+* After restart, navigate to Dashboard → Plugins → Live Channels, create a channel, run **Refresh Guide**, then open **Live TV** to confirm the channel appears.
 
 ---
 
