@@ -161,17 +161,89 @@ public class StreamArgumentsTests
     }
 
     [Fact]
-    public void IntelGpuPipeline_FallsBackToCpuChains_ForBurnInAndSoftwareRetry()
+    public void IntelGpuPipeline_TextBurnIn_CompositesOnGpu()
     {
-        // Burn-in needs system-memory frames for the overlay, and the software retry must not touch the GPU:
-        // both keep the CPU chains even when a render node is known.
-        var burnIn = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, (0, true));
-        Assert.DoesNotContain(burnIn, x => x.Contains("scale_vaapi", StringComparison.Ordinal));
+        // Burn-in stays GPU-resident: libass renders the subtitle onto a transparent alphasrc canvas on the
+        // CPU, hwupload lifts just that picture into VRAM, and overlay_vaapi composites it over the untouched
+        // GPU frames before the QSV hand-off. The filter device must be the VAAPI one (hwupload targets it).
+        var a = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, (1, true));
+        Assert.True(Pair(a, "-filter_hw_device", "va"));
+        var fc = a[a.IndexOf("-filter_complex") + 1];
+        Assert.Contains("scale_vaapi=w=1920:h=1080", fc, StringComparison.Ordinal);
+        Assert.Contains("alphasrc=s=1920x1080:r=10:start=0", fc, StringComparison.Ordinal);
+        Assert.Contains("subtitles=filename='/m.mkv':si=1:alpha=1", fc, StringComparison.Ordinal);
+        Assert.Contains("hwupload[sub]", fc, StringComparison.Ordinal);
+        Assert.Contains("[main][sub]overlay_vaapi=eof_action=pass", fc, StringComparison.Ordinal);
+        Assert.Contains("hwmap=derive_device=qsv,format=qsv[v]", fc, StringComparison.Ordinal);
+        Assert.DoesNotContain("hwdownload", fc, StringComparison.Ordinal);
+        Assert.True(Pair(a, "-map", "[v]"));
+    }
 
+    [Fact]
+    public void IntelGpuPipeline_TextBurnIn_DeepSeek_AlignsAlphasrcWithCopyts()
+    {
+        // On a deep tune-in the -copyts seek leaves the video PTS at the offset; the alphasrc canvas must start
+        // there too or every subtitle renders minutes early.
+        var a = StreamArguments.Build("/m.mkv", TimeSpan.FromSeconds(90), default, 1920, 16000, QsvLinux, "aac", 192, (0, true));
+        Assert.Contains("-copyts", a);
+        var fc = a[a.IndexOf("-filter_complex") + 1];
+        Assert.Contains("alphasrc=s=1920x1080:r=10:start=90.000", fc, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IntelGpuPipeline_ExternalSubtitle_ReadsTheExtractedFile()
+    {
+        var a = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, (2, true), "/cache/sub.ass");
+        var fc = a[a.IndexOf("-filter_complex") + 1];
+        Assert.Contains("subtitles=filename='/cache/sub.ass':alpha=1", fc, StringComparison.Ordinal);
+        Assert.DoesNotContain(":si=", fc, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IntelGpuPipeline_BitmapBurnIn_UploadsTheSubtitleStream()
+    {
+        // PGS/VOBSUB: the sparse sub2video frames scale to the output size on the CPU, upload, and composite.
+        var a = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, (0, false));
+        var fc = a[a.IndexOf("-filter_complex") + 1];
+        Assert.Contains("[0:s:0]scale=1920:1080[subsw];[subsw]hwupload[sub]", fc, StringComparison.Ordinal);
+        Assert.Contains("overlay_vaapi=eof_action=pass", fc, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IntelGpuPipeline_HdrBurnIn_KeepsGpuToneMap()
+    {
+        // The exact case the Forced-only escalation used to break: HDR 4K with a burned subtitle previously
+        // dropped to the ~1.2x software chain; now the scale-first VPP tone map runs in the main GPU chain.
+        var a = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, (0, true), null, false, isHdr: true);
+        var fc = a[a.IndexOf("-filter_complex") + 1];
+        Assert.Contains("tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709", fc, StringComparison.Ordinal);
+        Assert.Contains("overlay_vaapi", fc, StringComparison.Ordinal);
+        Assert.DoesNotContain("zscale", fc, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IntelGpuPipeline_VaapiEncoderBurnIn_HasNoQsvTail()
+    {
+        var a = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, VaapiLinux, "aac", 192, (0, true));
+        var fc = a[a.IndexOf("-filter_complex") + 1];
+        Assert.Contains("overlay_vaapi=eof_action=pass[v]", fc, StringComparison.Ordinal);
+        Assert.DoesNotContain("hwmap", fc, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IntelGpuPipeline_SoftwareRetry_StaysOffTheGpu()
+    {
+        // The software retry must not touch the GPU (it exists to survive a broken hardware decode).
         var retry = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, null, null, softwareDecode: true);
         Assert.DoesNotContain("-hwaccel", retry);
         Assert.DoesNotContain(retry, x => x.Contains("scale_vaapi", StringComparison.Ordinal));
         Assert.True(Pair(retry, "-c:v", "h264_qsv")); // hardware ENCODE still applies via hwupload
+
+        // And a burn-in retry uses the CPU subtitle chain, not overlay_vaapi.
+        var burnRetry = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, (0, true), null, softwareDecode: true);
+        var fc = burnRetry[burnRetry.IndexOf("-filter_complex") + 1];
+        Assert.DoesNotContain("overlay_vaapi", fc, StringComparison.Ordinal);
+        Assert.Contains("subtitles=", fc, StringComparison.Ordinal);
     }
 
     [Fact]

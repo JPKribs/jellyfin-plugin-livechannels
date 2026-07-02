@@ -159,6 +159,7 @@ public class StreamSessionService
         }
 
         _logger.LogInformation("Live Channels: HLS segmenter [{Name}]: {Ffmpeg} {Args}", channel.Name, ffmpeg, string.Join(' ', args));
+        stats?.AppendLog("HLS segmenter\n$ ffmpeg " + string.Join(' ', args));
 
         using var segmenter = new Process { StartInfo = startInfo };
         try
@@ -196,6 +197,8 @@ public class StreamSessionService
             {
                 _logger.LogDebug("Live Channels: HLS segmenter ({Name}): {Error}", channel.Name, stderr.Trim());
             }
+
+            stats?.AppendLog("HLS segmenter: closed" + (string.IsNullOrWhiteSpace(stderr) ? string.Empty : "\n" + stderr.Trim()));
         }
     }
 
@@ -415,13 +418,23 @@ public class StreamSessionService
         var pipeline = perItem ? "per-item" : "continuous";
         var burnInForcesSoftware = burnIn && !string.IsNullOrEmpty(profile.DecodeDownload);
         var intelHardware = profile.Name.Contains("qsv", StringComparison.Ordinal) || profile.Name.Contains("vaapi", StringComparison.Ordinal);
-        var intelGpu = intelHardware && !string.IsNullOrEmpty(profile.GpuDevice) && !burnIn;
+        var gpuCapable = intelHardware && !string.IsNullOrEmpty(profile.GpuDevice);
         var hwDecode = !hasHdr && profile.DecodeHwaccel is not null && (perItem ? !burnInForcesSoftware : uniform);
-        // Intel with a known render node runs the fully GPU-resident per-item pipeline; HDR elsewhere
-        // tone-maps in software.
-        var decode = hasHdr
-            ? (intelHardware && !burnIn ? "vaapi (HDR)" : "software (HDR)")
-            : (perItem && intelGpu ? "vaapi (GPU-resident)" : hwDecode ? profile.DecodeHwaccel! : "software");
+        // The decode plan is decided PER ITEM, so the label must not overstate the channel-level flags. On the
+        // GPU-resident pipeline even subtitle burn-in stays on the GPU (overlay_vaapi composite).
+        string decode;
+        if (perItem && gpuCapable)
+        {
+            decode = burnIn ? "vaapi (GPU-resident, subtitles composited on GPU)" : "vaapi (GPU-resident)";
+        }
+        else if (hasHdr)
+        {
+            decode = intelHardware && !burnIn ? "vaapi (HDR)" : "software (HDR)";
+        }
+        else
+        {
+            decode = hwDecode ? profile.DecodeHwaccel! : "software";
+        }
 
         _logger.LogInformation(
             "Live Channels: streaming {Name} ({Items} items) at {Width}x{Height} via {Encoder} ({Mode} encode, {Decode} decode, {Pipeline}), audio {Audio}, from item {Index}/{Items}",
@@ -531,7 +544,7 @@ public class StreamSessionService
             return 0;
         }
 
-        return await PumpProducerAsync(process, stderrTask, label, output, cancellationToken).ConfigureAwait(false);
+        return await PumpProducerAsync(process, stderrTask, label, output, cancellationToken, stats).ConfigureAwait(false);
     }
 
     // Starts a producer ffmpeg and immediately begins draining its stderr (so it can never block on a full stderr
@@ -556,6 +569,9 @@ public class StreamSessionService
         // failure on a specific source (the downstream transcoder error only ever says the temp file was empty).
         _logger.LogDebug("Live Channels: producer ffmpeg [{Label}]: {Ffmpeg} {Args}", label, ffmpeg, string.Join(' ', args));
 
+        // And into the session's reviewable ffmpeg log for the Sessions tab.
+        stats?.AppendLog(label + "\n$ ffmpeg " + string.Join(' ', args));
+
         var process = new Process { StartInfo = startInfo };
         try
         {
@@ -572,7 +588,7 @@ public class StreamSessionService
     }
 
     // Pumps a started producer's stdout into the output stream until it ends, then kills and disposes it.
-    private async Task<long> PumpProducerAsync(Process process, Task<string> stderrTask, string label, Stream output, CancellationToken cancellationToken)
+    private async Task<long> PumpProducerAsync(Process process, Task<string> stderrTask, string label, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
     {
         long total = 0;
         var buffer = new byte[BufferSize];
@@ -614,6 +630,12 @@ public class StreamSessionService
             {
                 _logger.LogDebug("ffmpeg ({Label}, {Bytes} bytes, exit {Exit}): {Error}", label, total, exitCode, stderr.Trim());
             }
+
+            // The exit summary (and any stderr tail) joins the session's reviewable ffmpeg log.
+            var tail = stderr.Trim();
+            stats?.AppendLog(label + ": exit " + exitCode.ToString(CultureInfo.InvariantCulture)
+                + ", " + total.ToString(CultureInfo.InvariantCulture) + " bytes"
+                + (tail.Length > 0 ? "\n" + tail : string.Empty));
         }
         finally
         {
@@ -647,15 +669,22 @@ public class StreamSessionService
             (c.TranscodeWidth, c.TranscodeVideoBitrateKbps, c.VideoCodec, c.AudioCodec))
             ?? (1280, 4000, Models.VideoCodec.H264, Models.AudioCodec.Aac);
 
-        // The hardware encoder still applies to burn-in; only the decode side cares about the overlay.
-        var allowHardware = !forcedSubtitle.HasValue || sourceHeight > 1080;
-        var video = _encoders.ResolveVideo(videoCodec, allowHardware);
+        // The hardware encoder still applies to burn-in; only the decode side cares about the overlay -- and
+        // the GPU-resident Intel pipeline composites the overlay on the GPU (overlay_vaapi), so burn-in there
+        // keeps full hardware. Elsewhere, burn-in at 1080p-or-below drops to the software encoder (the CPU
+        // composite dominates anyway); above 1080p the hardware encoder stays worth it.
+        var hwProfile = _encoders.ResolveVideo(videoCodec, allowHardware: true);
+        var hwIsIntelGpu = (hwProfile.Name.Contains("qsv", StringComparison.Ordinal) || hwProfile.Name.Contains("vaapi", StringComparison.Ordinal))
+            && !string.IsNullOrEmpty(hwProfile.GpuDevice);
+        var allowHardware = !forcedSubtitle.HasValue || sourceHeight > 1080 || hwIsIntelGpu;
+        var video = allowHardware ? hwProfile : _encoders.ResolveVideo(videoCodec, allowHardware: false);
         var (audioEncoder, audioBitrate) = EncoderResolver.ResolveAudio(audioCodec);
         var intelHardware = video.Name.Contains("qsv", StringComparison.Ordinal) || video.Name.Contains("vaapi", StringComparison.Ordinal);
 
         // Intel with a known render node runs the fully GPU-resident pipeline (built inside Build): decode,
-        // deinterlace, scale, tone map, and encode all in VRAM, for SDR, 10-bit, interlaced, and HDR alike.
-        var intelGpu = intelHardware && !string.IsNullOrEmpty(video.GpuDevice) && !forcedSubtitle.HasValue && !softwareDecode;
+        // deinterlace, scale, tone map, subtitle overlay, and encode all in VRAM, for SDR, 10-bit, interlaced,
+        // and HDR alike.
+        var intelGpu = intelHardware && !string.IsNullOrEmpty(video.GpuDevice) && !softwareDecode;
 
         // LEGACY Intel workarounds, needed only when the GPU-resident graph is unavailable (no known render
         // node, e.g. Windows QSV): the download-to-CPU path fails on interlaced QSV frames and on 10-bit (p010)
@@ -665,12 +694,14 @@ public class StreamSessionService
         var intelTenBit = intelHardware && !intelGpu && isTenBit && !isHdr;
 
         // HDR: the GPU-resident graph tone-maps on the GPU (scale-first VPP); Intel without a render node keeps
-        // the legacy VAAPI tone-map chain; HDR anywhere else (VideoToolbox/NVENC/software) and HDR burn-in
-        // tone-map in software, which needs software-decoded frames. Burn-in on a GPU-resident decoder also
-        // forces software (the overlay needs system frames). The caller forces software for the per-item retry.
+        // the legacy VAAPI tone-map chain; HDR anywhere else (VideoToolbox/NVENC/software) and non-GPU-resident
+        // HDR burn-in tone-map in software, which needs software-decoded frames. Burn-in outside the
+        // GPU-resident graph forces software when the decoder keeps frames in VRAM (the CPU overlay needs
+        // system frames). The caller forces software for the per-item retry.
         var usesHdrVaapi = isHdr && intelHardware && !intelGpu && !forcedSubtitle.HasValue && !softwareDecode && !intelInterlaced;
         var hdrNeedsSoftware = isHdr && !intelGpu && !usesHdrVaapi;
-        var forceSoftware = softwareDecode || hdrNeedsSoftware || intelInterlaced || intelTenBit || (forcedSubtitle.HasValue && !string.IsNullOrEmpty(video.DecodeDownload));
+        var forceSoftware = softwareDecode || hdrNeedsSoftware || intelInterlaced || intelTenBit
+            || (forcedSubtitle.HasValue && !intelGpu && !string.IsNullOrEmpty(video.DecodeDownload));
 
         // Every hardware pipeline (GPU-resident, legacy HDR, or plain hardware decode) reports as such, so a
         // no-output failure retries the item in software (StreamItemAsync) instead of blanking the channel.

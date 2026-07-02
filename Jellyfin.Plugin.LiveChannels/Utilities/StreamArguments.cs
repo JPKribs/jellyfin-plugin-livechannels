@@ -85,10 +85,11 @@ public static class StreamArguments
         // N100 iGPU against 4K HDR10 HEVC: ~3.2x realtime for SDR/10-bit and ~3.4x for HDR (scale-first VPP
         // tone map), versus 1.2x for the download-to-CPU chain and 1.8x for the old tonemap-at-4K HDR path.
         // This also eliminates the Intel 10-bit/interlaced software-decode workarounds: they existed only to
-        // dodge the p010/interlaced hwdownload, and this graph never downloads. Burn-in and the software-decode
-        // retry still use the CPU chains below.
+        // dodge the p010/interlaced hwdownload, and this graph never downloads. Subtitle burn-in stays on this
+        // pipeline too (overlay_vaapi composite; see AppendIntelGpuSubtitleFilter); only the software-decode
+        // retry uses the CPU chains below.
         var isIntel = IsIntelHardware(video.Name);
-        var intelGpu = isIntel && !burnIn && !softwareDecode && !string.IsNullOrEmpty(video.GpuDevice);
+        var intelGpu = isIntel && !softwareDecode && !string.IsNullOrEmpty(video.GpuDevice);
 
         // Legacy HDR fallback for Intel WITHOUT a known render node (non-Linux): the old vendor_id-matched
         // VAAPI tone-map chain, unchanged.
@@ -110,7 +111,10 @@ public static class StreamArguments
             Add(args, "-init_hw_device", "vaapi=va:" + video.GpuDevice);
             if (video.Name.Contains("qsv", StringComparison.Ordinal))
             {
-                Add(args, "-init_hw_device", "qsv=qs@va", "-filter_hw_device", "qs");
+                // Burn-in uploads the CPU-rendered subtitle picture with hwupload, which targets the filter
+                // device — that must be the VAAPI device (overlay_vaapi composites there); the encoder still
+                // receives QSV frames via the explicit hwmap at the end of the graph.
+                Add(args, "-init_hw_device", "qsv=qs@va", "-filter_hw_device", burnIn ? "va" : "qs");
             }
             else
             {
@@ -202,18 +206,21 @@ public static class StreamArguments
         var w = width.ToString(CultureInfo.InvariantCulture);
         var h = height.ToString(CultureInfo.InvariantCulture);
         string scale;
+
+        // The GPU-resident graph's encoder hand-off, kept separate from the main chain so the burn-in variant
+        // can splice its overlay between them. For a QSV encoder the frames hwmap from VAAPI into QSV; a VAAPI
+        // encoder consumes the VAAPI frames directly.
+        var gpuTail = string.Empty;
         if (intelGpu)
         {
-            // The GPU-resident graphs, exactly as benchmarked. For a QSV encoder the frames hwmap from VAAPI
-            // into QSV at the end; a VAAPI encoder consumes the VAAPI frames directly.
-            var tail = video.Name.Contains("qsv", StringComparison.Ordinal) ? ",hwmap=derive_device=qsv,format=qsv" : string.Empty;
+            gpuTail = video.Name.Contains("qsv", StringComparison.Ordinal) ? ",hwmap=derive_device=qsv,format=qsv" : string.Empty;
             if (isHdr)
             {
                 // Scale FIRST (at p010, on the GPU), tone map the small frames: measured 3.4x vs 1.8x for the
                 // old tonemap-at-4K order, with identical output (the engine and parameters are unchanged).
                 scale = "scale_vaapi=w=" + w + ":h=" + h + ":force_original_aspect_ratio=decrease:format=p010,"
                     + "pad_vaapi=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,"
-                    + "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,fps=30" + tail;
+                    + "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,fps=30";
             }
             else
             {
@@ -222,7 +229,7 @@ public static class StreamArguments
                 // the old 10-bit software-decode workaround.
                 scale = "deinterlace_vaapi=rate=frame:auto=1,"
                     + "scale_vaapi=w=" + w + ":h=" + h + ":force_original_aspect_ratio=decrease:format=nv12,"
-                    + "pad_vaapi=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30" + tail;
+                    + "pad_vaapi=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30";
             }
         }
         else if (useHdrVaapi)
@@ -250,14 +257,18 @@ public static class StreamArguments
                 + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,setparams=field_mode=prog," + video.PixelStage;
         }
 
-        if (burnIn)
+        if (burnIn && intelGpu)
+        {
+            AppendIntelGpuSubtitleFilter(args, path, forcedSubtitle!.Value, scale, gpuTail, externalSubtitlePath, audioOrdinal, w, h, hasOffset ? seconds : "0");
+        }
+        else if (burnIn)
         {
             AppendSubtitleFilter(args, path, forcedSubtitle!.Value, scale, externalSubtitlePath, audioOrdinal);
         }
         else
         {
             args.Add("-vf");
-            args.Add(scale);
+            args.Add(scale + gpuTail);
 
             // Map the first video stream and the audio track Jellyfin marks as default, so we play the same track
             // the user would hear in normal playback instead of letting ffmpeg pick by channel count. Any -map
@@ -616,6 +627,41 @@ public static class StreamArguments
             filter = "[0:v]subtitles=filename='" + EscapeSubtitlePath(path) + "':si=" + index + "," + scale + "[v]";
         }
 
+        args.Add("-filter_complex");
+        args.Add(filter);
+        args.Add("-map");
+        args.Add("[v]");
+        args.Add("-map");
+        args.Add(AudioMap(audioOrdinal));
+    }
+
+    // Burns the chosen subtitle INSIDE the GPU-resident Intel pipeline: the video never leaves VRAM. Only the
+    // subtitle picture renders on the CPU -- text via alphasrc+libass at 10 fps (a transparent canvas the
+    // subtitles filter draws onto), bitmaps as sparse sub2video frames -- and is uploaded once for a GPU
+    // overlay_vaapi composite. This mirrors Jellyfin's own Intel burn-in graphs, so a Forced-only channel
+    // playing foreign-language 4K keeps the full GPU speed instead of dropping to the software chain.
+    private static void AppendIntelGpuSubtitleFilter(List<string> args, string path, (int RelativeIndex, bool IsText) forced, string mainChain, string gpuTail, string? externalSubtitlePath, int? audioOrdinal, string w, string h, string startSeconds)
+    {
+        var index = forced.RelativeIndex.ToString(CultureInfo.InvariantCulture);
+        string subChain;
+        if (!forced.IsText)
+        {
+            // Bitmap subtitle (PGS/VOBSUB): scale the sparse sub2video frames to the output size, then upload.
+            subChain = "[0:s:" + index + "]scale=" + w + ":" + h + "[subsw];[subsw]hwupload[sub]";
+        }
+        else
+        {
+            // Text subtitle: libass draws onto a transparent canvas; `start=` aligns the canvas timestamps with
+            // the -copyts seek so the overlay stays in sync on a deep tune-in.
+            var source = !string.IsNullOrEmpty(externalSubtitlePath) ? EscapeSubtitlePath(externalSubtitlePath) : EscapeSubtitlePath(path);
+            var si = string.IsNullOrEmpty(externalSubtitlePath) ? ":si=" + index : string.Empty;
+            subChain = "alphasrc=s=" + w + "x" + h + ":r=10:start=" + startSeconds + "[bg];"
+                + "[bg]subtitles=filename='" + source + "'" + si + ":alpha=1[subsw];[subsw]hwupload[sub]";
+        }
+
+        // eof_action=pass keeps the video flowing after the subtitle track runs dry (it usually ends early).
+        var tailPart = gpuTail.Length > 0 ? "[ov];[ov]" + gpuTail.TrimStart(',') + "[v]" : "[v]";
+        var filter = "[0:v]" + mainChain + "[main];" + subChain + ";[main][sub]overlay_vaapi=eof_action=pass" + tailPart;
         args.Add("-filter_complex");
         args.Add(filter);
         args.Add("-map");

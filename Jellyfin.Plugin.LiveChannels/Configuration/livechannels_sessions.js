@@ -37,21 +37,21 @@ export default function (view) {
         return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     }
 
-    // A status dot for the encode speed: green keeping up (1.0x and over), yellow slightly behind (0.95 to 1.0x),
-    // red falling behind (under 0.95x), and a muted dot until ffmpeg reports a first reading. The exact rate is
-    // shown on hover.
-    function speedDot(speed) {
-        var color, label;
+    // The encode speed as its ratio followed by a status dot ("1.01x ●"): green keeping up (1.0x and over),
+    // yellow slightly behind (0.95 to 1.0x), red falling behind (under 0.95x), and a muted dot with a dash
+    // until ffmpeg reports a first reading.
+    function speedCell(speed) {
+        var color, label, text;
         if (typeof speed !== 'number' || speed <= 0) {
-            color = 'rgba(255,255,255,0.25)'; label = 'Waiting for a reading';
+            color = 'rgba(255,255,255,0.25)'; label = 'Waiting for a reading'; text = '—';
         } else if (speed >= 1.0) {
-            color = '#3fb950'; label = speed.toFixed(2) + 'x, keeping up';
+            color = '#3fb950'; label = 'Keeping up'; text = speed.toFixed(2) + 'x';
         } else if (speed >= 0.95) {
-            color = '#d29922'; label = speed.toFixed(2) + 'x, slightly behind';
+            color = '#d29922'; label = 'Slightly behind'; text = speed.toFixed(2) + 'x';
         } else {
-            color = '#f85149'; label = speed.toFixed(2) + 'x, falling behind';
+            color = '#f85149'; label = 'Falling behind'; text = speed.toFixed(2) + 'x';
         }
-        return '<span class="lc-speed-dot" style="color:' + color + '" title="' + label + '">●</span>';
+        return '<span class="jpk-mono">' + text + '</span> <span class="lc-speed-dot" style="color:' + color + '" title="' + label + '">●</span>';
     }
 
     function row(label, value) {
@@ -69,21 +69,19 @@ export default function (view) {
             ? '<div class="lc-session-stopping" style="color:#d29922;font-size:0.82em;margin-top:2px;" title="The viewer left; the encoder stays warm briefly so tuning back in is instant. Kill stops it now.">' +
                 'No viewers — stopping in ~' + s.StopsInSeconds + 's</div>'
             : '';
-        return '<div class="jpk-record-card lc-session"' + (winding ? ' style="opacity:0.6"' : '') + '>' +
+        return '<div class="jpk-record-card lc-session" data-id="' + Shared.escapeHtml(s.Id) + '" data-name="' + Shared.escapeHtml(s.Name || '') + '"' +
+            (winding ? ' style="opacity:0.6"' : '') + ' title="Show this session\'s ffmpeg logs">' +
             '<div class="lc-session-head">' +
                 '<img class="lc-session-logo" src="' + logoUrl + '" alt="" />' +
                 '<div class="lc-session-title">' +
                     '<div class="lc-session-name"><span class="lc-session-number">' + s.Number + '</span>' + Shared.escapeHtml(s.Name || '') + '</div>' +
                     windingNote +
                 '</div>' +
-                '<button is="emby-button" type="button" class="raised jpk-icon-btn jpk-button-destructive lc-kill" data-id="' + Shared.escapeHtml(s.Id) + '" title="Stop this stream now">' +
-                    '<span class="material-icons" aria-hidden="true">stop</span><span>Kill</span>' +
-                '</button>' +
             '</div>' +
             '<div class="lc-session-rows">' +
                 row('Started', formatStarted(s.StartedUtc)) +
                 row('Streaming for', formatElapsed(s.StartedUtc)) +
-                row('Speed', speedDot(s.Speed)) +
+                row('Speed', speedCell(s.Speed)) +
             '</div>' +
         '</div>';
     }
@@ -115,11 +113,82 @@ export default function (view) {
         });
     }
 
+    // --- ffmpeg log modal: selecting a session shows every command it spawned plus each process's exit
+    // summary and stderr tail. Copy puts the whole log on the clipboard; Kill stops the stream from here.
+
+    var _logSessionId = null;
+
+    function loadLog() {
+        if (!_logSessionId) { return Promise.resolve(); }
+        return ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('livechannels/sessions/' + encodeURIComponent(_logSessionId) + '/log') })
+            .then(function (r) { return r && typeof r.text === 'function' ? r.text() : Promise.resolve(String(r || '')); })
+            .then(function (text) {
+                el('lcLogText').textContent = text || 'No log yet — the session is still starting.';
+            }).catch(function () {
+                el('lcLogText').textContent = 'Could not load the log (the session may have just closed).';
+            });
+    }
+
+    function openLog(id, name) {
+        _logSessionId = id;
+        el('lcLogTitle').textContent = name || 'Session';
+        el('lcLogText').textContent = 'Loading…';
+        Shared.setVisible('lcLogDialog', true);
+        loadLog();
+    }
+
+    function closeLog() {
+        _logSessionId = null;
+        Shared.setVisible('lcLogDialog', false);
+    }
+
+    function copyLog() {
+        var text = el('lcLogText').textContent || '';
+        var done = function () {
+            var label = el('lcLogCopy').querySelector('span:last-child') || el('lcLogCopy');
+            var original = label.textContent;
+            label.textContent = 'Copied!';
+            setTimeout(function () { label.textContent = original; }, 1500);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done).catch(function () { legacyCopy(text); done(); });
+        } else {
+            legacyCopy(text);
+            done();
+        }
+    }
+
+    // Clipboard fallback for non-secure contexts (plain-HTTP dashboards), where navigator.clipboard is absent.
+    function legacyCopy(text) {
+        var area = document.createElement('textarea');
+        area.value = text;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        try { document.execCommand('copy'); } catch (e) { /* best effort */ }
+        document.body.removeChild(area);
+    }
+
     function bind() {
-        // Delegate so the buttons keep working across re-renders.
+        // Delegate so the cards keep working across re-renders: selecting a session opens its log modal.
         el('sessionList').addEventListener('click', function (e) {
-            var btn = e.target.closest('.lc-kill');
-            if (btn) { killSession(btn.getAttribute('data-id')); }
+            var card = e.target.closest('.lc-session');
+            if (card) { openLog(card.getAttribute('data-id'), card.getAttribute('data-name')); }
+        });
+
+        el('lcLogClose').addEventListener('click', closeLog);
+        el('lcLogRefresh').addEventListener('click', loadLog);
+        el('lcLogCopy').addEventListener('click', copyLog);
+        el('lcLogKill').addEventListener('click', function () {
+            var id = _logSessionId;
+            closeLog();
+            if (id) { killSession(id); }
+        });
+
+        // A click on the dimmed backdrop (not the dialog content) also closes.
+        el('lcLogDialog').addEventListener('click', function (e) {
+            if (e.target === el('lcLogDialog')) { closeLog(); }
         });
     }
 

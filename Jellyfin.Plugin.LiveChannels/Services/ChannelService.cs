@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -425,7 +426,25 @@ public class ChannelService
             return hot;
         }
 
-        var programs = TryReadScheduleCache(channel) ?? RefreshPrograms(channel);
+        var stopwatch = Stopwatch.StartNew();
+        var cached = TryReadScheduleCache(channel);
+        var programs = cached ?? RefreshPrograms(channel);
+        stopwatch.Stop();
+
+        // This sits directly on the tune-in critical path (observed: a silent 13-second full rebuild of an
+        // 8419-item channel on an N100 made the first tune-in time out), so any non-trivial load is visible at
+        // the default log level, with its SOURCE: "rebuilt" means the disk cache was missing or unreadable and
+        // this tune-in paid a full library resolve that belongs at guide-refresh time.
+        if (stopwatch.ElapsedMilliseconds > 500)
+        {
+            _logger.LogInformation(
+                "Live Channels: schedule for {Name} ({Count} items) {Source} in {Seconds:F1}s on the tune-in path",
+                channel.Name,
+                programs.Count,
+                cached is null ? "REBUILT (disk cache missing or unreadable)" : "loaded from disk",
+                stopwatch.Elapsed.TotalSeconds);
+        }
+
         MemorySchedules[channel.Number] = programs;
         return programs;
     }
@@ -442,9 +461,12 @@ public class ChannelService
         ArgumentNullException.ThrowIfNull(channel);
         var programs = BuildPrograms(channel);
         WriteScheduleCache(channel, programs);
-        // Invalidate the hot copy: a channel being watched while its guide refreshes will reload the fresh schedule
-        // on its next resolve, and an idle channel never gets an entry added here (only ResolvePrograms populates).
-        MemorySchedules.TryRemove(channel.Number, out _);
+        // Keep the freshly built schedule HOT: this build already paid the full library resolve, and dropping it
+        // meant the next tune-in re-read (or, if the cache read failed, silently re-BUILT) it on the critical
+        // path — observed as a 13-second first-tune stall on a large channel. Guide refreshes run regularly, so
+        // in practice every enabled channel stays warm; ReleaseFromMemory still trims a channel after its last
+        // session closes, keeping long-idle memory bounded between refreshes.
+        MemorySchedules[channel.Number] = programs;
         return programs;
     }
 
@@ -523,7 +545,9 @@ public class ChannelService
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Could not read the cached schedule for channel {Name}; rebuilding it", channel.Name);
+            // Warning, not debug: a failed cache read silently costs the next tune-in a full library rebuild on
+            // its critical path, so the cause must be visible at the default log level.
+            _logger.LogWarning(ex, "Live Channels: could not read the cached schedule for channel {Name}; the next tune-in will rebuild it", channel.Name);
             return null;
         }
     }

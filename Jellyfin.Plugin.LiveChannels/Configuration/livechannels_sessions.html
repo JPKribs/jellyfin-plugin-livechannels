@@ -11,7 +11,7 @@
                 </div>
 
                 <div class="fieldDescription">
-                    Every channel currently encoding on the server, refreshed as you watch. Each one shows when it started, how long it has run, and how fast it is transcoding, where 1.0x keeps up with realtime. Use Kill to stop a stream and free its encoder right away.
+                    Every channel currently encoding on the server, refreshed as you watch. Each one shows when it started, how long it has run, and how fast it is transcoding, where 1.0x keeps up with realtime. Select a session to review its ffmpeg logs, copy them for diagnostics, or kill the stream.
                 </div>
 
                 <div id="sessionsEmpty" class="jpk-empty-section hidden">No channels are streaming right now.</div>
@@ -20,6 +20,21 @@
 
                 <span id="sessionsStatus" class="jpk-status-text"></span>
 
+            </div>
+        </div>
+    </div>
+
+    <div id="lcLogDialog" class="jpk-dialog hidden">
+        <div class="jpk-dialog-content lc-log-dialog">
+            <button type="button" class="jpk-dialog-close" id="lcLogClose" title="Close">&times;</button>
+            <h3 class="jpk-modal-title" id="lcLogTitle">Session</h3>
+            <div class="jpk-modal-body">
+                <pre id="lcLogText" class="jpk-code lc-log-text"></pre>
+            </div>
+            <div class="jpk-modal-button-row">
+                <button is="emby-button" type="button" id="lcLogRefresh" class="raised jpk-secondary jpk-modal-button"><span>Refresh</span></button>
+                <button is="emby-button" type="button" id="lcLogCopy" class="raised jpk-button-submit jpk-modal-button"><span>Copy</span></button>
+                <button is="emby-button" type="button" id="lcLogKill" class="raised jpk-button-destructive jpk-modal-button"><span class="material-icons" aria-hidden="true">stop</span><span>Kill</span></button>
             </div>
         </div>
     </div>
@@ -38,6 +53,13 @@
         .lc-session-number { color: rgba(255, 255, 255, 0.55); margin-right: 8px; }
         .lc-session-rows .jpk-record-row { padding: 4px 0; }
         .lc-speed-dot { font-size: 1.15em; line-height: 1; }
+        .lc-session { cursor: pointer; transition: border-color 0.15s; }
+        .lc-session:hover { border-color: var(--jpk-accent); }
+        .lc-log-dialog { width: min(900px, 95vw); }
+        .lc-log-text {
+            max-height: 55vh; overflow: auto; white-space: pre-wrap; word-break: break-word;
+            margin: 0; min-height: 160px;
+        }
     </style>
 
     <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">

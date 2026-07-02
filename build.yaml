@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.9.1"
+version: "10.11.9.2"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV, with a ready-made Popular channel out of the box."
@@ -16,6 +16,8 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   developer:
-  - The Sessions tab shows when a viewerless stream is winding down (with its countdown), and its Kill button now stops the encoder immediately instead of waiting out the wind-down
-  - New encoder stress test on the Settings tab - pick a demanding library item and the server measures how many concurrent streams it can sustain with the real channel pipeline, recommending the Maximum concurrent streams value
-  - Fully GPU-resident Intel pipeline (Linux QSV/VAAPI) - decode, deinterlace, scale, tone map, and encode all stay in VRAM on Jellyfin's configured render node. Benchmarked on an N100 iGPU with 4K HDR10 HEVC, 2.6x faster than the old download-to-CPU chain; the Intel 10-bit and interlaced software-decode workarounds are gone, and HDR tone maps scale-first (1.9x faster, same picture)
+  - First tune-in no longer stalls on large channels - freshly built schedules stay in memory after each guide refresh instead of being reloaded (or silently rebuilt) on the tune-in critical path, and any slow or failed schedule load is now visible in the log
+  - Subtitle burn-in now stays on the GPU for Intel hardware - the subtitle renders on the CPU and is composited in VRAM (overlay_vaapi), so Forced-only channels playing foreign-language 4K/HDR keep full GPU speed instead of dropping to the software chain
+  - Compatible with Jellyfin 10.11.10 - the opened-source probe (the interlace workaround) is now version-gated, fixing total playback failure on 10.11.10 servers
+  - Sessions tab - selecting a session opens its ffmpeg log in a modal with Refresh, Copy, and Kill; logs are cached per session and removed when the session closes; the speed column now shows the ratio next to the status dot
+

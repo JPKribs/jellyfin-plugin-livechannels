@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Utilities;
 using MediaBrowser.Common.Configuration;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
@@ -44,6 +45,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     private readonly ActivityLogger _activity;
     private readonly ILogger<LiveChannelsTvService> _logger;
 
+    private readonly bool _probeOpenedSource;
     private readonly string _streamRoot;
     private readonly string _logoRoot = Path.Combine(Path.GetTempPath(), "livechannels-logos");
     private readonly ConcurrentDictionary<string, LiveSession> _live = new(StringComparer.Ordinal);
@@ -56,15 +58,26 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     /// <param name="streams">The stream session service, used to produce each channel's ffmpeg feed.</param>
     /// <param name="defaultLogo">The generated fallback-logo service.</param>
     /// <param name="activity">The activity logger, used to record channel start/stop in Jellyfin's activity log.</param>
+    /// <param name="appHost">The application host, used to read the server version the probe fix depends on.</param>
     /// <param name="appPaths">The application paths, used to default the stream directory under Jellyfin's cache.</param>
     /// <param name="logger">The logger.</param>
-    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
+    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
     {
         _channels = channels;
         _streams = streams;
         _defaultLogo = defaultLogo;
         _activity = activity;
         _logger = logger;
+
+        // Probing the opened source defeats Jellyfin's forced-interlaced hack (playback remuxes instead of
+        // re-encoding), but from 10.11.10 the probe normalises the live playlist's container to "ts" and the
+        // delivery ffmpeg is launched with `-f mpegts` against the .m3u8 — no playback at all. Only servers
+        // below that version probe; newer ones keep the declared streams.
+        _probeOpenedSource = appHost.ApplicationVersion < new Version(10, 11, 10);
+        _logger.LogInformation(
+            "Live Channels: server {Version}; opened-source probing {State}",
+            appHost.ApplicationVersion,
+            _probeOpenedSource ? "enabled (defeats the live-TV forced-interlace flag)" : "disabled (10.11.10+ probe breaks live HLS container detection)");
 
         // Where each channel's growing stream file is written (and where the schedule cache lives). Configurable,
         // since the file lives for the whole watch and the system temp is often small or RAM-backed; defaults to a
@@ -250,7 +263,12 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         var playlist = Path.Combine(dir, "stream.m3u8");
 
         var cts = new CancellationTokenSource();
-        var stats = new SessionStats();
+        var stats = new SessionStats
+        {
+            // Every ffmpeg the session spawns appends its command and exit summary here for the Sessions tab's
+            // log viewer; living inside the session directory, it is deleted with the session.
+            LogPath = Path.Combine(dir, "ffmpeg.log")
+        };
 
         // Start the producer FIRST so the segmenter is already filling segments while the logo resolves below;
         // the logo is usually cached, but its first-ever generation must not sit on the tune-in critical path.
@@ -414,6 +432,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     /// <param name="id">The live stream id.</param>
     /// <returns>The logo file path, or <c>null</c>.</returns>
     public string? GetSessionLogoPath(string id) => _live.TryGetValue(id, out var session) ? session.LogoPath : null;
+
+    /// <summary>Returns the ffmpeg diagnostic log path for an active session, or <c>null</c> if the session is gone.</summary>
+    /// <param name="id">The live stream id.</param>
+    /// <returns>The log file path, or <c>null</c>.</returns>
+    public string? GetSessionLogPath(string id) => _live.TryGetValue(id, out var session) ? Path.Combine(session.Path, "ffmpeg.log") : null;
 
     /// <inheritdoc />
     public void Dispose()
@@ -796,7 +819,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     // We produce the stream ourselves at a known resolution/codec, so we advertise concrete video/audio
     // streams (and skip probing): without them, a client that needs transcoding crashes Jellyfin's scale
     // filter on the null source dimensions.
-    private static MediaSourceInfo BuildSource(string id, string? path)
+    private MediaSourceInfo BuildSource(string id, string? path)
     {
         var (width, bitrateKbps, videoCodec, audioCodec) = Plugin.Instance?.ReadConfiguration(c =>
             (c.TranscodeWidth, c.TranscodeVideoBitrateKbps, c.VideoCodec, c.AudioCodec))
@@ -840,7 +863,12 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         // first segments, so the probe has real content to read. The unopened "menu" source (no path) cannot be
         // probed, so it keeps the declared streams: without them a client that needs transcoding crashes
         // Jellyfin's scale filter on null source dimensions.
-        var opened = path is not null;
+        //
+        // VERSION CEILING: from Jellyfin 10.11.10 the probe normalises a live HLS playlist's container to its
+        // SEGMENT container ("ts" instead of "hls"), and the delivery ffmpeg is then launched with `-f mpegts`
+        // pointed at the .m3u8 -- which cannot parse, exits 187 on every attempt, and kills ALL playback. On
+        // those servers the opened source keeps the declared streams instead (see _probeOpenedSource).
+        var opened = path is not null && _probeOpenedSource;
         return new MediaSourceInfo
         {
             Id = id,

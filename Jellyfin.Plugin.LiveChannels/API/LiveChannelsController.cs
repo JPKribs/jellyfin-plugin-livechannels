@@ -121,6 +121,32 @@ public class LiveChannelsController : ControllerBase
     }
 
     /// <summary>
+    /// Returns a session's ffmpeg diagnostic log (every command the session spawned plus each process's exit
+    /// summary and stderr tail), for the Sessions tab's log viewer. The log lives inside the session directory
+    /// and is deleted with it, so nothing accumulates.
+    /// </summary>
+    /// <param name="id">The live stream id.</param>
+    /// <returns>The log as plain text; empty when the session or its log is gone.</returns>
+    [HttpGet("sessions/{id}/log")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public ActionResult SessionLog(string id)
+    {
+        // Resolve by our own stored id (the request only selects which live session), so no request string
+        // reaches the filesystem.
+        var match = FindSession(id);
+        var path = match is null ? null : _tv.GetSessionLogPath(match.Id);
+        if (path is null || !System.IO.File.Exists(path))
+        {
+            return Content(string.Empty, "text/plain; charset=utf-8");
+        }
+
+        // Share-tolerant read: the producer may be appending at this moment.
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        return Content(reader.ReadToEnd(), "text/plain; charset=utf-8");
+    }
+
+    /// <summary>
     /// Closes an active channel stream, stopping its encoder. Used by the Sessions tab's kill button.
     /// </summary>
     /// <param name="id">The live stream id to close.</param>
