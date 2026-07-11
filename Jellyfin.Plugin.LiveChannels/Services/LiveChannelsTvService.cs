@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Utilities;
+using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.LiveTv;
@@ -376,7 +377,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             _activity.Log(
                 "Live Channel: " + session.ChannelName + " has stopped",
                 "LiveChannels.ChannelStopped",
-                overview: "This channel's stream was stopped from the dashboard.");
+                overview: "Stream stopped from the dashboard.");
 
             _logger.LogInformation("Live Channels: session {Id} ({Name}) killed from the dashboard", id, session.ChannelName);
             CancelAndDispose(session);
