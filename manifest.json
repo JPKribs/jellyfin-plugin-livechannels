@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.9.7",
+        "changelog": "## Developer\r\n- Bump Base to 2026.7.12\r\n- Use ActivityLogger from Base 2026.7.12\r\n- Standardize activity log messages\r\n- Move Stress test and Reset into a Troubleshooting section",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.9.7/jellyfin-plugin-livechannels-10.11.9.7.zip",
+        "checksum": "a27f87cd94ae0ccde090d3e37d48e2e4",
+        "timestamp": "2026-07-11T23:30:47Z"
+      },
+      {
         "version": "10.11.9.6",
         "changelog": "## Developer\r\n- Item boundaries are now timestamp-continuous - each item's timeline chains from where the previous item actually ended instead of the scheduled boundary, so seams carry no PTS jump for a client's video decoder to stall on (seen as frozen video with continuing audio on VLCKit-based players like Swiftfin)",
         "targetAbi": "10.11.9.0",
