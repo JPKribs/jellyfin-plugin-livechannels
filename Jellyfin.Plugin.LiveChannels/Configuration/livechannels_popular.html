@@ -65,27 +65,29 @@
                             </div>
                             <h3 class="jpk-subsection-title">Age ratings</h3>
                             <div class="selectContainer">
-                                <label class="selectLabel" for="popularMinRating">Minimum age rating</label>
-                                <select id="popularMinRating" class="jpk-selector-dropdown"></select>
-                                <div class="fieldDescription">Content at or above this rating. Pair it with a maximum to make an adults only or single band channel.</div>
+                                <label class="selectLabel">Rating limits</label>
+                                <div id="popularRatingBlocks" class="jpk-source-list"></div>
+                                <div class="jpk-selector-actions jpk-section-spacer">
+                                    <button is="emby-button" type="button" id="popularAddRatingBlock" class="raised jpk-icon-btn jpk-button-submit" title="Add a rating block">
+                                        <span class="material-icons" aria-hidden="true">add</span><span>Add rating block</span>
+                                    </button>
+                                </div>
+                                <div class="fieldDescription">Limit which ratings air, optionally by time of day. No blocks means anything airs. On overlap, the lowest min and max win. The top titles are picked from what the rating allows.</div>
                             </div>
-                            <div class="selectContainer">
-                                <label class="selectLabel" for="popularMaxRating">Maximum age rating</label>
-                                <select id="popularMaxRating" class="jpk-selector-dropdown"></select>
-                                <div class="fieldDescription">Content at or below this rating.</div>
-                            </div>
-                            <div class="checkboxContainer checkboxContainer-withDescription">
-                                <label class="emby-checkbox-label">
-                                    <input type="checkbox" is="emby-checkbox" id="popularIncludeUnrated" />
-                                    <span class="checkboxLabel">Include unrated</span>
-                                </label>
-                                <div class="fieldDescription">On by default, so unrated content is always allowed regardless of the rating bounds. Turn it off to drop items that carry no rating.</div>
+                            <div class="inputContainer">
+                                <label for="popularTransitionWindow">Transition window (minutes)</label>
+                                <input is="emby-input" type="number" id="popularTransitionWindow" min="0" step="1" autocomplete="off" placeholder="0" />
+                                <div class="fieldDescription">Items starting this close to a window change must fit both windows. Set it to your longest content. 0 turns it off.</div>
                             </div>
                             <h3 class="jpk-subsection-title">Guide</h3>
                             <div class="selectContainer">
-                                <label class="selectLabel" for="popularKidsRating">Kids rating</label>
-                                <select id="popularKidsRating" class="jpk-selector-dropdown"></select>
-                                <div class="fieldDescription">Programs that carry a rating at or below this are flagged as Kids in the guide. Movies are flagged as movies automatically.</div>
+                                <label class="selectLabel" for="popularCategory">Category</label>
+                                <select id="popularCategory" class="jpk-selector-dropdown">
+                                    <option value="None">None</option>
+                                    <option value="News">News</option>
+                                    <option value="Sports">Sports</option>
+                                </select>
+                                <div class="fieldDescription">Tags the whole channel in the guide. Kids is set per rating block, and the movie tag is applied automatically while a movie is playing.</div>
                             </div>
                             <h3 class="jpk-subsection-title">Episodes</h3>
                             <div class="inputContainer">
@@ -107,13 +109,26 @@
                                 </label>
                                 <div class="fieldDescription">Keeps two part episodes together across a block boundary.</div>
                             </div>
-                            <h3 class="jpk-subsection-title">Extra content</h3>
+                            <h3 class="jpk-subsection-title">Content Types</h3>
+                            <div class="checkboxContainer">
+                                <label class="emby-checkbox-label">
+                                    <input type="checkbox" is="emby-checkbox" id="popularIncludeEpisodes" />
+                                    <span class="checkboxLabel">Episodes</span>
+                                </label>
+                            </div>
+                            <div class="checkboxContainer checkboxContainer-withDescription">
+                                <label class="emby-checkbox-label">
+                                    <input type="checkbox" is="emby-checkbox" id="popularIncludeMovies" />
+                                    <span class="checkboxLabel">Movies</span>
+                                </label>
+                                <div class="fieldDescription">Tagged in the guide while a movie is playing.</div>
+                            </div>
                             <div class="checkboxContainer checkboxContainer-withDescription">
                                 <label class="emby-checkbox-label">
                                     <input type="checkbox" is="emby-checkbox" id="popularIncludeSpecials" />
-                                    <span class="checkboxLabel">Include specials</span>
+                                    <span class="checkboxLabel">Specials</span>
                                 </label>
-                                <div class="fieldDescription">Includes specials found in series.</div>
+                                <div class="fieldDescription">Season 0 specials.</div>
                             </div>
                             <h3 class="jpk-subsection-title">Loop</h3>
                             <div class="selectContainer">
@@ -137,6 +152,21 @@
             </form>
         </div>
     </div>
+
+    <style>
+        /* Rating block cards, matching the channel editor. */
+        .lc-source-header { display: flex; align-items: center; gap: 10px; margin-bottom: 1em; }
+        .lc-source-icon { color: rgba(255, 255, 255, 0.45); flex: 0 0 auto; }
+        #popularRatingBlocks .jpk-empty-section { padding: 20px 24px; font-size: 1em; }
+        .lc-ratingblock {
+            border: 1px solid var(--jpk-border); border-radius: 8px;
+            padding: 1em 1.25em; margin-bottom: 12px; background: rgba(255, 255, 255, 0.02);
+        }
+        .lc-ratingblock:last-child { margin-bottom: 0; }
+        .lc-block-title { flex: 1; min-width: 0; font-weight: 600; }
+        .lc-block-times { display: flex; gap: 12px; }
+        .lc-block-times .inputContainer { flex: 1; margin: 0; }
+    </style>
 
     <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">
 </div>

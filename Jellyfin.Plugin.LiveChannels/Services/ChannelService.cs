@@ -25,12 +25,6 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// </remarks>
 public partial class ChannelService
 {
-    private static readonly BaseItemKind[] PlayableKinds = { BaseItemKind.Movie, BaseItemKind.Episode, BaseItemKind.MusicVideo };
-
-    // The same kinds plus loose Video items, which is what Jellyfin types home videos as. Used when a channel
-    // opts in to home videos; a Movies/Shows library has no Video-kind items, so this is a no-op for them.
-    private static readonly BaseItemKind[] PlayableKindsWithHomeVideos = { BaseItemKind.Movie, BaseItemKind.Episode, BaseItemKind.MusicVideo, BaseItemKind.Video };
-
     private readonly ILibraryManager _libraryManager;
     private readonly IMediaSourceManager _mediaSourceManager;
     private readonly ISubtitleEncoder _subtitleEncoder;

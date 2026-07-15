@@ -6,6 +6,7 @@ using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.LiveChannels.Models;
+using Jellyfin.Plugin.LiveChannels.Utilities;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
@@ -66,7 +67,9 @@ public partial class ChannelService
             MinOfficialRating = src.MinOfficialRating,
             MaxOfficialRating = src.MaxOfficialRating,
             IncludeUnrated = src.IncludeUnrated,
-            KidsRatingThreshold = src.KidsRatingThreshold,
+            RatingBlocks = src.RatingBlocks,
+            TransitionWindowMinutes = src.TransitionWindowMinutes,
+            Category = src.Category,
             Years = src.Years,
             MinCommunityRating = src.MinCommunityRating,
             MinCriticRating = src.MinCriticRating,
@@ -74,6 +77,8 @@ public partial class ChannelService
             People = src.People,
             EpisodesPerBlock = src.EpisodesPerBlock,
             KeepMultiPartTogether = src.KeepMultiPartTogether,
+            IncludeEpisodes = src.IncludeEpisodes,
+            IncludeMovies = src.IncludeMovies,
             IncludeSpecials = src.IncludeSpecials,
             Shuffle = src.Shuffle,
             LoopMode = src.LoopMode,
@@ -90,13 +95,12 @@ public partial class ChannelService
     // to their episodes, and the loop builder caps each series to one block per loop.
     private IReadOnlyList<ProgramEntry> ResolvePopularPrograms(Channel channel)
     {
-        var ratings = new RatingFilter(
-            ResolveRatingScore(channel.MinOfficialRating),
-            ResolveRatingScore(channel.MaxOfficialRating),
-            channel.IncludeUnrated);
-        var kidsScore = ResolveRatingScore(channel.KidsRatingThreshold);
+        // Rating windows drive the population: a candidate is kept when some window admits it, so the top titles
+        // selected are valid for the rating (and a time-of-day channel still has content for every daypart, which
+        // the daypart schedule then filters per window). A single all-day band collapses to a plain rating cap.
+        var ratingBlocks = ResolveRatingBlocks(channel);
         var years = new YearFilter(channel.Years);
-        var kinds = PlayableKinds;
+        var kinds = BuildKinds(channel);
         // The Popular channel has no library sources, so studios and people are resolved across every library.
         var studios = BuildStudioSet(channel.Studios);
         var seriesStudios = studios.Count > 0 ? BuildSeriesStudioMap(Array.Empty<Guid>()) : new Dictionary<Guid, HashSet<string>>();
@@ -118,7 +122,7 @@ public partial class ChannelService
             var ids = new List<Guid>();
             foreach (var item in found)
             {
-                if (!ratings.Allows(item))
+                if (!RatingSchedule.AllowedByAnyWindow(ratingBlocks, item.InheritedParentalRatingValue))
                 {
                     continue;
                 }
@@ -132,17 +136,23 @@ public partial class ChannelService
 
         // Movies (25): 15 most-recently-played, 5 most-recently-added, 5 random from the top community-rated.
         // SelectBuckets de-duplicates across buckets and fills each in order; buckets do not backfill each other.
-        var movieIds = SelectBuckets(
-            (Ids(RecentlyPlayedMovies(users, MovieWatched * 4)), MovieWatched),
-            (Ids(Recent(BaseItemKind.Movie, MovieRecent * 4)), MovieRecent),
-            (SeededShuffle(Ids(TopRated(BaseItemKind.Movie, MovieRatedPool)), seed + ":mvr"), MovieRandomRated));
+        // Skipped entirely when the channel does not include movies.
+        var movieIds = channel.IncludeMovies
+            ? SelectBuckets(
+                (Ids(RecentlyPlayedMovies(users, MovieWatched * 4)), MovieWatched),
+                (Ids(Recent(BaseItemKind.Movie, MovieRecent * 4)), MovieRecent),
+                (SeededShuffle(Ids(TopRated(BaseItemKind.Movie, MovieRatedPool)), seed + ":mvr"), MovieRandomRated))
+            : new List<Guid>();
 
         // Shows (10): 6 most-recently-played series, 2 series whose episodes were just added, 2 random from the top
         // rated. The recently-played series are found by walking the newest-played episodes until 6 distinct series.
-        var seriesIds = SelectBuckets(
-            (Ids(RecentlyPlayedSeries(users, SeriesWatched * 4)), SeriesWatched),
-            (Ids(RecentEpisodeSeries(SeriesRecentEpisode * 4)), SeriesRecentEpisode),
-            (SeededShuffle(Ids(TopRated(BaseItemKind.Series, SeriesRatedPool)), seed + ":svr"), SeriesRandomRated));
+        // Skipped when the channel includes neither episodes nor specials.
+        var seriesIds = channel.IncludeEpisodes || channel.IncludeSpecials
+            ? SelectBuckets(
+                (Ids(RecentlyPlayedSeries(users, SeriesWatched * 4)), SeriesWatched),
+                (Ids(RecentEpisodeSeries(SeriesRecentEpisode * 4)), SeriesRecentEpisode),
+                (SeededShuffle(Ids(TopRated(BaseItemKind.Series, SeriesRatedPool)), seed + ":svr"), SeriesRandomRated))
+            : new List<Guid>();
 
         var items = new Dictionary<Guid, BaseItem>();
         foreach (var id in movieIds)
@@ -164,13 +174,17 @@ public partial class ChannelService
         var entries = new List<ProgramEntry>();
         foreach (var item in items.Values)
         {
-            if (!channel.IncludeSpecials && item is Episode ep && ep.ParentIndexNumber == 0)
+            if (item is Episode ep)
             {
-                continue;
+                var special = ep.ParentIndexNumber == 0;
+                if (special ? !channel.IncludeSpecials : !channel.IncludeEpisodes)
+                {
+                    continue;
+                }
             }
 
             // Episodes inherit their series' rating, but re-check so the cap holds for any odd outlier.
-            if (!ratings.Allows(item))
+            if (!RatingSchedule.AllowedByAnyWindow(ratingBlocks, item.InheritedParentalRatingValue))
             {
                 continue;
             }
@@ -186,7 +200,7 @@ public partial class ChannelService
                 continue;
             }
 
-            var entry = ToEntry(item, kidsScore, SafeGetMediaStreams(item.Id));
+            var entry = ToEntry(item, SafeGetMediaStreams(item.Id));
             if (entry is not null)
             {
                 entries.Add(entry);

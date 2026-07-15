@@ -15,6 +15,34 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 // ChannelService: resolving a channel's configured sources into the ordered, probed program loop.
 public partial class ChannelService
 {
+    // The item kinds a channel includes, from its Content Types toggles. Episodes are queried when either regular
+    // episodes or specials are wanted; the season-0 split between them is applied per item during the build.
+    private static BaseItemKind[] BuildKinds(Channel channel)
+    {
+        var kinds = new List<BaseItemKind>(4);
+        if (channel.IncludeMovies)
+        {
+            kinds.Add(BaseItemKind.Movie);
+        }
+
+        if (channel.IncludeEpisodes || channel.IncludeSpecials)
+        {
+            kinds.Add(BaseItemKind.Episode);
+        }
+
+        if (channel.IncludeMusicVideos)
+        {
+            kinds.Add(BaseItemKind.MusicVideo);
+        }
+
+        if (channel.IncludeHomeVideos)
+        {
+            kinds.Add(BaseItemKind.Video);
+        }
+
+        return kinds.ToArray();
+    }
+
     // Reads an item's media streams once, returning an empty list (never throwing) when they cannot be read, so
     // the guide-refresh build can probe every item's metadata with a single query per item and tolerate gaps.
     private IReadOnlyList<MediaStream> SafeGetMediaStreams(Guid itemId)
@@ -106,9 +134,13 @@ public partial class ChannelService
         var ratings = HasTimeOfDayRating(ratingBlocks)
             ? new RatingFilter(null, null, true)
             : EffectiveSingleBandFilter(ratingBlocks);
-        var kidsScore = ResolveRatingScore(channel.KidsRatingThreshold);
         var years = new YearFilter(channel.Years);
-        var kinds = channel.IncludeHomeVideos ? PlayableKindsWithHomeVideos : PlayableKinds;
+        var kinds = BuildKinds(channel);
+        if (kinds.Length == 0)
+        {
+            // No content types are enabled, so nothing can air. Return empty rather than risk an unfiltered query.
+            return Array.Empty<ProgramEntry>();
+        }
 
         var byId = new Dictionary<Guid, BaseItem>();
         var libraryIds = new List<Guid>();
@@ -152,9 +184,13 @@ public partial class ChannelService
         var entries = new List<ProgramEntry>();
         foreach (var item in byId.Values)
         {
-            if (!channel.IncludeSpecials && item is Episode ep && ep.ParentIndexNumber == 0)
+            if (item is Episode ep)
             {
-                continue;
+                var special = ep.ParentIndexNumber == 0;
+                if (special ? !channel.IncludeSpecials : !channel.IncludeEpisodes)
+                {
+                    continue;
+                }
             }
 
             // Cheap per-item gates first, so a filtered item never pays the media read below. Year, rating floors,
@@ -177,7 +213,7 @@ public partial class ChannelService
                 continue;
             }
 
-            var entry = ToEntry(item, kidsScore, streams);
+            var entry = ToEntry(item, streams);
             if (entry is not null)
             {
                 entries.Add(entry);
@@ -452,7 +488,7 @@ public partial class ChannelService
         return allowed;
     }
 
-    private ProgramEntry? ToEntry(BaseItem? item, int? kidsScore, IReadOnlyList<MediaStream> streams)
+    private ProgramEntry? ToEntry(BaseItem? item, IReadOnlyList<MediaStream> streams)
     {
         if (item is null)
         {
@@ -473,11 +509,6 @@ public partial class ChannelService
         var seriesName = asEpisode?.SeriesName;
         var title = !string.IsNullOrWhiteSpace(seriesName) ? seriesName + " - " + rawName : rawName;
         var seriesId = asEpisode is not null && asEpisode.SeriesId != Guid.Empty ? asEpisode.SeriesId : (Guid?)null;
-
-        // Kids when the item carries a rating that ranks at or below the channel's threshold. Movie straight
-        // from the item kind, so a movie library tags its programs as movies in the guide.
-        var ratingValue = item.InheritedParentalRatingValue;
-        var isKids = kidsScore is not null && ratingValue is not null && ratingValue.Value <= kidsScore.Value;
 
         // Probe the media metadata the live stream needs to choose its decode pipeline and burn-in track, once,
         // here at refresh, from the streams already read. The stream pipeline reads these off the cached entry and
@@ -502,7 +533,6 @@ public partial class ChannelService
             SeasonNumber = asEpisode?.ParentIndexNumber,
             EpisodeNumber = asEpisode?.IndexNumber,
             IsMovie = item.GetBaseItemKind() == BaseItemKind.Movie,
-            IsKids = isKids,
             SeriesId = seriesId,
             SeriesName = seriesName,
             RawName = rawName,

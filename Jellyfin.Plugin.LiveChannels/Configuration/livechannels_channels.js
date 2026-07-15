@@ -840,10 +840,8 @@ export default function (view) {
                 return '<option value="' + Shared.escapeHtml(r.Name) + '">' + Shared.escapeHtml(r.Name) + '</option>';
             }).join('');
             ratingOptions = opts;
-            el('kidsRating').innerHTML = '<option value="">None</option>' + opts;
         }).catch(function () {
             ratingOptions = '';
-            el('kidsRating').innerHTML = '<option value="">None</option>';
         });
     }
 
@@ -905,7 +903,7 @@ export default function (view) {
     }
 
     function newRatingBlock() {
-        return { MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 };
+        return { MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, IsKids: false, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 };
     }
 
     // Existing channels store a single band in the legacy fields; show it as one all-day block so it stays visible
@@ -948,6 +946,8 @@ export default function (view) {
                 '<select class="lc-block-max jpk-selector-dropdown"><option value="">No limit</option>' + ratingOptions + '</select></div>' +
             '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
                 '<input type="checkbox" is="emby-checkbox" class="lc-block-unrated" /><span class="checkboxLabel">Include unrated</span></label></div>' +
+            '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
+                '<input type="checkbox" is="emby-checkbox" class="lc-block-kids" /><span class="checkboxLabel">Tag as kids</span></label></div>' +
             '<div class="selectContainer"><label class="selectLabel">Period</label>' +
                 '<select class="lc-block-period jpk-selector-dropdown"><option value="AllDay">All day</option><option value="Custom">Custom</option></select></div>' +
             '<div class="lc-block-times">' +
@@ -958,6 +958,7 @@ export default function (view) {
         var min = card.querySelector('.lc-block-min');
         var max = card.querySelector('.lc-block-max');
         var unrated = card.querySelector('.lc-block-unrated');
+        var kids = card.querySelector('.lc-block-kids');
         var period = card.querySelector('.lc-block-period');
         var times = card.querySelector('.lc-block-times');
         var start = card.querySelector('.lc-block-start');
@@ -966,6 +967,7 @@ export default function (view) {
         min.value = block.MinOfficialRating || '';
         max.value = block.MaxOfficialRating || '';
         unrated.checked = block.IncludeUnrated !== false;
+        kids.checked = block.IsKids === true;
         period.value = block.Period || 'AllDay';
         start.value = minutesToTime(block.StartMinutes || 0);
         end.value = minutesToTime(block.EndMinutes || 0);
@@ -976,6 +978,7 @@ export default function (view) {
         min.addEventListener('change', function () { coerceBand(min, max, 'min'); block.MinOfficialRating = min.value; block.MaxOfficialRating = max.value; });
         max.addEventListener('change', function () { coerceBand(min, max, 'max'); block.MinOfficialRating = min.value; block.MaxOfficialRating = max.value; });
         unrated.addEventListener('change', function () { block.IncludeUnrated = unrated.checked; });
+        kids.addEventListener('change', function () { block.IsKids = kids.checked; });
         period.addEventListener('change', function () { block.Period = period.value; syncTimes(); });
         start.addEventListener('change', function () { block.StartMinutes = timeToMinutes(start.value); });
         end.addEventListener('change', function () { block.EndMinutes = timeToMinutes(end.value); });
@@ -1016,7 +1019,7 @@ export default function (view) {
         ch.RatingBlocks = migrateRatingBlocks(ch);
         el('transitionWindow').value = ch.TransitionWindowMinutes || '';
         renderRatingBlocks();
-        el('kidsRating').value = ch.KidsRatingThreshold || '';
+        el('category').value = ch.Category || 'None';
         el('years').value = yearsToText(ch.Years);
         el('minCommunityRating').value = ch.MinCommunityRating || '';
         el('minCriticRating').value = ch.MinCriticRating || '';
@@ -1024,7 +1027,10 @@ export default function (view) {
         peoplePicker.setValue((ch.People || []).map(function (p) { return { key: p.Id, label: p.Name }; }));
         el('episodesPerBlock').value = ch.EpisodesPerBlock || 1;
         el('keepMultiPart').checked = ch.KeepMultiPartTogether !== false;
+        el('includeEpisodes').checked = ch.IncludeEpisodes !== false;
+        el('includeMovies').checked = ch.IncludeMovies !== false;
         el('includeSpecials').checked = !!ch.IncludeSpecials;
+        el('includeMusicVideos').checked = ch.IncludeMusicVideos !== false;
         el('includeHomeVideos').checked = !!ch.IncludeHomeVideos;
         el('loopMode').value = ch.LoopMode || (ch.Shuffle === false ? 'Alphabetical' : 'Shuffle');
         el('episodeOrder').value = ch.ShuffleEpisodes ? 'random' : 'air';
@@ -1054,7 +1060,7 @@ export default function (view) {
         ch.MinOfficialRating = '';
         ch.MaxOfficialRating = '';
         ch.IncludeUnrated = true;
-        ch.KidsRatingThreshold = el('kidsRating').value;
+        ch.Category = el('category').value;
         ch.Years = parseYears(el('years').value);
         var minCommunity = parseFloat(el('minCommunityRating').value);
         ch.MinCommunityRating = isNaN(minCommunity) ? 0 : Math.min(10, Math.max(0, minCommunity));
@@ -1064,7 +1070,10 @@ export default function (view) {
         ch.People = peoplePicker ? peoplePicker.getValue().map(function (p) { return { Id: p.key, Name: p.label }; }) : (ch.People || []);
         ch.EpisodesPerBlock = Math.max(1, parseInt(el('episodesPerBlock').value, 10) || 1);
         ch.KeepMultiPartTogether = el('keepMultiPart').checked;
+        ch.IncludeEpisodes = el('includeEpisodes').checked;
+        ch.IncludeMovies = el('includeMovies').checked;
         ch.IncludeSpecials = el('includeSpecials').checked;
+        ch.IncludeMusicVideos = el('includeMusicVideos').checked;
         ch.IncludeHomeVideos = el('includeHomeVideos').checked;
         ch.LoopMode = el('loopMode').value;
         ch.Shuffle = ch.LoopMode === 'Shuffle';
@@ -1231,9 +1240,9 @@ export default function (view) {
         channels.push({
             Id: newId(), Name: '', Number: nextNumber(), LogoData: '', LogoContentType: '',
             LogoStyle: 'Number', LogoSymbol: '', LogoShowName: true,
-            Sources: [], AudioLanguage: '', RatingBlocks: [], TransitionWindowMinutes: 0, MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, KidsRatingThreshold: 'G',
+            Sources: [], AudioLanguage: '', RatingBlocks: [], TransitionWindowMinutes: 0, MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, Category: 'None',
             EpisodesPerBlock: 1, KeepMultiPartTogether: true,
-            IncludeSpecials: false, IncludeHomeVideos: false, Shuffle: true, LoopMode: 'Shuffle', ShuffleEpisodes: false,
+            IncludeEpisodes: true, IncludeMovies: true, IncludeSpecials: false, IncludeMusicVideos: true, IncludeHomeVideos: false, Shuffle: true, LoopMode: 'Shuffle', ShuffleEpisodes: false,
             FavorKind: 'None', FavorStrength: 'Moderate', SubtitleBurnIn: 'Never', Enabled: true
         });
         currentIndex = channels.length - 1;

@@ -52,7 +52,6 @@ public class PluginConfiguration : BasePluginConfiguration
         Shuffle = true,
         ShuffleEpisodes = false,
         EpisodesPerBlock = 4,
-        IncludeUnrated = true,
-        KidsRatingThreshold = "G"
+        IncludeUnrated = true
     };
 }

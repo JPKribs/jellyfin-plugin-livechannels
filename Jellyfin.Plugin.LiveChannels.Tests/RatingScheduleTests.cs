@@ -153,6 +153,29 @@ public class RatingScheduleTests
         Assert.Equal(Pg, RatingSchedule.WindowForStart(blocks, 12 * 60, 120).Max); // 12:00, no boundary in [12:00,14:00] -> PG
     }
 
+    // MARK: AllowedByAnyWindow -- the union used to build a capped population (e.g. the Popular channel)
+
+    [Fact]
+    public void AllowedByAnyWindow_NoBlocksAllowsEverything()
+        => Assert.True(RatingSchedule.AllowedByAnyWindow(Array.Empty<ResolvedRatingBlock>(), R));
+
+    [Fact]
+    public void AllowedByAnyWindow_SingleAllDayBandIsStrict()
+    {
+        var blocks = new[] { AllDay(new RatingWindow(null, Pg, true)) };
+        Assert.True(RatingSchedule.AllowedByAnyWindow(blocks, Pg));   // within the band
+        Assert.False(RatingSchedule.AllowedByAnyWindow(blocks, R));   // above the cap, no window admits it
+    }
+
+    [Fact]
+    public void AllowedByAnyWindow_TimeOfDayIsTheUnionAcrossWindows()
+    {
+        // Daytime up to PG, night up to R. An R item is admitted (the night window), a PG item always.
+        var blocks = PgDayRNightBlocks();
+        Assert.True(RatingSchedule.AllowedByAnyWindow(blocks, R));    // valid for the night window
+        Assert.True(RatingSchedule.AllowedByAnyWindow(blocks, Pg));   // valid for both
+    }
+
     private static ResolvedRatingBlock AllDay(RatingWindow window)
         => new(window, AllDay: true, StartMinutes: 0, EndMinutes: 0);
 

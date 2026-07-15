@@ -151,6 +151,46 @@ public static class RatingSchedule
         return window;
     }
 
+    /// <summary>
+    /// Whether a parental score is allowed by the effective window at some point in the day (the union across the
+    /// day's windows), so a capped population can be built that still has content for every window. A single
+    /// all-day band collapses to that band; no blocks means unrestricted.
+    /// </summary>
+    /// <param name="blocks">The resolved rating blocks.</param>
+    /// <param name="parentalScore">The item's parental score, or <c>null</c> when unrated.</param>
+    /// <returns><c>true</c> when some window admits the score.</returns>
+    public static bool AllowedByAnyWindow(IReadOnlyList<ResolvedRatingBlock> blocks, int? parentalScore)
+    {
+        ArgumentNullException.ThrowIfNull(blocks);
+        if (blocks.Count == 0)
+        {
+            return true;
+        }
+
+        // The effective window is piecewise-constant with breakpoints at block edges, so sampling minute 0 and each
+        // edge covers every distinct window across the day.
+        if (EffectiveWindow(blocks, 0).Allows(parentalScore))
+        {
+            return true;
+        }
+
+        foreach (var block in blocks)
+        {
+            if (block.AllDay)
+            {
+                continue;
+            }
+
+            if (EffectiveWindow(blocks, block.StartMinutes).Allows(parentalScore)
+                || EffectiveWindow(blocks, block.EndMinutes).Allows(parentalScore))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static int Wrap(int minute)
     {
         var m = minute % MinutesPerDay;

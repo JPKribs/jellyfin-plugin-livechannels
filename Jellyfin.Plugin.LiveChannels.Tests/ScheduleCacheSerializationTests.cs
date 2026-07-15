@@ -26,7 +26,6 @@ public class ScheduleCacheSerializationTests
             SeasonNumber = 1,
             EpisodeNumber = 1,
             IsMovie = false,
-            IsKids = false,
             SeriesId = Guid.NewGuid(),
             SeriesName = "American Dad!",
             RawName = "Pilot",
@@ -61,7 +60,6 @@ public class ScheduleCacheSerializationTests
         Assert.Equal(original.SeasonNumber, entry.SeasonNumber);
         Assert.Equal(original.EpisodeNumber, entry.EpisodeNumber);
         Assert.Equal(original.IsMovie, entry.IsMovie);
-        Assert.Equal(original.IsKids, entry.IsKids);
         Assert.Equal(original.SeriesId, entry.SeriesId);
         Assert.Equal(original.SeriesName, entry.SeriesName);
         Assert.Equal(original.RawName, entry.RawName);

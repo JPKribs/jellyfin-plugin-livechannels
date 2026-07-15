@@ -41,6 +41,29 @@ public partial class ChannelService
     /// <returns><c>true</c> when the channel has a time-of-day rating block.</returns>
     internal bool IsTimeOfDayChannel(Channel channel) => HasTimeOfDayRating(ResolveRatingBlocks(channel));
 
+    /// <summary>
+    /// Whether a kids-tagged rating block is active at the given UTC instant (in the server's local time), so the
+    /// guide can tag the program airing then as kids content.
+    /// </summary>
+    /// <param name="channel">The channel.</param>
+    /// <param name="utc">The program's UTC start.</param>
+    /// <returns><c>true</c> when a kids block covers that time.</returns>
+    internal bool KidsActiveAt(Channel channel, DateTime utc)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        var local = TimeZoneInfo.ConvertTimeFromUtc(utc, TimeZoneInfo.Local);
+        var minute = (local.Hour * 60) + local.Minute;
+        foreach (var block in channel.EffectiveRatingBlocks())
+        {
+            if (block.IsKids && block.ActiveAt(minute))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     // Resolves a channel's configured rating blocks (rating names) into numeric windows for schedule maths.
     internal List<ResolvedRatingBlock> ResolveRatingBlocks(Channel channel)
     {

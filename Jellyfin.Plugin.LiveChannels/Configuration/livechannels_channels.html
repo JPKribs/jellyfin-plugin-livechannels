@@ -207,9 +207,13 @@
                                 </div>
                                 <h3 class="jpk-subsection-title">Guide</h3>
                                 <div class="selectContainer">
-                                    <label class="selectLabel" for="kidsRating">Kids rating</label>
-                                    <select id="kidsRating" class="jpk-selector-dropdown"></select>
-                                    <div class="fieldDescription">Programs that carry a rating at or below this are flagged as Kids in the guide.</div>
+                                    <label class="selectLabel" for="category">Category</label>
+                                    <select id="category" class="jpk-selector-dropdown">
+                                        <option value="None">None</option>
+                                        <option value="News">News</option>
+                                        <option value="Sports">Sports</option>
+                                    </select>
+                                    <div class="fieldDescription">Tags the whole channel in the guide. Kids is set per rating block, and the movie tag is applied automatically while a movie is playing.</div>
                                 </div>
                                 <h3 class="jpk-subsection-title">Episodes</h3>
                                 <div class="inputContainer">
@@ -231,20 +235,39 @@
                                     </label>
                                     <div class="fieldDescription">Keeps two part episodes together across a block boundary.</div>
                                 </div>
-                                <h3 class="jpk-subsection-title">Extra content</h3>
+                                <h3 class="jpk-subsection-title">Content Types</h3>
+                                <div class="checkboxContainer">
+                                    <label class="emby-checkbox-label">
+                                        <input type="checkbox" is="emby-checkbox" id="includeEpisodes" />
+                                        <span class="checkboxLabel">Episodes</span>
+                                    </label>
+                                </div>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input type="checkbox" is="emby-checkbox" id="includeMovies" />
+                                        <span class="checkboxLabel">Movies</span>
+                                    </label>
+                                    <div class="fieldDescription">Tagged in the guide while a movie is playing.</div>
+                                </div>
                                 <div class="checkboxContainer checkboxContainer-withDescription">
                                     <label class="emby-checkbox-label">
                                         <input type="checkbox" is="emby-checkbox" id="includeSpecials" />
-                                        <span class="checkboxLabel">Include specials</span>
+                                        <span class="checkboxLabel">Specials</span>
                                     </label>
-                                    <div class="fieldDescription">Includes specials found in series.</div>
+                                    <div class="fieldDescription">Season 0 specials.</div>
+                                </div>
+                                <div class="checkboxContainer">
+                                    <label class="emby-checkbox-label">
+                                        <input type="checkbox" is="emby-checkbox" id="includeMusicVideos" />
+                                        <span class="checkboxLabel">Music videos</span>
+                                    </label>
                                 </div>
                                 <div class="checkboxContainer checkboxContainer-withDescription">
                                     <label class="emby-checkbox-label">
                                         <input type="checkbox" is="emby-checkbox" id="includeHomeVideos" />
-                                        <span class="checkboxLabel">Include home videos</span>
+                                        <span class="checkboxLabel">Home videos</span>
                                     </label>
-                                    <div class="fieldDescription">Enables Home and unassigned videos.</div>
+                                    <div class="fieldDescription">Home and unassigned videos.</div>
                                 </div>
                                 <h3 class="jpk-subsection-title">Loop</h3>
                                 <div class="selectContainer">

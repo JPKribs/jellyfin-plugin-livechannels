@@ -54,8 +54,8 @@ public class Channel
     /// <summary>Gets or sets the transition window in minutes applied before every daypart boundary. An item starting within this many minutes of a boundary must satisfy the combined (lowest min, lowest max) constraint of the current and upcoming windows, so it stays compliant as it bleeds across. 0 disables the buffer. Set it at least as long as the channel's longest content.</summary>
     public int TransitionWindowMinutes { get; set; }
 
-    /// <summary>Gets or sets the rating at or below which a program is flagged as Kids in the guide (e.g. <c>G</c>). The program must still carry a rating to be flagged.</summary>
-    public string KidsRatingThreshold { get; set; } = "G";
+    /// <summary>Gets or sets the channel-wide guide category tag (news or sports). Kids is set per rating block, and the movie tag is applied automatically while a movie is playing.</summary>
+    public ChannelCategory Category { get; set; } = ChannelCategory.None;
 
     /// <summary>Gets or sets the production years a channel is limited to (e.g. <c>1990</c>…<c>1999</c> for a 90s channel). Empty means every year is allowed; otherwise only items whose production year is in this set are included, and items with no production year are dropped. For episodes this is the episode's own year, so a long-running series contributes only the episodes from the chosen years.</summary>
     public List<int> Years { get; set; } = new();
@@ -78,8 +78,17 @@ public class Channel
     /// <summary>Gets or sets a value indicating whether multi-part episodes (e.g. "… (1)" / "… (2)") are kept adjacent and never split across a block boundary.</summary>
     public bool KeepMultiPartTogether { get; set; } = true;
 
+    /// <summary>Gets or sets a value indicating whether regular episodes (season 1 and up) are included. On by default.</summary>
+    public bool IncludeEpisodes { get; set; } = true;
+
+    /// <summary>Gets or sets a value indicating whether movies are included. On by default.</summary>
+    public bool IncludeMovies { get; set; } = true;
+
     /// <summary>Gets or sets a value indicating whether specials (season 0) are included.</summary>
     public bool IncludeSpecials { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether music videos are included. On by default.</summary>
+    public bool IncludeMusicVideos { get; set; } = true;
 
     /// <summary>Gets or sets a value indicating whether home videos (loose <c>Video</c> items, as found in a Home Videos library) are included. Off by default so existing channels are unchanged; a Movies or Shows library has no such items.</summary>
     public bool IncludeHomeVideos { get; set; }
