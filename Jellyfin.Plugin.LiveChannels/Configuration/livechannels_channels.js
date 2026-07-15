@@ -25,7 +25,9 @@ export default function (view) {
     var logoData = '';
     var logoContentType = '';
     var libraries = [];        // [{ Id, Name }]
+    var collections = [];      // [{ Id, Name }] box sets, for collection sources
     var ratings = [];          // [{ Name, Value }]
+    var ratingOptions = '';    // cached <option> html for the per-block rating selects
     var studioPicker = null;   // channel-level studio typeahead picker (created once)
     var peoplePicker = null;   // channel-level person typeahead picker (created once)
     var audioLangPicker = null;// channel-level audio-language single-select typeahead (created once)
@@ -481,8 +483,13 @@ export default function (view) {
         return lib ? lib.Name : 'Library';
     }
 
+    function collectionName(id) {
+        var col = collections.filter(function (c) { return c.Id === id; })[0];
+        return col ? col.Name : '';
+    }
+
     function newSource(libraryId) {
-        return { LibraryId: libraryId || '', LibraryName: libraryId ? libraryName(libraryId) : '', Genres: [], ExcludeGenres: [], MatchAllGenres: false, Selection: 'AllContent', ItemIds: [], __items: [] };
+        return { Kind: 'Library', LibraryId: libraryId || '', LibraryName: libraryId ? libraryName(libraryId) : '', CollectionId: '', CollectionName: '', Genres: [], ExcludeGenres: [], MatchAllGenres: false, Selection: 'AllContent', ItemIds: [], __items: [] };
     }
 
     function renderSources() {
@@ -506,32 +513,52 @@ export default function (view) {
         card.innerHTML =
             '<div class="lc-source-header">' +
                 '<span class="material-icons lc-source-icon" aria-hidden="true">folder</span>' +
-                '<select class="lc-source-library jpk-selector-dropdown"></select>' +
-                '<button is="emby-button" type="button" class="lc-remove raised jpk-button-destructive jpk-button-small"><span>Remove</span></button>' +
+                '<span class="lc-source-title">Library source</span>' +
+                '<button is="emby-button" type="button" class="lc-remove raised jpk-icon-btn jpk-button-destructive" title="Remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
             '</div>' +
-            '<div class="inputContainer">' +
-                '<label class="inputLabel">Selection</label>' +
-                '<select class="lc-selection jpk-selector-dropdown">' +
-                    '<option value="AllContent">All content</option>' +
-                    '<option value="Genre">Genre</option>' +
-                    '<option value="Whitelist">Whitelist</option>' +
-                    '<option value="Blacklist">Blacklist</option>' +
+            '<div class="selectContainer">' +
+                '<label class="selectLabel">Source type</label>' +
+                '<select class="lc-source-kind jpk-selector-dropdown">' +
+                    '<option value="Library">Library</option>' +
+                    '<option value="Collection">Collection</option>' +
                 '</select>' +
             '</div>' +
-            '<div class="filterSection lc-genres">' +
-                '<h3 class="jpk-subsection-title">Genres</h3>' +
-                '<label class="inputLabel">Include</label>' +
-                '<div class="lc-genre-mount"></div>' +
-                '<label class="emby-checkbox-label lc-matchall-label"><input type="checkbox" is="emby-checkbox" class="lc-matchall" /><span class="checkboxLabel">Match all genres</span></label>' +
-                '<div class="fieldDescription">On, content must carry every included genre. Off, any one is enough.</div>' +
-                '<label class="inputLabel">Exclude</label>' +
-                '<div class="lc-exclude-mount"></div>' +
-                '<div class="fieldDescription">Content carrying any of these genres is never included, even if it matched above. Series level genres apply to their episodes.</div>' +
+            '<div class="lc-library-fields">' +
+                '<div class="selectContainer">' +
+                    '<label class="selectLabel">Library</label>' +
+                    '<select class="lc-source-library jpk-selector-dropdown"></select>' +
+                '</div>' +
+                '<div class="inputContainer">' +
+                    '<label class="inputLabel">Selection</label>' +
+                    '<select class="lc-selection jpk-selector-dropdown">' +
+                        '<option value="AllContent">All content</option>' +
+                        '<option value="Genre">Genre</option>' +
+                        '<option value="Whitelist">Whitelist</option>' +
+                        '<option value="Blacklist">Blacklist</option>' +
+                    '</select>' +
+                '</div>' +
+                '<div class="filterSection lc-genres">' +
+                    '<h3 class="jpk-subsection-title">Genres</h3>' +
+                    '<label class="inputLabel">Include</label>' +
+                    '<div class="lc-genre-mount"></div>' +
+                    '<label class="emby-checkbox-label lc-matchall-label"><input type="checkbox" is="emby-checkbox" class="lc-matchall" /><span class="checkboxLabel">Match all genres</span></label>' +
+                    '<div class="fieldDescription">On, content must carry every included genre. Off, any one is enough.</div>' +
+                    '<label class="inputLabel">Exclude</label>' +
+                    '<div class="lc-exclude-mount"></div>' +
+                    '<div class="fieldDescription">Content carrying any of these genres is never included, even if it matched above. Series level genres apply to their episodes.</div>' +
+                '</div>' +
+                '<div class="filterSection lc-items">' +
+                    '<input is="emby-input" type="text" class="lc-search" placeholder="Search this library…" />' +
+                    '<div class="jpk-table-item-count lc-count"></div>' +
+                    '<div class="jpk-table-body lc-list"></div>' +
+                '</div>' +
             '</div>' +
-            '<div class="filterSection lc-items">' +
-                '<input is="emby-input" type="text" class="lc-search" placeholder="Search this library…" />' +
-                '<div class="jpk-table-item-count lc-count"></div>' +
-                '<div class="jpk-table-body lc-list"></div>' +
+            '<div class="lc-collection-fields">' +
+                '<div class="selectContainer">' +
+                    '<label class="selectLabel">Collection</label>' +
+                    '<select class="lc-source-collection jpk-selector-dropdown"></select>' +
+                '</div>' +
+                '<div class="fieldDescription">Every item in this collection, with series expanded to their episodes. The channel-wide filters still apply.</div>' +
             '</div>';
 
         // Library selector — the source's library is chosen here, inside the card.
@@ -725,6 +752,38 @@ export default function (view) {
         selection.addEventListener('change', applySelection);
         applySelection();
 
+        // Source type (library vs collection): toggles which fields show, plus the card's icon and title.
+        var kindSelect = card.querySelector('.lc-source-kind');
+        kindSelect.value = source.Kind || 'Library';
+        var libraryFields = card.querySelector('.lc-library-fields');
+        var collectionFields = card.querySelector('.lc-collection-fields');
+        var titleEl = card.querySelector('.lc-source-title');
+        var iconEl = card.querySelector('.lc-source-icon');
+
+        var colSelect = card.querySelector('.lc-source-collection');
+        colSelect.innerHTML = '<option value="">Select a collection…</option>' + collections.map(function (c) {
+            return '<option value="' + Shared.escapeHtml(c.Id) + '">' + Shared.escapeHtml(c.Name) + '</option>';
+        }).join('');
+        colSelect.value = source.CollectionId || '';
+        colSelect.addEventListener('change', function () {
+            source.CollectionId = colSelect.value;
+            source.CollectionName = collectionName(source.CollectionId);
+        });
+
+        function applyKind() {
+            var isCollection = kindSelect.value === 'Collection';
+            libraryFields.style.display = isCollection ? 'none' : '';
+            collectionFields.style.display = isCollection ? '' : 'none';
+            titleEl.textContent = isCollection ? 'Collection source' : 'Library source';
+            iconEl.textContent = isCollection ? 'video_library' : 'folder';
+            if (!isCollection) applySelection();
+        }
+        kindSelect.addEventListener('change', function () {
+            source.Kind = kindSelect.value;
+            applyKind();
+        });
+        applyKind();
+
         // Changing the library resets this source's library-specific selections and reloads its data.
         libSelect.addEventListener('change', function () {
             source.LibraryId = libSelect.value;
@@ -751,6 +810,15 @@ export default function (view) {
         }).catch(function () { /* leave empty */ });
     }
 
+    function loadCollections() {
+        return ApiClient.getItems(ApiClient.getCurrentUserId(), {
+            IncludeItemTypes: 'BoxSet', Recursive: true, SortBy: 'SortName', SortOrder: 'Ascending', EnableTotalRecordCount: false
+        }).then(function (res) {
+            collections = ((res && res.Items) || []).map(function (c) { return { Id: c.Id, Name: c.Name }; })
+                .filter(function (c) { return c.Id; });
+        }).catch(function () { collections = []; });
+    }
+
     function loadCardGenres(libraryId) {
         if (!libraryId) return Promise.resolve([]);
         return ApiClient.getJSON(ApiClient.getUrl('Genres', { ParentId: libraryId, IncludeItemTypes: 'Movie,Series,Episode', Recursive: true, Limit: 500, SortBy: 'SortName' }))
@@ -771,12 +839,10 @@ export default function (view) {
             var opts = ratings.map(function (r) {
                 return '<option value="' + Shared.escapeHtml(r.Name) + '">' + Shared.escapeHtml(r.Name) + '</option>';
             }).join('');
-            el('minRating').innerHTML = '<option value="">No minimum</option>' + opts;
-            el('maxRating').innerHTML = '<option value="">No limit</option>' + opts;
+            ratingOptions = opts;
             el('kidsRating').innerHTML = '<option value="">None</option>' + opts;
         }).catch(function () {
-            el('minRating').innerHTML = '<option value="">No minimum</option>';
-            el('maxRating').innerHTML = '<option value="">No limit</option>';
+            ratingOptions = '';
             el('kidsRating').innerHTML = '<option value="">None</option>';
         });
     }
@@ -817,17 +883,115 @@ export default function (view) {
         return null;
     }
 
-    function enforceRatingBand(changed) {
-        var min = el('minRating').value, max = el('maxRating').value;
-        var mn = ratingValue(min), mx = ratingValue(max);
+    function coerceBand(minEl, maxEl, changed) {
+        var mn = ratingValue(minEl.value), mx = ratingValue(maxEl.value);
         if (mn === null || mx === null || mn <= mx) return;
-        if (changed === 'min') { el('maxRating').value = min; } else { el('minRating').value = max; }
+        if (changed === 'min') { maxEl.value = minEl.value; } else { minEl.value = maxEl.value; }
+    }
+
+    // MARK: Rating blocks (time-of-day rating limits)
+
+    function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+    function minutesToTime(m) {
+        m = ((m % 1440) + 1440) % 1440;
+        return pad2(Math.floor(m / 60)) + ':' + pad2(m % 60);
+    }
+
+    function timeToMinutes(text) {
+        var parts = (text || '').split(':');
+        var mins = ((parseInt(parts[0], 10) || 0) * 60) + (parseInt(parts[1], 10) || 0);
+        return ((mins % 1440) + 1440) % 1440;
+    }
+
+    function newRatingBlock() {
+        return { MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 };
+    }
+
+    // Existing channels store a single band in the legacy fields; show it as one all-day block so it stays visible
+    // and editable. A channel already using blocks keeps them.
+    function migrateRatingBlocks(ch) {
+        if (ch.RatingBlocks && ch.RatingBlocks.length) return ch.RatingBlocks;
+        if (ch.MinOfficialRating || ch.MaxOfficialRating || ch.IncludeUnrated === false) {
+            return [{ MinOfficialRating: ch.MinOfficialRating || '', MaxOfficialRating: ch.MaxOfficialRating || '', IncludeUnrated: ch.IncludeUnrated !== false, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 }];
+        }
+        return [];
+    }
+
+    function renderRatingBlocks() {
+        var host = el('ratingBlocks');
+        host.innerHTML = '';
+        var ch = channels[currentIndex];
+        if (!ch) return;
+        ch.RatingBlocks = ch.RatingBlocks || [];
+        if (!ch.RatingBlocks.length) {
+            host.innerHTML = '<div class="jpk-empty-section">No rating blocks. Any rating airs at any time. Add one to restrict by rating or time of day.</div>';
+            return;
+        }
+        ch.RatingBlocks.forEach(function (block, index) { host.appendChild(buildBlockCard(block, index)); });
+    }
+
+    // Builds one rating-block card: min/max rating, include-unrated, and an all-day/custom period whose start and
+    // end times are revealed only for a custom window. Fields mutate the block object live, like the source cards.
+    function buildBlockCard(block, index) {
+        var card = document.createElement('div');
+        card.className = 'lc-ratingblock';
+        card.innerHTML =
+            '<div class="lc-source-header">' +
+                '<span class="material-icons lc-source-icon" aria-hidden="true">schedule</span>' +
+                '<span class="lc-block-title">Rating block</span>' +
+                '<button is="emby-button" type="button" class="lc-remove raised jpk-icon-btn jpk-button-destructive" title="Remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
+            '</div>' +
+            '<div class="selectContainer"><label class="selectLabel">Minimum age rating</label>' +
+                '<select class="lc-block-min jpk-selector-dropdown"><option value="">No minimum</option>' + ratingOptions + '</select></div>' +
+            '<div class="selectContainer"><label class="selectLabel">Maximum age rating</label>' +
+                '<select class="lc-block-max jpk-selector-dropdown"><option value="">No limit</option>' + ratingOptions + '</select></div>' +
+            '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
+                '<input type="checkbox" is="emby-checkbox" class="lc-block-unrated" /><span class="checkboxLabel">Include unrated</span></label></div>' +
+            '<div class="selectContainer"><label class="selectLabel">Period</label>' +
+                '<select class="lc-block-period jpk-selector-dropdown"><option value="AllDay">All day</option><option value="Custom">Custom</option></select></div>' +
+            '<div class="lc-block-times">' +
+                '<div class="inputContainer"><label class="inputLabel">Start time</label><input is="emby-input" type="time" class="lc-block-start" /></div>' +
+                '<div class="inputContainer"><label class="inputLabel">End time</label><input is="emby-input" type="time" class="lc-block-end" /></div>' +
+            '</div>';
+
+        var min = card.querySelector('.lc-block-min');
+        var max = card.querySelector('.lc-block-max');
+        var unrated = card.querySelector('.lc-block-unrated');
+        var period = card.querySelector('.lc-block-period');
+        var times = card.querySelector('.lc-block-times');
+        var start = card.querySelector('.lc-block-start');
+        var end = card.querySelector('.lc-block-end');
+
+        min.value = block.MinOfficialRating || '';
+        max.value = block.MaxOfficialRating || '';
+        unrated.checked = block.IncludeUnrated !== false;
+        period.value = block.Period || 'AllDay';
+        start.value = minutesToTime(block.StartMinutes || 0);
+        end.value = minutesToTime(block.EndMinutes || 0);
+
+        function syncTimes() { times.classList.toggle('hidden', period.value !== 'Custom'); }
+        syncTimes();
+
+        min.addEventListener('change', function () { coerceBand(min, max, 'min'); block.MinOfficialRating = min.value; block.MaxOfficialRating = max.value; });
+        max.addEventListener('change', function () { coerceBand(min, max, 'max'); block.MinOfficialRating = min.value; block.MaxOfficialRating = max.value; });
+        unrated.addEventListener('change', function () { block.IncludeUnrated = unrated.checked; });
+        period.addEventListener('change', function () { block.Period = period.value; syncTimes(); });
+        start.addEventListener('change', function () { block.StartMinutes = timeToMinutes(start.value); });
+        end.addEventListener('change', function () { block.EndMinutes = timeToMinutes(end.value); });
+
+        card.querySelector('.lc-remove').addEventListener('click', function () {
+            channels[currentIndex].RatingBlocks.splice(index, 1);
+            renderRatingBlocks();
+        });
+
+        return card;
     }
 
     // Favouring only applies to a shuffled loop, so the favor block is nested under Shuffle and revealed with it;
     // the strength is nested under the type and revealed once a type other than None is chosen.
     function updateFavorControls() {
-        el('favorGroup').classList.toggle('hidden', !el('shuffle').checked);
+        el('favorGroup').classList.toggle('hidden', el('loopMode').value !== 'Shuffle');
         el('favorStrengthGroup').classList.toggle('hidden', el('favorKind').value === 'None');
     }
 
@@ -849,9 +1013,9 @@ export default function (view) {
         renderSources();
 
         audioLangPicker.setValue(ch.AudioLanguage ? [{ key: ch.AudioLanguage, label: cultureLabel(ch.AudioLanguage) }] : []);
-        el('minRating').value = ch.MinOfficialRating || '';
-        el('maxRating').value = ch.MaxOfficialRating || '';
-        el('includeUnrated').checked = ch.IncludeUnrated !== false;
+        ch.RatingBlocks = migrateRatingBlocks(ch);
+        el('transitionWindow').value = ch.TransitionWindowMinutes || '';
+        renderRatingBlocks();
         el('kidsRating').value = ch.KidsRatingThreshold || '';
         el('years').value = yearsToText(ch.Years);
         el('minCommunityRating').value = ch.MinCommunityRating || '';
@@ -862,7 +1026,7 @@ export default function (view) {
         el('keepMultiPart').checked = ch.KeepMultiPartTogether !== false;
         el('includeSpecials').checked = !!ch.IncludeSpecials;
         el('includeHomeVideos').checked = !!ch.IncludeHomeVideos;
-        el('shuffle').checked = ch.Shuffle !== false;
+        el('loopMode').value = ch.LoopMode || (ch.Shuffle === false ? 'Alphabetical' : 'Shuffle');
         el('episodeOrder').value = ch.ShuffleEpisodes ? 'random' : 'air';
         el('favorKind').value = ch.FavorKind || 'None';
         el('favorStrength').value = ch.FavorStrength || 'Moderate';
@@ -883,9 +1047,13 @@ export default function (view) {
         ch.LogoShowName = el('logoShowName').checked;
         var audioLang = audioLangPicker ? audioLangPicker.getValue() : [];
         ch.AudioLanguage = audioLang.length ? audioLang[0].key : '';
-        ch.MinOfficialRating = el('minRating').value;
-        ch.MaxOfficialRating = el('maxRating').value;
-        ch.IncludeUnrated = el('includeUnrated').checked;
+        // Rating blocks are mutated live on the cards; the transition window is read here. The blocks are now
+        // authoritative, so neutralise the legacy single-band fields to keep them from double-applying.
+        ch.RatingBlocks = ch.RatingBlocks || [];
+        ch.TransitionWindowMinutes = Math.max(0, parseInt(el('transitionWindow').value, 10) || 0);
+        ch.MinOfficialRating = '';
+        ch.MaxOfficialRating = '';
+        ch.IncludeUnrated = true;
         ch.KidsRatingThreshold = el('kidsRating').value;
         ch.Years = parseYears(el('years').value);
         var minCommunity = parseFloat(el('minCommunityRating').value);
@@ -898,14 +1066,18 @@ export default function (view) {
         ch.KeepMultiPartTogether = el('keepMultiPart').checked;
         ch.IncludeSpecials = el('includeSpecials').checked;
         ch.IncludeHomeVideos = el('includeHomeVideos').checked;
-        ch.Shuffle = el('shuffle').checked;
+        ch.LoopMode = el('loopMode').value;
+        ch.Shuffle = ch.LoopMode === 'Shuffle';
         ch.ShuffleEpisodes = el('episodeOrder').value === 'random';
         ch.FavorKind = el('favorKind').value;
         ch.FavorStrength = el('favorStrength').value;
         ch.SubtitleBurnIn = el('subtitleBurnIn').value;
         ch.Enabled = currentEnabled;
-        // Sources are mutated live by the cards; keep LibraryName in sync.
-        ch.Sources.forEach(function (s) { s.LibraryName = libraryName(s.LibraryId); });
+        // Sources are mutated live by the cards; keep the display names in sync.
+        ch.Sources.forEach(function (s) {
+            if (s.Kind === 'Collection') { s.CollectionName = collectionName(s.CollectionId); }
+            else { s.LibraryName = libraryName(s.LibraryId); }
+        });
     }
 
     // MARK: Persistence
@@ -916,7 +1088,7 @@ export default function (view) {
         readEditorInto(ch);
         if (!ch.Name) { Shared.setStatus('channelStatus', 'A name is required.', true); return; }
         if (!ch.Sources.length) { Shared.setStatus('channelStatus', 'Add at least one library source.', true); return; }
-        if (ch.Sources.some(function (s) { return !s.LibraryId; })) { Shared.setStatus('channelStatus', 'Pick a library for each source.', true); return; }
+        if (ch.Sources.some(function (s) { return s.Kind === 'Collection' ? !s.CollectionId : !s.LibraryId; })) { Shared.setStatus('channelStatus', 'Pick a library or collection for each source.', true); return; }
         persist('channelStatus', 'Saved.', 'Save failed.');
     }
 
@@ -1059,9 +1231,9 @@ export default function (view) {
         channels.push({
             Id: newId(), Name: '', Number: nextNumber(), LogoData: '', LogoContentType: '',
             LogoStyle: 'Number', LogoSymbol: '', LogoShowName: true,
-            Sources: [], AudioLanguage: '', MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, KidsRatingThreshold: 'G',
+            Sources: [], AudioLanguage: '', RatingBlocks: [], TransitionWindowMinutes: 0, MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, KidsRatingThreshold: 'G',
             EpisodesPerBlock: 1, KeepMultiPartTogether: true,
-            IncludeSpecials: false, IncludeHomeVideos: false, Shuffle: true, ShuffleEpisodes: false,
+            IncludeSpecials: false, IncludeHomeVideos: false, Shuffle: true, LoopMode: 'Shuffle', ShuffleEpisodes: false,
             FavorKind: 'None', FavorStrength: 'Moderate', SubtitleBurnIn: 'Never', Enabled: true
         });
         currentIndex = channels.length - 1;
@@ -1125,9 +1297,14 @@ export default function (view) {
         el('logoSymbol').addEventListener('input', function () { if (!logoData) renderLogoPreview(); });
         el('logoShowName').addEventListener('change', function () { if (!logoData) renderLogoPreview(); });
         el('favorKind').addEventListener('change', updateFavorControls);
-        el('shuffle').addEventListener('change', updateFavorControls);
-        el('minRating').addEventListener('change', function () { enforceRatingBand('min'); });
-        el('maxRating').addEventListener('change', function () { enforceRatingBand('max'); });
+        el('loopMode').addEventListener('change', updateFavorControls);
+        el('addRatingBlock').addEventListener('click', function () {
+            var ch = channels[currentIndex];
+            if (!ch) return;
+            ch.RatingBlocks = ch.RatingBlocks || [];
+            ch.RatingBlocks.push(newRatingBlock());
+            renderRatingBlocks();
+        });
         el('btnNewChannel').addEventListener('click', addChannel);
         el('btnDeleteChannel').addEventListener('click', deleteChannel);
         el('btnExportChannels').addEventListener('click', exportChannels);
@@ -1145,7 +1322,7 @@ export default function (view) {
     }
 
     function load() {
-        Promise.all([loadLibraries(), loadRatings(), loadLanguages()]).then(function () {
+        Promise.all([loadLibraries(), loadCollections(), loadRatings(), loadLanguages()]).then(function () {
             return Shared.getConfig();
         }).then(function (cfg) {
             config = cfg;

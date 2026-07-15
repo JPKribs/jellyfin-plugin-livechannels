@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.9.7"
+version: "10.11.10.0"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -16,7 +16,8 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   developer:
-  - Bump Base to 2026.7.12
-  - Use ActivityLogger from Base 2026.7.12
-  - Standardize activity log messages
-  - Move Stress test and Reset into a Troubleshooting section
+  - Add time of day rating blocks with a transition window
+  - Add shuffle, alphabetical, and chronological loop order
+  - Use collections as channel sources
+  - Organize channel and popular settings into sub sections
+  - Split ChannelService into focused files

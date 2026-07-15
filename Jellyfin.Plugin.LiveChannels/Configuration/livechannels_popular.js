@@ -59,7 +59,7 @@ export default function (view) {
         el('popularEpisodeOrder').value = pc.ShuffleEpisodes ? 'random' : 'air';
         el('popularKeepMultiPart').checked = pc.KeepMultiPartTogether !== false;
         el('popularIncludeSpecials').checked = !!pc.IncludeSpecials;
-        el('popularShuffle').checked = pc.Shuffle !== false;
+        el('popularLoopMode').value = pc.LoopMode || (pc.Shuffle === false ? 'Alphabetical' : 'Shuffle');
     }
 
     // Triggers Jellyfin's built-in guide refresh so a save propagates to Live TV right away.
@@ -90,7 +90,8 @@ export default function (view) {
             pc.ShuffleEpisodes = el('popularEpisodeOrder').value === 'random';
             pc.KeepMultiPartTogether = el('popularKeepMultiPart').checked;
             pc.IncludeSpecials = el('popularIncludeSpecials').checked;
-            pc.Shuffle = el('popularShuffle').checked;
+            pc.LoopMode = el('popularLoopMode').value;
+            pc.Shuffle = pc.LoopMode === 'Shuffle';
             fresh.PopularChannel = pc;
             return Shared.saveConfig(fresh);
         }).then(function () {

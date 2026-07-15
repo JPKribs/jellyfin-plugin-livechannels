@@ -27,6 +27,7 @@ public static class ConfigurationValidator
         foreach (var channel in config.Channels)
         {
             ValidateLogo(channel);
+            ValidateRatingBlocks(channel);
 
             // Serving rules apply only to enabled channels; a disabled channel can be an incomplete draft.
             if (!channel.Enabled)
@@ -48,6 +49,34 @@ public static class ConfigurationValidator
             if (!numbers.Add(channel.Number))
             {
                 throw new ArgumentException("Duplicate channel number: " + channel.Number);
+            }
+        }
+    }
+
+    // A custom rating-block window must sit within the day and cover a real span; an all-day block ignores its
+    // times. A zero-length custom window would silently never apply, so it is rejected as a mistake.
+    private static void ValidateRatingBlocks(Channel channel)
+    {
+        if (channel.RatingBlocks is null)
+        {
+            return;
+        }
+
+        foreach (var block in channel.RatingBlocks)
+        {
+            if (block.Period != RatingBlockPeriod.Custom)
+            {
+                continue;
+            }
+
+            if (block.StartMinutes is < 0 or > 1439 || block.EndMinutes is < 0 or > 1439)
+            {
+                throw new ArgumentException("Rating block time must be between 00:00 and 23:59: " + Describe(channel));
+            }
+
+            if (block.StartMinutes == block.EndMinutes)
+            {
+                throw new ArgumentException("Custom rating block needs different start and end times: " + Describe(channel));
             }
         }
     }

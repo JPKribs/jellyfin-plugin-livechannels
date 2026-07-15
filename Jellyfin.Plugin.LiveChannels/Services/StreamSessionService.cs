@@ -80,7 +80,10 @@ public class StreamSessionService
             return;
         }
 
-        var (index, offset) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow, ScheduleCalculator.Epoch);
+        // A channel whose rating limits vary by time of day is scheduled per daypart, not as a free-running loop,
+        // so it always takes the per-item path: the concat path plays one fixed playlist order and cannot reorder
+        // content by the clock. Ordinary channels are unaffected.
+        var timeOfDay = _channels.IsTimeOfDayChannel(channel);
 
         // The seamless concat pipeline must software-decode (hardware decoders fail on the per-item resolution
         // changes a playlist produces), and software decoding can't keep up with >1080p sources (e.g. 4K HEVC).
@@ -102,18 +105,33 @@ public class StreamSessionService
         // already per-item for another reason (burn-in, a >1080p item, or a GPU-upload encoder).
         var alreadyPerItem = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never || highRes || usesHwUpload;
         var hasHdr = !alreadyPerItem && programs.Any(p => p.IsHdr);
-        var perItem = alreadyPerItem || hasHdr;
+        var perItem = alreadyPerItem || hasHdr || timeOfDay;
         var uniform = programs.Count > 0 && programs[0].SourceHeight > 0 && programs.All(p => p.SourceHeight == programs[0].SourceHeight);
-        LogEncodePlan(channel, programs.Count, index, perItem, uniform, hasHdr);
 
-        if (perItem)
+        if (!perItem)
         {
-            await StreamPerItemLoopAsync(ffmpeg, channel, programs, index, offset, output, cancellationToken, stats).ConfigureAwait(false);
+            var (concatIndex, _) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow, ScheduleCalculator.Epoch);
+            LogEncodePlan(channel, programs.Count, concatIndex, perItem, uniform, hasHdr);
+            await StreamConcatAsync(ffmpeg, channel, programs, output, cancellationToken, stats).ConfigureAwait(false);
+            return;
+        }
+
+        IStreamSchedule schedule;
+        int planIndex;
+        if (timeOfDay)
+        {
+            schedule = new DaypartStreamSchedule(_channels, channel, programs);
+            planIndex = 0;
         }
         else
         {
-            await StreamConcatAsync(ffmpeg, channel, programs, output, cancellationToken, stats).ConfigureAwait(false);
+            var (index, offset) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow, ScheduleCalculator.Epoch);
+            schedule = new LoopStreamSchedule(programs, index, offset);
+            planIndex = index;
         }
+
+        LogEncodePlan(channel, programs.Count, planIndex, perItem, uniform, hasHdr);
+        await StreamPerItemLoopAsync(ffmpeg, channel, schedule, output, cancellationToken, stats).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -339,9 +357,8 @@ public class StreamSessionService
     // path cannot provide. Every item cold-starts at its boundary; the wall clock a cold start costs is healed by
     // that producer's deficit burst, and the viewer rides the tune-in head start well behind the live edge, so
     // boundaries stay invisible without ever running two encoders at once.
-    private async Task StreamPerItemLoopAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, int index, TimeSpan offset, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
+    private async Task StreamPerItemLoopAsync(string ffmpeg, Channel channel, IStreamSchedule schedule, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
     {
-        var startOffset = offset;
         var consecutiveFailures = 0;
         var itemsPlayed = 0;
         var timeline = TimeSpan.Zero;
@@ -355,10 +372,11 @@ public class StreamSessionService
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            var program = programs[index];
-            _logger.LogDebug("Channel {Name}: item {Index}/{Count} \"{Title}\"", channel.Name, index + 1, programs.Count, program.Title);
+            var step = schedule.Current;
+            var program = step.Program;
+            _logger.LogDebug("Channel {Name}: item {Number} \"{Title}\"", channel.Name, itemsPlayed + 1, program.Title);
 
-            var (streamed, endSeconds) = await StreamItemAsync(ffmpeg, channel, program, startOffset, timeline, output, BurstNow, cancellationToken, stats).ConfigureAwait(false);
+            var (streamed, endSeconds) = await StreamItemAsync(ffmpeg, channel, program, step.Offset, timeline, output, BurstNow, cancellationToken, stats, step.DurationLimit).ConfigureAwait(false);
 
             if (streamed)
             {
@@ -367,12 +385,12 @@ public class StreamSessionService
                 // the seam, so scheduled anchoring only injects a PTS jump the size of the metadata drift --
                 // a jump hardware video decoders (VLCKit in Swiftfin) can stall on. The schedule advance is
                 // the fallback when no usable reading exists, so skipped items still can't desync the offset.
-                var played = TimeSpan.FromTicks(program.DurationTicks) - startOffset;
+                var played = step.DurationLimit ?? (TimeSpan.FromTicks(program.DurationTicks) - step.Offset);
                 timeline = NextTimeline(timeline, played > TimeSpan.Zero ? played : TimeSpan.Zero, endSeconds);
                 itemsPlayed++;
                 consecutiveFailures = 0;
             }
-            else if (++consecutiveFailures >= Math.Min(programs.Count, MaxConsecutiveFailures))
+            else if (++consecutiveFailures >= Math.Min(schedule.PoolCount, MaxConsecutiveFailures))
             {
                 // Enough distinct items failed in a row that the storage is almost certainly the problem, not
                 // the items: show standby now instead of walking a huge playlist (the cap keeps a 500-item
@@ -394,8 +412,7 @@ public class StreamSessionService
                 }
             }
 
-            startOffset = TimeSpan.Zero;
-            index = (index + 1) % programs.Count;
+            schedule.Advance();
         }
 
         _logger.LogDebug("Channel {Name}: stream ended after {Items} item(s)", channel.Name, itemsPlayed);
@@ -457,7 +474,7 @@ public class StreamSessionService
     // hardware attempt burned wall clock that retry should recover). Returns whether the item produced output
     // and the producer's final output timestamp in seconds (-1 when none was parsed), which the loop chains
     // the next item's timeline from.
-    private async Task<(bool Streamed, double EndSeconds)> StreamItemAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan timeline, Stream output, Func<double> burstSeconds, CancellationToken cancellationToken, SessionStats? stats = null)
+    private async Task<(bool Streamed, double EndSeconds)> StreamItemAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan timeline, Stream output, Func<double> burstSeconds, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan? durationLimit = null)
     {
         if (string.IsNullOrEmpty(program.Path) || !File.Exists(program.Path))
         {
@@ -483,7 +500,7 @@ public class StreamSessionService
             }
         }
 
-        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds());
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit);
         var (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
@@ -491,7 +508,7 @@ public class StreamSessionService
         if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
-            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds());
+            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit);
             (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
         }
 
@@ -500,7 +517,7 @@ public class StreamSessionService
         // the next guide refresh schedules the real length -- closing the timestamp gap (or overlap) at this
         // item's seam. The exit gate matters: a producer that crashed mid-item produced output too, and its
         // partial length must not be recorded as truth.
-        if (total > 0 && exitCode == 0 && offset == TimeSpan.Zero && !cancellationToken.IsCancellationRequested)
+        if (total > 0 && exitCode == 0 && offset == TimeSpan.Zero && durationLimit is null && !cancellationToken.IsCancellationRequested)
         {
             var observed = ObservedItemSeconds(lastOut, timeline);
             var metadataSeconds = TimeSpan.FromTicks(program.DurationTicks).TotalSeconds;

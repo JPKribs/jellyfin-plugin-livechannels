@@ -64,6 +64,7 @@
                                 <span class="jpk-collapsible-icon">&#9660;</span>
                             </button>
                             <div id="sectionChannel" class="jpk-collapsible-content collapsed">
+                                <h3 class="jpk-subsection-title">Identity</h3>
                                 <div class="inputContainer">
                                     <label for="channelName">Name</label>
                                     <input is="emby-input" type="text" id="channelName" autocomplete="off" />
@@ -72,6 +73,7 @@
                                     <label for="channelNumber">Channel number</label>
                                     <input is="emby-input" type="number" id="channelNumber" min="1" step="1" autocomplete="off" />
                                 </div>
+                                <h3 class="jpk-subsection-title">Logo</h3>
                                 <div class="inputContainer">
                                     <label>Logo</label>
                                     <div class="jpk-selector">
@@ -134,28 +136,24 @@
                                 <span class="jpk-collapsible-icon">&#9660;</span>
                             </button>
                             <div id="sectionFilters" class="jpk-collapsible-content collapsed">
+                                <h3 class="jpk-subsection-title">Age ratings</h3>
                                 <div class="selectContainer">
-                                    <label class="selectLabel" for="minRating">Minimum age rating</label>
-                                    <select id="minRating" class="jpk-selector-dropdown"></select>
-                                    <div class="fieldDescription">Content at or above this rating. Pair it with a maximum to make an adults only or single band channel.</div>
-                                </div>
-                                <div class="selectContainer">
-                                    <label class="selectLabel" for="maxRating">Maximum age rating</label>
-                                    <select id="maxRating" class="jpk-selector-dropdown"></select>
-                                    <div class="fieldDescription">Content at or below this rating.</div>
-                                </div>
-                                <div class="checkboxContainer checkboxContainer-withDescription">
-                                    <label class="emby-checkbox-label">
-                                        <input type="checkbox" is="emby-checkbox" id="includeUnrated" />
-                                        <span class="checkboxLabel">Include unrated</span>
-                                    </label>
-                                    <div class="fieldDescription">On by default, so unrated content is always allowed regardless of the rating bounds. Turn it off to drop items that carry no rating.</div>
+                                    <label class="selectLabel">Rating limits</label>
+                                    <div id="ratingBlocks" class="jpk-source-list"></div>
+                                    <div class="jpk-selector-actions jpk-section-spacer">
+                                        <button is="emby-button" type="button" id="addRatingBlock" class="raised jpk-icon-btn jpk-button-submit" title="Add a rating block">
+                                            <span class="material-icons" aria-hidden="true">add</span><span>Add rating block</span>
+                                        </button>
+                                    </div>
+                                    <div class="fieldDescription">Limit which ratings air, optionally by time of day. No blocks means anything airs. On overlap, the lowest min and max win.</div>
                                 </div>
                                 <div class="inputContainer">
-                                    <label for="years">Years</label>
-                                    <input is="emby-input" type="text" id="years" autocomplete="off" placeholder="Any year" />
-                                    <div class="fieldDescription">Limit the channel to certain production years, like a 90s channel. Enter years and ranges separated by commas, for example 1990-1999 or 1985, 1999, 2003. Leave blank to allow every year. For shows this uses each episode's year, so a long-running series contributes only its episodes from those years.</div>
+                                    <label for="transitionWindow">Transition window (minutes)</label>
+                                    <input is="emby-input" type="number" id="transitionWindow" min="0" step="1" autocomplete="off" placeholder="0" />
+                                    <div class="fieldDescription">Items starting this close to a window change must fit both windows. Set it to your longest content. 0 turns it off.</div>
                                 </div>
+
+                                <h3 class="jpk-subsection-title">Review scores</h3>
                                 <div class="inputContainer">
                                     <label for="minCommunityRating">Minimum community rating</label>
                                     <input is="emby-input" type="number" id="minCommunityRating" min="0" max="10" step="0.1" autocomplete="off" />
@@ -165,6 +163,13 @@
                                     <label for="minCriticRating">Minimum critic rating</label>
                                     <input is="emby-input" type="number" id="minCriticRating" min="0" max="100" step="1" autocomplete="off" />
                                     <div class="fieldDescription">Only include content with at least this critic score, on a 0 to 100 scale. 0 allows everything. Content with no critic rating is dropped.</div>
+                                </div>
+
+                                <h3 class="jpk-subsection-title">Metadata</h3>
+                                <div class="inputContainer">
+                                    <label for="years">Years</label>
+                                    <input is="emby-input" type="text" id="years" autocomplete="off" placeholder="Any year" />
+                                    <div class="fieldDescription">Limit the channel to certain production years, like a 90s channel. Enter years and ranges separated by commas, for example 1990-1999 or 1985, 1999, 2003. Leave blank to allow every year. For shows this uses each episode's year, so a long-running series contributes only its episodes from those years.</div>
                                 </div>
                                 <div class="selectContainer">
                                     <label class="selectLabel">Studios</label>
@@ -185,6 +190,7 @@
                                 <span class="jpk-collapsible-icon">&#9660;</span>
                             </button>
                             <div id="sectionSettings" class="jpk-collapsible-content collapsed">
+                                <h3 class="jpk-subsection-title">Playback</h3>
                                 <div class="selectContainer">
                                     <label class="selectLabel" for="subtitleBurnIn">Subtitle burn in</label>
                                     <select id="subtitleBurnIn" class="jpk-selector-dropdown">
@@ -199,11 +205,13 @@
                                     <div class="lc-audiolang-mount"></div>
                                     <div class="fieldDescription">Only include content whose default audio track is this language, like English only or Japanese only. Allow all languages keeps everything.</div>
                                 </div>
+                                <h3 class="jpk-subsection-title">Guide</h3>
                                 <div class="selectContainer">
                                     <label class="selectLabel" for="kidsRating">Kids rating</label>
                                     <select id="kidsRating" class="jpk-selector-dropdown"></select>
                                     <div class="fieldDescription">Programs that carry a rating at or below this are flagged as Kids in the guide.</div>
                                 </div>
+                                <h3 class="jpk-subsection-title">Episodes</h3>
                                 <div class="inputContainer">
                                     <label for="episodesPerBlock">Episodes per block</label>
                                     <input is="emby-input" type="number" id="episodesPerBlock" min="1" step="1" autocomplete="off" />
@@ -223,6 +231,7 @@
                                     </label>
                                     <div class="fieldDescription">Keeps two part episodes together across a block boundary.</div>
                                 </div>
+                                <h3 class="jpk-subsection-title">Extra content</h3>
                                 <div class="checkboxContainer checkboxContainer-withDescription">
                                     <label class="emby-checkbox-label">
                                         <input type="checkbox" is="emby-checkbox" id="includeSpecials" />
@@ -237,12 +246,15 @@
                                     </label>
                                     <div class="fieldDescription">Enables Home and unassigned videos.</div>
                                 </div>
-                                <div class="checkboxContainer checkboxContainer-withDescription">
-                                    <label class="emby-checkbox-label">
-                                        <input type="checkbox" is="emby-checkbox" id="shuffle" />
-                                        <span class="checkboxLabel">Shuffle the channel</span>
-                                    </label>
-                                    <div class="fieldDescription">Disable to play everything alphabetically.</div>
+                                <h3 class="jpk-subsection-title">Loop</h3>
+                                <div class="selectContainer">
+                                    <label class="selectLabel" for="loopMode">Loop order</label>
+                                    <select id="loopMode" class="jpk-selector-dropdown">
+                                        <option value="Shuffle">Shuffle</option>
+                                        <option value="Alphabetical">Alphabetical</option>
+                                        <option value="Chronological">Chronological</option>
+                                    </select>
+                                    <div class="fieldDescription">How the channel arranges its content. Chronological plays oldest to newest by release date.</div>
                                 </div>
                                 <div id="favorGroup" class="hidden">
                                     <div class="selectContainer">
@@ -307,11 +319,14 @@
         /* Library source cards, modelled on ServerSync's mapping card. Rows, thumbs, fields, subsection
            titles, and buttons all come from the base (jpkribs_shared); this is layout glue only. */
         .jpk-source-list { display: flex; flex-direction: column; margin-top: 8px; }
-        .lc-source { padding-bottom: 1.25em; margin-bottom: 1.25em; border-bottom: 1px solid var(--jpk-border); }
-        .lc-source:last-child { border-bottom: none; margin-bottom: 0.5em; }
+        .lc-source {
+            border: 1px solid var(--jpk-border); border-radius: 8px;
+            padding: 1em 1.25em; margin-bottom: 12px; background: rgba(255, 255, 255, 0.02);
+        }
+        .lc-source:last-child { margin-bottom: 0; }
         .lc-source-header { display: flex; align-items: center; gap: 10px; margin-bottom: 1em; }
         .lc-source-icon { color: rgba(255, 255, 255, 0.45); flex: 0 0 auto; }
-        .lc-source-library { flex: 1; min-width: 0; margin: 0; }
+        .lc-source-library { width: 100%; margin: 0; }
         .lc-matchall-label { display: flex; align-items: center; margin-top: 10px; }
         .lc-filter-header { display: flex; align-items: center; gap: 12px; margin-bottom: 0.6em; }
         .lc-filter-header label { font-weight: 600; white-space: nowrap; margin: 0; }
@@ -319,6 +334,18 @@
         #librarySources .jpk-table-body { max-height: 360px; overflow-y: auto; margin-top: 0.6em; }
         #librarySources .jpk-table-row { cursor: pointer; }
         #librarySources .jpk-table-row.selected { background: rgba(0, 164, 220, 0.12); }
+
+        /* Each rating block is its own bordered container; a lighter empty box suits this nested filter, and the
+           block title pushes Remove to the right like the source library select does. */
+        #ratingBlocks .jpk-empty-section { padding: 20px 24px; font-size: 1em; }
+        .lc-ratingblock {
+            border: 1px solid var(--jpk-border); border-radius: 8px;
+            padding: 1em 1.25em; margin-bottom: 12px; background: rgba(255, 255, 255, 0.02);
+        }
+        .lc-ratingblock:last-child { margin-bottom: 0; }
+        .lc-block-title, .lc-source-title { flex: 1; min-width: 0; font-weight: 600; }
+        .lc-block-times { display: flex; gap: 12px; }
+        .lc-block-times .inputContainer { flex: 1; margin: 0; }
     </style>
 
     <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">

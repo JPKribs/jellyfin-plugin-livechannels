@@ -11,7 +11,7 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// </summary>
 /// <param name="EpisodesPerBlock">Consecutive episodes of a series to play before moving on (minimum 1).</param>
 /// <param name="KeepMultiPartTogether">Keep multi-part episodes adjacent and never split across a block.</param>
-/// <param name="Shuffle">Shuffle block order (deterministically) instead of ordering by name.</param>
+/// <param name="Mode">How block order is arranged: shuffle (deterministically), alphabetical by name, or chronological by date.</param>
 /// <param name="ShuffleEpisodes">Shuffle episodes within a series instead of playing them in air order.</param>
 /// <param name="ChannelId">Channel id, seeding the deterministic shuffle so the guide and stream agree.</param>
 /// <param name="FavorKind">A content type to weight more heavily in the shuffled loop, or <see cref="Models.FavorKind.None"/>.</param>
@@ -22,7 +22,7 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 public readonly record struct ChannelLoopOptions(
     int EpisodesPerBlock,
     bool KeepMultiPartTogether,
-    bool Shuffle,
+    LoopMode Mode,
     bool ShuffleEpisodes,
     string ChannelId,
     FavorKind FavorKind = FavorKind.None,
@@ -103,13 +103,15 @@ public static class ProgramLoopBuilder
             }
         }
 
-        if (!options.Shuffle)
+        if (options.Mode != LoopMode.Shuffle)
         {
-            return blocks
-                .OrderBy(b => b.SortName, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(b => b.Seq)
-                .SelectMany(b => b.Items)
-                .ToList();
+            // Chronological orders blocks by their earliest release/air date; alphabetical (the default non-shuffle
+            // order) by title. Both fall back to name then sequence so the order is stable and series stay in order.
+            var ordered = options.Mode == LoopMode.Chronological
+                ? blocks.OrderBy(BlockDate).ThenBy(b => b.SortName, StringComparer.OrdinalIgnoreCase).ThenBy(b => b.Seq)
+                : blocks.OrderBy(b => b.SortName, StringComparer.OrdinalIgnoreCase).ThenBy(b => b.Seq);
+
+            return ordered.SelectMany(b => b.Items).ToList();
         }
 
         // Each series contributes ONE block per loop, so One Piece and a twelve-episode show get equal footing and
@@ -257,6 +259,23 @@ public static class ProgramLoopBuilder
     {
         var item = block.Items[0];
         return item.SeriesId is not null ? FavorKind.Shows : (item.IsMovie ? FavorKind.Movies : FavorKind.MusicVideos);
+    }
+
+    // A block's chronological key: the earliest release/air date across its items (a production-only year counts as
+    // its 1 January), so undated content sorts last.
+    private static DateTime BlockDate(Block block)
+    {
+        var earliest = DateTime.MaxValue;
+        foreach (var item in block.Items)
+        {
+            var date = item.PremiereDate ?? (item.Year is int year ? new DateTime(year, 1, 1) : (DateTime?)null);
+            if (date is { } value && value < earliest)
+            {
+                earliest = value;
+            }
+        }
+
+        return earliest;
     }
 
     // How many times to inflate the favoured type's slots so it reaches its target share of the loop. Returns 1

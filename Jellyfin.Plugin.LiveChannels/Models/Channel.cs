@@ -39,14 +39,20 @@ public class Channel
     /// <summary>Gets or sets the required default-audio-track language, as a three-letter ISO code (e.g. <c>eng</c>, <c>jpn</c>). Empty means all languages are allowed; otherwise only content whose default audio track is this language is included.</summary>
     public string AudioLanguage { get; set; } = string.Empty;
 
-    /// <summary>Gets or sets the minimum official/parental rating allowed, by name (e.g. <c>TV-MA</c>). Empty means no floor.</summary>
+    /// <summary>Gets or sets the minimum official/parental rating allowed, by name (e.g. <c>TV-MA</c>). Empty means no floor. Legacy single-band field; superseded by <see cref="RatingBlocks"/> and migrated into an all-day block when no blocks are set.</summary>
     public string MinOfficialRating { get; set; } = string.Empty;
 
-    /// <summary>Gets or sets the maximum official/parental rating allowed, by name (e.g. <c>TV-14</c>). Empty means no cap.</summary>
+    /// <summary>Gets or sets the maximum official/parental rating allowed, by name (e.g. <c>TV-14</c>). Empty means no cap. Legacy single-band field; superseded by <see cref="RatingBlocks"/> and migrated into an all-day block when no blocks are set.</summary>
     public string MaxOfficialRating { get; set; } = string.Empty;
 
-    /// <summary>Gets or sets a value indicating whether items with no rating are included. When false, unrated content is dropped; when true (default) unrated content is always allowed regardless of the rating bounds.</summary>
+    /// <summary>Gets or sets a value indicating whether items with no rating are included. When false, unrated content is dropped; when true (default) unrated content is always allowed regardless of the rating bounds. Legacy single-band field; superseded by <see cref="RatingBlock.IncludeUnrated"/>.</summary>
     public bool IncludeUnrated { get; set; } = true;
+
+    /// <summary>Gets or sets the time-of-day rating limits. Empty means every rating is allowed at every time. Each block sets a min/max rating and unrated rule for all day or a custom window; where blocks overlap the lowest min and lowest max win. When empty, the legacy <see cref="MinOfficialRating"/>/<see cref="MaxOfficialRating"/>/<see cref="IncludeUnrated"/> fields are migrated into a single all-day block (see <see cref="EffectiveRatingBlocks"/>).</summary>
+    public List<RatingBlock> RatingBlocks { get; set; } = new();
+
+    /// <summary>Gets or sets the transition window in minutes applied before every daypart boundary. An item starting within this many minutes of a boundary must satisfy the combined (lowest min, lowest max) constraint of the current and upcoming windows, so it stays compliant as it bleeds across. 0 disables the buffer. Set it at least as long as the channel's longest content.</summary>
+    public int TransitionWindowMinutes { get; set; }
 
     /// <summary>Gets or sets the rating at or below which a program is flagged as Kids in the guide (e.g. <c>G</c>). The program must still carry a rating to be flagged.</summary>
     public string KidsRatingThreshold { get; set; } = "G";
@@ -78,8 +84,11 @@ public class Channel
     /// <summary>Gets or sets a value indicating whether home videos (loose <c>Video</c> items, as found in a Home Videos library) are included. Off by default so existing channels are unchanged; a Movies or Shows library has no such items.</summary>
     public bool IncludeHomeVideos { get; set; }
 
-    /// <summary>Gets or sets a value indicating whether the channel's blocks are shuffled (deterministically) rather than ordered by name.</summary>
+    /// <summary>Gets or sets a value indicating whether the channel's blocks are shuffled (deterministically) rather than ordered by name. Legacy flag superseded by <see cref="LoopMode"/>; see <see cref="EffectiveLoopMode"/>.</summary>
     public bool Shuffle { get; set; } = true;
+
+    /// <summary>Gets or sets how the channel arranges its loop: shuffle, alphabetical, or chronological. Supersedes <see cref="Shuffle"/>.</summary>
+    public LoopMode LoopMode { get; set; } = LoopMode.Shuffle;
 
     /// <summary>Gets or sets a value indicating whether episodes within a series are shuffled rather than played in air order.</summary>
     public bool ShuffleEpisodes { get; set; }
@@ -98,4 +107,42 @@ public class Channel
 
     /// <summary>Gets or sets a value indicating whether the channel is served. Disabled channels are absent from Live TV and the guide.</summary>
     public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// The channel's effective loop order, migrating the legacy <see cref="Shuffle"/> flag: a channel saved before
+    /// loop modes existed has <see cref="LoopMode"/> defaulting to <see cref="Models.LoopMode.Shuffle"/>, so when
+    /// that default is in effect but Shuffle is off, the intent was alphabetical.
+    /// </summary>
+    /// <returns>The effective loop mode.</returns>
+    public LoopMode EffectiveLoopMode()
+        => LoopMode == LoopMode.Shuffle && !Shuffle ? LoopMode.Alphabetical : LoopMode;
+
+    /// <summary>
+    /// Returns the channel's rating blocks, migrating the legacy single-band fields into one all-day block when no
+    /// blocks are configured. An empty result means every rating is allowed at every time.
+    /// </summary>
+    /// <returns>The effective rating blocks.</returns>
+    public IReadOnlyList<RatingBlock> EffectiveRatingBlocks()
+    {
+        if (RatingBlocks.Count > 0)
+        {
+            return RatingBlocks;
+        }
+
+        if (!string.IsNullOrEmpty(MinOfficialRating) || !string.IsNullOrEmpty(MaxOfficialRating) || !IncludeUnrated)
+        {
+            return new[]
+            {
+                new RatingBlock
+                {
+                    MinOfficialRating = MinOfficialRating,
+                    MaxOfficialRating = MaxOfficialRating,
+                    IncludeUnrated = IncludeUnrated,
+                    Period = RatingBlockPeriod.AllDay
+                }
+            };
+        }
+
+        return Array.Empty<RatingBlock>();
+    }
 }

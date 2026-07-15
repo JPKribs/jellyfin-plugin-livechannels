@@ -45,6 +45,9 @@ public sealed class ProgramEntry
     /// <summary>Gets the official/parental rating, used for the guide's <c>rating</c>.</summary>
     public string? OfficialRating { get; init; }
 
+    /// <summary>Gets the item's numeric inherited parental score (<c>null</c> when unrated), cached at guide refresh so time-of-day rating blocks can be applied when the schedule is built without re-querying the library.</summary>
+    public int? ParentalRatingValue { get; init; }
+
     /// <summary>Gets the genres, used for the guide's <c>category</c> entries.</summary>
     public IReadOnlyList<string> Genres { get; init; } = Array.Empty<string>();
 

@@ -145,7 +145,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             return Task.FromResult(Enumerable.Empty<ProgramInfo>());
         }
 
-        var schedule = ScheduleCalculator.BuildSchedule(programs, startDateUtc, endDateUtc, ScheduleCalculator.Epoch);
+        var schedule = _channels.BuildTimeline(channel, programs, startDateUtc, endDateUtc);
         var newSince = DateTime.UtcNow.AddDays(-NewWindowDays);
 
         var list = new List<ProgramInfo>(schedule.Count);

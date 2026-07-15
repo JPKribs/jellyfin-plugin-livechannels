@@ -26,10 +26,12 @@
                             <span class="jpk-collapsible-icon">&#9660;</span>
                         </button>
                         <div id="popularSectionChannel" class="jpk-collapsible-content collapsed">
+                            <h3 class="jpk-subsection-title">Identity</h3>
                             <div class="inputContainer">
                                 <label for="popularName">Name</label>
                                 <input is="emby-input" type="text" id="popularName" autocomplete="off" />
                             </div>
+                            <h3 class="jpk-subsection-title">Logo</h3>
                             <div class="inputContainer">
                                 <label for="popularIcon">Icon</label>
                                 <input is="emby-input" type="text" id="popularIcon" autocomplete="off" placeholder="e.g. diversity_1" />
@@ -51,6 +53,7 @@
                             <span class="jpk-collapsible-icon">&#9660;</span>
                         </button>
                         <div id="popularSectionSettings" class="jpk-collapsible-content collapsed">
+                            <h3 class="jpk-subsection-title">Playback</h3>
                             <div class="selectContainer">
                                 <label class="selectLabel" for="popularSubtitle">Subtitle burn in</label>
                                 <select id="popularSubtitle" class="jpk-selector-dropdown">
@@ -60,6 +63,7 @@
                                 </select>
                                 <div class="fieldDescription">Bakes subtitles into the picture for everyone. Forced only burns the forced track, or the full track when the audio is in another language, while Always burns them on everything.</div>
                             </div>
+                            <h3 class="jpk-subsection-title">Age ratings</h3>
                             <div class="selectContainer">
                                 <label class="selectLabel" for="popularMinRating">Minimum age rating</label>
                                 <select id="popularMinRating" class="jpk-selector-dropdown"></select>
@@ -77,11 +81,13 @@
                                 </label>
                                 <div class="fieldDescription">On by default, so unrated content is always allowed regardless of the rating bounds. Turn it off to drop items that carry no rating.</div>
                             </div>
+                            <h3 class="jpk-subsection-title">Guide</h3>
                             <div class="selectContainer">
                                 <label class="selectLabel" for="popularKidsRating">Kids rating</label>
                                 <select id="popularKidsRating" class="jpk-selector-dropdown"></select>
                                 <div class="fieldDescription">Programs that carry a rating at or below this are flagged as Kids in the guide. Movies are flagged as movies automatically.</div>
                             </div>
+                            <h3 class="jpk-subsection-title">Episodes</h3>
                             <div class="inputContainer">
                                 <label for="popularEpisodesPerBlock">Episodes per block</label>
                                 <input is="emby-input" type="number" id="popularEpisodesPerBlock" min="1" step="1" autocomplete="off" />
@@ -101,6 +107,7 @@
                                 </label>
                                 <div class="fieldDescription">Keeps two part episodes together across a block boundary.</div>
                             </div>
+                            <h3 class="jpk-subsection-title">Extra content</h3>
                             <div class="checkboxContainer checkboxContainer-withDescription">
                                 <label class="emby-checkbox-label">
                                     <input type="checkbox" is="emby-checkbox" id="popularIncludeSpecials" />
@@ -108,12 +115,15 @@
                                 </label>
                                 <div class="fieldDescription">Includes specials found in series.</div>
                             </div>
-                            <div class="checkboxContainer checkboxContainer-withDescription">
-                                <label class="emby-checkbox-label">
-                                    <input type="checkbox" is="emby-checkbox" id="popularShuffle" />
-                                    <span class="checkboxLabel">Shuffle the channel</span>
-                                </label>
-                                <div class="fieldDescription">Disable to play everything alphabetically.</div>
+                            <h3 class="jpk-subsection-title">Loop</h3>
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="popularLoopMode">Loop order</label>
+                                <select id="popularLoopMode" class="jpk-selector-dropdown">
+                                    <option value="Shuffle">Shuffle</option>
+                                    <option value="Alphabetical">Alphabetical</option>
+                                    <option value="Chronological">Chronological</option>
+                                </select>
+                                <div class="fieldDescription">How the channel arranges its content. Chronological plays oldest to newest by release date.</div>
                             </div>
                         </div>
                     </div>

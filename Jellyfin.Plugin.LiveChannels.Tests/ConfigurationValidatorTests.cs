@@ -83,4 +83,43 @@ public class ConfigurationValidatorTests
         channel.LogoData = Convert.ToBase64String(new byte[] { 1, 2, 3, 4 });
         ConfigurationValidator.Validate(WithChannels(channel));
     }
+
+    [Fact]
+    public void CustomRatingBlockWithEqualTimes_Throws()
+    {
+        var channel = Ch(1);
+        channel.RatingBlocks.Add(new RatingBlock { Period = RatingBlockPeriod.Custom, StartMinutes = 600, EndMinutes = 600 });
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(WithChannels(channel)));
+    }
+
+    [Fact]
+    public void CustomRatingBlockOutOfRange_Throws()
+    {
+        var channel = Ch(1);
+        channel.RatingBlocks.Add(new RatingBlock { Period = RatingBlockPeriod.Custom, StartMinutes = 0, EndMinutes = 1500 });
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(WithChannels(channel)));
+    }
+
+    [Fact]
+    public void ValidCustomAndAllDayBlocks_DoNotThrow()
+    {
+        var channel = Ch(1);
+        channel.RatingBlocks.Add(new RatingBlock { Period = RatingBlockPeriod.AllDay });
+        channel.RatingBlocks.Add(new RatingBlock { Period = RatingBlockPeriod.Custom, StartMinutes = 22 * 60, EndMinutes = 4 * 60 }); // wrap
+        ConfigurationValidator.Validate(WithChannels(channel));
+    }
+
+    [Fact]
+    public void EffectiveRatingBlocks_MigratesLegacyBandAndDropUnrated()
+    {
+        var legacy = new Channel { MinOfficialRating = "PG", MaxOfficialRating = "TV-14", IncludeUnrated = false };
+        var blocks = legacy.EffectiveRatingBlocks();
+        Assert.Single(blocks);
+        Assert.Equal("PG", blocks[0].MinOfficialRating);
+        Assert.Equal("TV-14", blocks[0].MaxOfficialRating);
+        Assert.False(blocks[0].IncludeUnrated);
+        Assert.Equal(RatingBlockPeriod.AllDay, blocks[0].Period);
+
+        Assert.Empty(new Channel().EffectiveRatingBlocks()); // all defaults -> no restriction
+    }
 }

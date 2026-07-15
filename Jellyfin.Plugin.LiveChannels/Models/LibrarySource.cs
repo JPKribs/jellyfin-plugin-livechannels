@@ -9,11 +9,20 @@ namespace Jellyfin.Plugin.LiveChannels.Models;
 /// </summary>
 public class LibrarySource
 {
-    /// <summary>Gets or sets the library (collection folder) id content is scoped to.</summary>
+    /// <summary>Gets or sets what this source pulls from: a library or a collection.</summary>
+    public SourceKind Kind { get; set; } = SourceKind.Library;
+
+    /// <summary>Gets or sets the library (collection folder) id content is scoped to. Used when <see cref="Kind"/> is <see cref="SourceKind.Library"/>.</summary>
     public string LibraryId { get; set; } = string.Empty;
 
     /// <summary>Gets or sets the library display name, kept for the admin UI.</summary>
     public string LibraryName { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the collection (box set) id. Used when <see cref="Kind"/> is <see cref="SourceKind.Collection"/>.</summary>
+    public string CollectionId { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the collection display name, kept for the admin UI.</summary>
+    public string CollectionName { get; set; } = string.Empty;
 
     /// <summary>Gets or sets the genres the library is filtered by. Empty means no genre filter.</summary>
     public List<string> Genres { get; set; } = new();

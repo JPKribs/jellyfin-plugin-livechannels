@@ -27,8 +27,8 @@ public class LoopBuilderTests
             RawName = rawName
         };
 
-    private static ChannelLoopOptions Opts(int block = 1, bool keepMulti = true, bool shuffle = false, bool shuffleEp = false, string ch = "ch1", FavorKind favor = FavorKind.None, FavorStrength strength = FavorStrength.Moderate)
-        => new ChannelLoopOptions(block, keepMulti, shuffle, shuffleEp, ch, favor, strength);
+    private static ChannelLoopOptions Opts(int block = 1, bool keepMulti = true, LoopMode mode = LoopMode.Alphabetical, bool shuffleEp = false, string ch = "ch1", FavorKind favor = FavorKind.None, FavorStrength strength = FavorStrength.Moderate)
+        => new ChannelLoopOptions(block, keepMulti, mode, shuffleEp, ch, favor, strength);
 
     // Episode numbers of one series, in output order.
     private static List<int> EpisodeOrder(IReadOnlyList<ProgramEntry> loop, Guid seriesId)
@@ -80,7 +80,7 @@ public class LoopBuilderTests
         }
 
         // Block size = series length, shuffled: each series is one block, so its episodes stay contiguous.
-        var loop = ProgramLoopBuilder.Build(items, Opts(block: 4, shuffle: true));
+        var loop = ProgramLoopBuilder.Build(items, Opts(block: 4, mode: LoopMode.Shuffle));
 
         Assert.Equal(8, loop.Count);
         AssertContiguous(loop, a, new[] { 1, 2, 3, 4 });
@@ -97,7 +97,7 @@ public class LoopBuilderTests
         {
             Ep(s, "Show", 1, 1, "The Trap (1)"),
             Ep(s, "Show", 1, 2, "The Trap (2)")
-        }, Opts(block: 1, shuffle: true));
+        }, Opts(block: 1, mode: LoopMode.Shuffle));
 
         Assert.Equal(new[] { 1, 2 }, EpisodeOrder(loop, s).ToArray()); // both parts, in order, adjacent
     }
@@ -113,7 +113,7 @@ public class LoopBuilderTests
             Ep(s, "Show", 1, 1, "The Saga (1)"),
             Ep(s, "Show", 1, 2, "The Saga (2)"),
             Ep(s, "Show", 1, 3, "The Saga (3)")
-        }, Opts(block: 2, shuffle: true));
+        }, Opts(block: 2, mode: LoopMode.Shuffle));
 
         Assert.True(loop.Count <= 2, "a block glued more than a pair together: " + loop.Count);
     }
@@ -141,8 +141,8 @@ public class LoopBuilderTests
         var s = Guid.NewGuid();
         var items = Enumerable.Range(1, 6).Select(i => Ep(s, "Show", 1, i, "e" + i)).ToList();
 
-        var a = ProgramLoopBuilder.Build(items, Opts(block: 2, shuffle: true));
-        var b = ProgramLoopBuilder.Build(items, Opts(block: 2, shuffle: true));
+        var a = ProgramLoopBuilder.Build(items, Opts(block: 2, mode: LoopMode.Shuffle));
+        var b = ProgramLoopBuilder.Build(items, Opts(block: 2, mode: LoopMode.Shuffle));
 
         Assert.Equal(a.Select(e => e.ItemId), b.Select(e => e.ItemId));
     }
@@ -159,7 +159,7 @@ public class LoopBuilderTests
             items.AddRange(Enumerable.Range(1, 20).Select(i => Ep(id, "Show" + s, 1, i, "e" + i)));
         }
 
-        var loop = ProgramLoopBuilder.Build(items, Opts(block: 4, shuffle: true));
+        var loop = ProgramLoopBuilder.Build(items, Opts(block: 4, mode: LoopMode.Shuffle));
 
         Assert.True(MaxRun(loop) <= 4, "a series ran longer than one 4-episode block: " + MaxRun(loop));
     }
@@ -179,7 +179,7 @@ public class LoopBuilderTests
             items.AddRange(Enumerable.Range(1, 20).Select(i => Ep(id, "Show" + s, 1, i, "e" + i)));
         }
 
-        var loop = ProgramLoopBuilder.Build(items, Opts(block: 4, shuffle: true));
+        var loop = ProgramLoopBuilder.Build(items, Opts(block: 4, mode: LoopMode.Shuffle));
 
         Assert.Equal(5 * 4, loop.Count);                                       // 5 series x one 4-episode block
         Assert.Equal(4, loop.Count(e => e.SeriesId == big));                   // the giant series is capped to 4
@@ -216,8 +216,8 @@ public class LoopBuilderTests
 
         int Movies(IReadOnlyList<ProgramEntry> loop) => loop.Count(e => e.SeriesId is null);
 
-        var plain = ProgramLoopBuilder.Build(items, Opts(block: 1, shuffle: true));
-        var favored = ProgramLoopBuilder.Build(items, Opts(block: 1, shuffle: true, favor: FavorKind.Movies, strength: FavorStrength.Heavy));
+        var plain = ProgramLoopBuilder.Build(items, Opts(block: 1, mode: LoopMode.Shuffle));
+        var favored = ProgramLoopBuilder.Build(items, Opts(block: 1, mode: LoopMode.Shuffle, favor: FavorKind.Movies, strength: FavorStrength.Heavy));
 
         Assert.Equal(4, Movies(plain));                                   // natural: each movie once
         Assert.True(Movies(favored) >= Movies(plain) * 5, "favoring should multiply movie airtime");
@@ -233,7 +233,7 @@ public class LoopBuilderTests
         var items = new List<ProgramEntry> { Movie("Zed"), Movie("Abe") };
         items.AddRange(Enumerable.Range(1, 5).Select(i => Ep(s, "Show", 1, i, "e" + i)));
 
-        var loop = ProgramLoopBuilder.Build(items, Opts(block: 3, shuffle: true));
+        var loop = ProgramLoopBuilder.Build(items, Opts(block: 3, mode: LoopMode.Shuffle));
 
         Assert.Equal(2, loop.Count(e => e.SeriesId is null));   // both movies kept
         var showEps = loop.Count(e => e.SeriesId == s);
@@ -248,8 +248,8 @@ public class LoopBuilderTests
         var s = Guid.NewGuid();
         var items = Enumerable.Range(1, 12).Select(i => Ep(s, "Show", 1, i, "e" + i)).ToList();
 
-        var day0 = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(4, true, true, false, "ch1", Rotation: 0));
-        var day1 = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(4, true, true, false, "ch1", Rotation: 1));
+        var day0 = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(4, true, LoopMode.Shuffle, false, "ch1", Rotation: 0));
+        var day1 = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(4, true, LoopMode.Shuffle, false, "ch1", Rotation: 1));
 
         Assert.NotEqual(day0.Select(e => e.EpisodeNumber), day1.Select(e => e.EpisodeNumber));
     }
@@ -259,5 +259,32 @@ public class LoopBuilderTests
     {
         var loop = ProgramLoopBuilder.Build(new[] { Movie("Zed"), Movie("Abe"), Movie("Mid") }, Opts());
         Assert.Equal(new[] { "Abe", "Mid", "Zed" }, loop.Select(e => e.Title).ToArray());
+    }
+
+    [Fact]
+    public void Chronological_OrdersBlocksByDateOldestFirst()
+    {
+        var items = new[]
+        {
+            new ProgramEntry(Guid.NewGuid(), "New", null, Hour, "/m.mkv") { IsMovie = true, PremiereDate = new DateTime(2020, 6, 1) },
+            new ProgramEntry(Guid.NewGuid(), "Old", null, Hour, "/m.mkv") { IsMovie = true, PremiereDate = new DateTime(1999, 6, 1) },
+            new ProgramEntry(Guid.NewGuid(), "Mid", null, Hour, "/m.mkv") { IsMovie = true, Year = 2010 } // year-only counts as 1 Jan
+        };
+
+        var loop = ProgramLoopBuilder.Build(items, Opts(mode: LoopMode.Chronological));
+        Assert.Equal(new[] { "Old", "Mid", "New" }, loop.Select(e => e.Title).ToArray());
+    }
+
+    [Fact]
+    public void Chronological_UndatedSortsLast()
+    {
+        var items = new[]
+        {
+            new ProgramEntry(Guid.NewGuid(), "Undated", null, Hour, "/m.mkv") { IsMovie = true },
+            new ProgramEntry(Guid.NewGuid(), "Dated", null, Hour, "/m.mkv") { IsMovie = true, PremiereDate = new DateTime(2000, 1, 1) }
+        };
+
+        var loop = ProgramLoopBuilder.Build(items, Opts(mode: LoopMode.Chronological));
+        Assert.Equal(new[] { "Dated", "Undated" }, loop.Select(e => e.Title).ToArray());
     }
 }
