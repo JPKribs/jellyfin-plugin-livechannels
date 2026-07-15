@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.10.1",
+        "changelog": "## Developer\r\n- Add rating blocks to the Popular channel\r\n- Tag kids per rating block\r\n- Add News and Sports channel categories with an automatic movie tag\r\n- Replace Extra content with Content Types toggles",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.10.1/jellyfin-plugin-livechannels-10.11.10.1.zip",
+        "checksum": "0935032ac90828b2889c9c636b138ccf",
+        "timestamp": "2026-07-15T21:54:15Z"
+      },
+      {
         "version": "10.11.10.0",
         "changelog": "## Developer\r\n- Add time of day rating blocks with a transition window\r\n- Add shuffle, alphabetical, and chronological loop order\r\n- Use collections as channel sources\r\n- Organize channel and popular settings into sub sections\r\n- Split ChannelService into focused files",
         "targetAbi": "10.11.9.0",
