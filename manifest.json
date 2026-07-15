@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.10.0",
+        "changelog": "## Developer\r\n- Add time of day rating blocks with a transition window\r\n- Add shuffle, alphabetical, and chronological loop order\r\n- Use collections as channel sources\r\n- Organize channel and popular settings into sub sections\r\n- Split ChannelService into focused files",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.10.0/jellyfin-plugin-livechannels-10.11.10.0.zip",
+        "checksum": "ec12ed48f90fe5d92904ab8719fd979e",
+        "timestamp": "2026-07-15T20:55:53Z"
+      },
+      {
         "version": "10.11.9.7",
         "changelog": "## Developer\r\n- Bump Base to 2026.7.12\r\n- Use ActivityLogger from Base 2026.7.12\r\n- Standardize activity log messages\r\n- Move Stress test and Reset into a Troubleshooting section",
         "targetAbi": "10.11.9.0",
