@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.10.2",
+        "changelog": "## Developer\r\n- Fix a live channel dropping for the remaining viewers when one of several viewers stops watching\r\n- Update the README for the current features",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.10.2/jellyfin-plugin-livechannels-10.11.10.2.zip",
+        "checksum": "96b35de58de0b43625525c3f3fc07c82",
+        "timestamp": "2026-07-16T04:36:33Z"
+      },
+      {
         "version": "10.11.10.1",
         "changelog": "## Developer\r\n- Add rating blocks to the Popular channel\r\n- Tag kids per rating block\r\n- Add News and Sports channel categories with an automatic movie tag\r\n- Replace Extra content with Content Types toggles",
         "targetAbi": "10.11.9.0",
