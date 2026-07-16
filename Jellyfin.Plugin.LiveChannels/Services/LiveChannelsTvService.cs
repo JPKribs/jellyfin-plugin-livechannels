@@ -30,9 +30,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     // Content added within this window is treated as new (not a repeat) in the guide.
     private const int NewWindowDays = 14;
 
-    // How long a closed session keeps encoding so a viewer surfing back gets an instant re-tune (the warm
-    // session is adopted by the next open instead of a fresh encoder cold-starting). The trade is at most this
-    // much tail encoding per channel a viewer leaves; the session cap and timeout still bound the total.
+    // How long a session with no remaining viewers keeps encoding so a viewer surfing back gets an instant
+    // re-tune (the warm session is adopted by the next open instead of a fresh encoder cold-starting). The trade
+    // is at most this much tail encoding per channel a viewer leaves; the session cap and timeout still bound the total.
     private static readonly TimeSpan LingerGrace = TimeSpan.FromSeconds(30);
 
     // Client pre-roll: the player buffers this much before playback starts, riding out tune-in jitter. The
@@ -49,7 +49,21 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     private readonly bool _probeOpenedSource;
     private readonly string _streamRoot;
     private readonly string _logoRoot = Path.Combine(Path.GetTempPath(), "livechannels-logos");
+
+    // One encoder per channel. A channel currently being encoded has exactly one session, tracked here by channel
+    // id; every viewer of that channel is a CONSUMER of that single session (see LiveSession). Jellyfin opens a
+    // separate live stream per viewer, so a popular channel produces several opens/closes against one session, and
+    // the session must outlive every one of its viewers -- only when the LAST viewer leaves does it linger and then
+    // tear down. Serialised by _openGate so two concurrent tune-ins of one channel share a session instead of
+    // racing two encoders (and possibly evicting each other).
+    private readonly ConcurrentDictionary<string, LiveSession> _byChannel = new(StringComparer.Ordinal);
+
+    // Maps each live-stream id Jellyfin holds (one per viewer) to its session, so CloseLiveStream routes a viewer's
+    // close to the right session. Several ids can map to one session (one per consumer). The id the session was
+    // created under is its stable display id (LiveSession.Id); adopted viewers get fresh ids that also land here.
     private readonly ConcurrentDictionary<string, LiveSession> _live = new(StringComparer.Ordinal);
+
+    private readonly object _openGate = new();
     private readonly Timer _reaper;
 
     /// <summary>
@@ -212,100 +226,125 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
 
         _logger.LogInformation("Live Channels: opening live stream for {Name}", channel.Name);
 
-        // A still-running session for this channel — a re-tune, or a viewer surfing back within the linger
-        // grace — is ADOPTED instead of replaced: its segments and live edge already exist on disk, so the new
-        // open is served in milliseconds, and one channel never runs two encoders side by side. The session is
-        // re-keyed under the new live stream id so Jellyfin's later close (of either id) resolves correctly.
-        foreach (var (existingId, existing) in _live)
+        // A channel already being encoded is ADOPTED: this open joins the existing session as another consumer
+        // instead of starting a second encoder. Its segments and live edge already exist on disk, so the new open
+        // is served in milliseconds, one channel never runs two encoders side by side, and -- crucially -- the
+        // session now outlives every viewer, not just the most recent one. Jellyfin opens a separate live stream
+        // per viewer, so two people watching one channel are two consumers of one session; it is torn down only
+        // when the LAST of them closes (see CloseLiveStream). The lookup and registration are serialised so two
+        // simultaneous cold tune-ins of the same channel share one session rather than racing two encoders.
+        LiveSession? adopted;
+        string liveStreamId;
+        lock (_openGate)
         {
-            if (!string.Equals(existing.ChannelId, channelId, StringComparison.Ordinal) || existing.Worker.IsCompleted)
+            if (_byChannel.TryGetValue(channelId, out var existing) && !existing.Worker.IsCompleted)
             {
-                continue;
+                liveStreamId = NewLiveId();
+                existing.AddConsumer(liveStreamId);
+                _live[liveStreamId] = existing;
+                adopted = existing;
             }
-
-            if (!_live.TryRemove(existingId, out var warm))
+            else
             {
-                continue;
+                adopted = null;
+                liveStreamId = string.Empty;
             }
+        }
 
-            var adoptedId = "lc_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-            _live[adoptedId] = warm with { LingeringSinceUtc = null };
-            var warmPlaylist = Path.Combine(warm.Path, "stream.m3u8");
+        if (adopted is not null)
+        {
+            var warmPlaylist = Path.Combine(adopted.Path, "stream.m3u8");
             try
             {
-                await WaitForPlaylistAsync(warmPlaylist, warm.Worker, cancellationToken).ConfigureAwait(false);
+                await WaitForPlaylistAsync(warmPlaylist, adopted.Worker, cancellationToken).ConfigureAwait(false);
                 _logger.LogInformation("Live Channels: adopted the warm session for {Name}", channel.Name);
-                return BuildSource(adoptedId, warmPlaylist);
+                return BuildSource(liveStreamId, warmPlaylist);
             }
             catch (OperationCanceledException)
             {
-                // The tune was abandoned mid-adoption; the session stays live under the new id, ready for the
-                // next tune-in (the session timeout and cap still bound it if nobody ever comes back).
+                // The tune was abandoned mid-adoption; drop just this consumer. The session stays live for its
+                // other viewers (or lingers, then reaps, if this was the last).
+                ReleaseConsumer(liveStreamId);
                 throw;
             }
             catch (Exception ex)
             {
-                // The warm session turned out to be broken; tear it down and fall through to a fresh start.
+                // The warm session turned out to be broken; its producer is dead, so every consumer is stuck.
+                // Tear the whole session down and fall through to a fresh start.
                 _logger.LogWarning(ex, "Live Channels: the warm session for {Name} was not playable; starting fresh", channel.Name);
-                if (_live.TryRemove(adoptedId, out var broken))
-                {
-                    CancelAndDispose(broken);
-                }
-
-                break;
+                ReleaseConsumer(liveStreamId);
+                TeardownSession(adopted);
             }
         }
 
-        var liveStreamId = "lc_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-
-        // Each session gets its own directory holding the live playlist and its rolling segments; the whole
-        // directory is removed on close. The session tracks the directory (for cleanup); Jellyfin is handed the
-        // playlist inside it.
-        var dir = Path.Combine(_streamRoot, liveStreamId);
-        Directory.CreateDirectory(dir);
-        var playlist = Path.Combine(dir, "stream.m3u8");
-
-        var cts = new CancellationTokenSource();
-        var stats = new SessionStats
+        // Fresh start: a new session with its own directory, producer, and this open as its first consumer.
+        LiveSession session;
+        string playlist;
+        lock (_openGate)
         {
-            // Every ffmpeg the session spawns appends its command and exit summary here for the Sessions tab's
-            // log viewer; living inside the session directory, it is deleted with the session.
-            LogPath = Path.Combine(dir, "ffmpeg.log")
-        };
+            // Between releasing the lock above and re-acquiring it, another open for this channel may have won the
+            // race and created the session; join it rather than starting a second encoder.
+            if (_byChannel.TryGetValue(channelId, out var raced) && !raced.Worker.IsCompleted)
+            {
+                liveStreamId = NewLiveId();
+                raced.AddConsumer(liveStreamId);
+                _live[liveStreamId] = raced;
+                session = raced;
+                playlist = Path.Combine(raced.Path, "stream.m3u8");
+            }
+            else
+            {
+                liveStreamId = NewLiveId();
 
-        // Start the producer FIRST so the segmenter is already filling segments while the logo resolves below;
-        // the logo is usually cached, but its first-ever generation must not sit on the tune-in critical path.
-        var worker = StartProducer(channel, dir, cts, stats);
+                // Each session gets its own directory holding the live playlist and its rolling segments; the whole
+                // directory is removed on teardown.
+                var dir = Path.Combine(_streamRoot, liveStreamId);
+                Directory.CreateDirectory(dir);
+                playlist = Path.Combine(dir, "stream.m3u8");
+
+                var cts = new CancellationTokenSource();
+                var stats = new SessionStats
+                {
+                    // Every ffmpeg the session spawns appends its command and exit summary here for the Sessions
+                    // tab's log viewer; living inside the session directory, it is deleted with the session.
+                    LogPath = Path.Combine(dir, "ffmpeg.log")
+                };
+
+                // Start the producer FIRST so the segmenter is already filling segments while the logo resolves
+                // below; the logo is usually cached, but its first-ever generation must not sit on the tune-in
+                // critical path.
+                var worker = StartProducer(channel, dir, cts, stats);
+                session = new LiveSession(liveStreamId, cts, worker, dir, channel.Name, channelId, channel.Number, DateTime.UtcNow, stats);
+                session.AddConsumer(liveStreamId);
+                _live[liveStreamId] = session;
+                _byChannel[channelId] = session;
+
+                // Bound the total number of concurrent encoders. A client that never sends the close (Swiftfin on
+                // a force-quit, crash, or network drop) leaks a producer Jellyfin keeps reading, which is
+                // indistinguishable from a live one, so the only robust guard is a hard cap: over it, the oldest
+                // sessions are closed.
+                EnforceSessionCap(keep: session);
+            }
+        }
 
         // Resolve the channel logo (uploaded or generated, cached on disk, usually already written at guide time)
         // so the Sessions tab can show it without re-resolving on every poll. Not tied to the request token: a
-        // client cancelling the tune must not leave the session with no logo for its whole life.
-        var logoPath = await EnsureLogoAsync(channel, CancellationToken.None).ConfigureAwait(false);
-
-        _live[liveStreamId] = new LiveSession(cts, worker, dir, channel.Name, channelId, channel.Number, DateTime.UtcNow, logoPath, stats);
-
-        // Jellyfin shares one live stream per channel, so any earlier session still open for this channel was
-        // abandoned (a re-tune Jellyfin never closed). Tear those down now so producers and their downstream
-        // transcodes do not pile up and saturate the box. Also sweep any finished sessions while we are here.
-        EvictStaleSessions(channelId, keep: liveStreamId);
-
-        // Bound the total number of concurrent encoders. A client that never sends the close (Swiftfin on a
-        // force-quit, crash, or network drop) leaks a producer Jellyfin keeps reading, which is indistinguishable
-        // from a live one, so the only robust guard is a hard cap: over it, the oldest sessions are closed.
-        EnforceSessionCap(keep: liveStreamId);
+        // client cancelling the tune must not leave the session with no logo for its whole life. A no-op when the
+        // session was joined (its logo is already set).
+        session.LogoPath ??= await EnsureLogoAsync(channel, CancellationToken.None).ConfigureAwait(false);
 
         // Jellyfin opens the playlist immediately, so wait until the segmenter has written it and a first segment,
-        // and if the producer dies with nothing, tear the session down and surface a clear failure rather than
-        // handing over an empty playlist.
+        // and if the producer dies with nothing, drop this consumer (tearing the session down if it was the only
+        // one) and surface a clear failure rather than handing over an empty playlist.
         try
         {
-            await WaitForPlaylistAsync(playlist, worker, cancellationToken).ConfigureAwait(false);
+            await WaitForPlaylistAsync(playlist, session.Worker, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            if (_live.TryRemove(liveStreamId, out var failed))
+            if (ReleaseConsumer(liveStreamId))
             {
-                CancelAndDispose(failed);
+                TeardownSession(session);
             }
 
             _logger.LogWarning(ex, "Live Channels: {Name} produced no playable output", channel.Name);
@@ -348,19 +387,13 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     /// <inheritdoc />
     public Task CloseLiveStream(string id, CancellationToken cancellationToken)
     {
-        // Keep the encoder warm briefly instead of tearing down: viewers surfing channels often come straight
-        // back, and adopting a warm session (see GetChannelStream) makes that re-tune essentially instant. The
-        // linger costs at most LingerGrace of tail encoding; the delayed teardown collects it if nobody returns.
-        if (_live.TryGetValue(id, out var session) && session.LingeringSinceUtc is null)
+        // One viewer closed. Drop it from its session; while any other viewer is still watching, the session (and
+        // its single encoder) keeps running for them. Only when the LAST viewer leaves does the session linger --
+        // kept warm briefly so a viewer surfing straight back adopts it (an essentially instant re-tune) -- and
+        // then tear down if nobody returned.
+        if (ReleaseConsumer(id, out var session) && session is not null)
         {
-            var lingering = session with { LingeringSinceUtc = DateTime.UtcNow };
-
-            // Value-equality update: if the session was adopted or removed concurrently, this close is stale
-            // (it refers to a life the session no longer leads) and must do nothing.
-            if (_live.TryUpdate(id, lingering, session))
-            {
-                _ = LingerTeardownAsync(id, lingering);
-            }
+            _ = LingerTeardownAsync(session);
         }
 
         return Task.CompletedTask;
@@ -368,100 +401,110 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
 
     /// <summary>
     /// Stops a session immediately, bypassing the linger grace. The Sessions tab's kill button is an explicit
-    /// administrator action ("free this encoder NOW"), so unlike a client close it must never keep the encoder
-    /// warm for a possible re-tune.
+    /// administrator action ("free this encoder NOW"), so unlike a client close it tears the session down even if
+    /// viewers are still attached.
     /// </summary>
-    /// <param name="id">The live stream id to kill.</param>
+    /// <param name="id">The session id (or any of its live stream ids) to kill.</param>
     public void KillSession(string id)
     {
-        if (_live.TryRemove(id, out var session))
+        var session = Lookup(id);
+        if (session is null || !TeardownSession(session))
+        {
+            return;
+        }
+
+        _activity.Log(
+            "Live Channel: " + session.ChannelName + " has stopped",
+            "LiveChannels.ChannelStopped",
+            overview: "Stream stopped from the dashboard.");
+
+        _logger.LogInformation("Live Channels: session {Id} ({Name}) killed from the dashboard", session.Id, session.ChannelName);
+    }
+
+    // Tears a session down after the grace period, unless a viewer re-attached (adopted it) in the meantime.
+    private async Task LingerTeardownAsync(LiveSession session)
+    {
+        await Task.Delay(LingerGrace).ConfigureAwait(false);
+
+        // A re-tune within the grace re-attached a consumer: leave the session running for them.
+        if (session.HasConsumers)
+        {
+            return;
+        }
+
+        if (TeardownSession(session))
         {
             _activity.Log(
                 "Live Channel: " + session.ChannelName + " has stopped",
                 "LiveChannels.ChannelStopped",
-                overview: "Stream stopped from the dashboard.");
-
-            _logger.LogInformation("Live Channels: session {Id} ({Name}) killed from the dashboard", id, session.ChannelName);
-            CancelAndDispose(session);
-        }
-    }
-
-    // Tears a lingered session down after the grace period, unless it was adopted (re-keyed under a new id) or
-    // otherwise removed in the meantime.
-    private async Task LingerTeardownAsync(string id, LiveSession expected)
-    {
-        await Task.Delay(LingerGrace).ConfigureAwait(false);
-
-        if (_live.TryGetValue(id, out var current) && current == expected && _live.TryRemove(id, out var removed))
-        {
-            _activity.Log(
-                "Live Channel: " + removed.ChannelName + " has stopped",
-                "LiveChannels.ChannelStopped",
                 overview: "This channel has no viewers so encoding has been stopped.");
 
-            _logger.LogInformation("Live Channels: closing session {Id} ({Name}) after the linger grace", id, removed.ChannelName);
-            CancelAndDispose(removed);
+            _logger.LogInformation("Live Channels: closing session {Id} ({Name}) after the linger grace", session.Id, session.ChannelName);
         }
     }
 
     /// <summary>
     /// Snapshots every active channel stream for the configuration page's Sessions tab: its id, channel number
-    /// and name, when it started (the page derives run time from this), and the latest encode speed.
+    /// and name, when it started (the page derives run time from this), and the latest encode speed. One row per
+    /// session (encoder), not per viewer.
     /// </summary>
     /// <returns>The active sessions, ordered by channel number.</returns>
     public IReadOnlyList<ActiveSession> GetActiveSessions()
     {
-        return _live
-            .Select(kv => new ActiveSession(
-                kv.Key,
-                kv.Value.Number,
-                kv.Value.ChannelName,
-                kv.Value.StartedUtc,
-                Math.Round(kv.Value.Stats.Speed, 2),
-                StopsIn(kv.Value)))
+        return DistinctSessions()
+            .Select(s => new ActiveSession(
+                s.Id,
+                s.Number,
+                s.ChannelName,
+                s.StartedUtc,
+                Math.Round(s.Stats.Speed, 2),
+                StopsIn(s)))
             .OrderBy(s => s.Number)
             .ThenBy(s => s.StartedUtc)
             .ToList();
     }
 
-    // Seconds until a lingered (viewer-closed) session is torn down, or null while it still has a viewer.
-    // Clamped at zero: the delayed teardown can run a beat behind the clock.
+    // Seconds until a viewerless session is torn down, or null while it still has a viewer. Clamped at zero: the
+    // delayed teardown can run a beat behind the clock.
     private static int? StopsIn(LiveSession session)
         => session.LingeringSinceUtc is { } since
             ? (int)Math.Max(0, (LingerGrace - (DateTime.UtcNow - since)).TotalSeconds)
             : null;
 
     /// <summary>Returns the on-disk logo path for an active session, or <c>null</c> if the session is gone.</summary>
-    /// <param name="id">The live stream id.</param>
+    /// <param name="id">The session id (or any of its live stream ids).</param>
     /// <returns>The logo file path, or <c>null</c>.</returns>
-    public string? GetSessionLogoPath(string id) => _live.TryGetValue(id, out var session) ? session.LogoPath : null;
+    public string? GetSessionLogoPath(string id) => Lookup(id)?.LogoPath;
 
     /// <summary>Returns the ffmpeg diagnostic log path for an active session, or <c>null</c> if the session is gone.</summary>
-    /// <param name="id">The live stream id.</param>
+    /// <param name="id">The session id (or any of its live stream ids).</param>
     /// <returns>The log file path, or <c>null</c>.</returns>
-    public string? GetSessionLogPath(string id) => _live.TryGetValue(id, out var session) ? Path.Combine(session.Path, "ffmpeg.log") : null;
+    public string? GetSessionLogPath(string id) => Lookup(id) is { } session ? Path.Combine(session.Path, "ffmpeg.log") : null;
 
     /// <inheritdoc />
     public void Dispose()
     {
         _reaper.Dispose();
 
-        // Stop and clean up every live stream still open at shutdown.
-        foreach (var id in _live.Keys.ToList())
+        // Stop and clean up every live session still open at shutdown.
+        foreach (var session in DistinctSessions())
         {
-            if (_live.TryRemove(id, out var session))
+            if (!session.MarkTornDown())
             {
-                try
-                {
-                    session.Cts.Cancel();
-                }
-                catch (ObjectDisposedException)
-                {
-                    // Already finished.
-                }
-
-                DisposeSession(session);
+                continue;
             }
+
+            ForgetSession(session);
+            try
+            {
+                session.Cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Already finished.
+            }
+
+            DisposeSession(session);
         }
     }
 
@@ -533,15 +576,14 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     {
         ReapCompletedSessions();
 
-        // Safety net: a lingered session's delayed teardown normally collects it, but if that task was ever
+        // Safety net: a viewerless session's delayed teardown normally collects it, but if that task was ever
         // lost, this sweep makes sure a viewerless encoder cannot run forever.
-        foreach (var (id, session) in _live)
+        foreach (var session in DistinctSessions())
         {
             if (session.LingeringSinceUtc is { } since && DateTime.UtcNow - since > LingerGrace * 3
-                && _live.TryRemove(id, out var lingered))
+                && !session.HasConsumers && TeardownSession(session))
             {
-                _logger.LogWarning("Live Channels: reaping over-lingered session {Id} ({Name})", id, lingered.ChannelName);
-                CancelAndDispose(lingered);
+                _logger.LogWarning("Live Channels: reaping over-lingered session {Id} ({Name})", session.Id, session.ChannelName);
             }
         }
 
@@ -552,17 +594,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
 
         var cutoff = DateTime.UtcNow - TimeSpan.FromMinutes(timeoutMinutes);
-        foreach (var (id, session) in _live)
+        foreach (var session in DistinctSessions())
         {
-            if (session.StartedUtc > cutoff)
+            if (session.StartedUtc <= cutoff && TeardownSession(session))
             {
-                continue;
-            }
-
-            if (_live.TryRemove(id, out var removed))
-            {
-                _logger.LogInformation("Live Channels: closing session {Id} ({Name}) after reaching the {Minutes}-minute time limit", id, removed.ChannelName, timeoutMinutes);
-                CancelAndDispose(removed);
+                _logger.LogInformation("Live Channels: closing session {Id} ({Name}) after reaching the {Minutes}-minute time limit", session.Id, session.ChannelName, timeoutMinutes);
             }
         }
     }
@@ -571,17 +607,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     // never closed, so the CancellationTokenSource and the temp file do not linger for the life of the process.
     private void ReapCompletedSessions()
     {
-        foreach (var (id, session) in _live)
+        foreach (var session in DistinctSessions())
         {
-            if (!session.Worker.IsCompleted)
+            if (session.Worker.IsCompleted && TeardownSession(session))
             {
-                continue;
-            }
-
-            if (_live.TryRemove(id, out var removed))
-            {
-                _logger.LogDebug("Live Channels: reaping finished session {Id} ({Name})", id, removed.ChannelName);
-                DisposeSession(removed);
+                _logger.LogDebug("Live Channels: reaping finished session {Id} ({Name})", session.Id, session.ChannelName);
             }
         }
     }
@@ -596,7 +626,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     {
         ReapCompletedSessions();
 
-        var active = new HashSet<string>(_live.Values.Select(s => s.Path), StringComparer.Ordinal);
+        var active = new HashSet<string>(DistinctSessions().Select(s => s.Path), StringComparer.Ordinal);
         var removed = 0;
         try
         {
@@ -627,36 +657,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         return removed;
     }
 
-    // Tears down every session except the one just opened: any other session for the same channel is an abandoned
-    // re-tune Jellyfin never closed, and any finished session anywhere is dead weight. Each producer's CTS is
-    // cancelled (which ends its ffmpeg) without blocking the caller, since this runs on the tune-in path.
-    private void EvictStaleSessions(string channelId, string keep)
-    {
-        foreach (var (id, session) in _live)
-        {
-            if (string.Equals(id, keep, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            var sameChannel = string.Equals(session.ChannelId, channelId, StringComparison.Ordinal);
-            if (!sameChannel && !session.Worker.IsCompleted)
-            {
-                continue;
-            }
-
-            if (_live.TryRemove(id, out var removed))
-            {
-                _logger.LogInformation("Live Channels: evicting stale session {Id} ({Name})", id, removed.ChannelName);
-                CancelAndDispose(removed);
-            }
-        }
-    }
-
     // Bounds the number of concurrent encoders to the configured cap by closing the oldest sessions. A client that
     // never sends the close leaks a producer Jellyfin keeps reading off disk, which is indistinguishable from a
     // live one, so a hard count is the only robust guard. The just-opened session is always kept. Zero is unlimited.
-    private void EnforceSessionCap(string keep)
+    // Called while holding _openGate, so the session set it reads is stable.
+    private void EnforceSessionCap(LiveSession keep)
     {
         var cap = Plugin.Instance?.ReadConfiguration(c => c.MaxConcurrentSessions) ?? 0;
         if (cap <= 0)
@@ -664,13 +669,14 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             return;
         }
 
-        var victims = SelectCapVictims(_live.Select(kv => (kv.Key, kv.Value.StartedUtc)), keep, cap);
+        var sessions = DistinctSessions();
+        var victims = SelectCapVictims(sessions.Select(s => (s.Id, s.StartedUtc)), keep.Id, cap);
         foreach (var id in victims)
         {
-            if (_live.TryRemove(id, out var removed))
+            var victim = sessions.FirstOrDefault(s => string.Equals(s.Id, id, StringComparison.Ordinal));
+            if (victim is not null && TeardownSession(victim))
             {
-                _logger.LogInformation("Live Channels: closing session {Id} ({Name}) to stay within the {Cap}-session cap", id, removed.ChannelName, cap);
-                CancelAndDispose(removed);
+                _logger.LogInformation("Live Channels: closing session {Id} ({Name}) to stay within the {Cap}-session cap", victim.Id, victim.ChannelName, cap);
             }
         }
     }
@@ -699,6 +705,65 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             .Take(overflow)
             .Select(s => s.Id)
             .ToList();
+    }
+
+    // The distinct sessions currently tracked (one per active channel), plus any transiently still routed in
+    // _live. Reference-distinct, so a session reachable by several consumer ids appears once.
+    private List<LiveSession> DistinctSessions()
+        => _byChannel.Values.Concat(_live.Values).Distinct().ToList();
+
+    // Finds a session by its stable session id or by any of its live stream (consumer) ids.
+    private LiveSession? Lookup(string id)
+    {
+        if (_live.TryGetValue(id, out var byConsumer))
+        {
+            return byConsumer;
+        }
+
+        return _byChannel.Values.FirstOrDefault(s => string.Equals(s.Id, id, StringComparison.Ordinal));
+    }
+
+    // Drops one viewer from its session. Returns whether the session now has no viewers left (so the caller can
+    // linger or tear it down). The out overload also returns the session the id belonged to.
+    private bool ReleaseConsumer(string id) => ReleaseConsumer(id, out _);
+
+    private bool ReleaseConsumer(string id, out LiveSession? session)
+    {
+        if (_live.TryRemove(id, out var found))
+        {
+            session = found;
+            return found.RemoveConsumer(id);
+        }
+
+        session = null;
+        return false;
+    }
+
+    // Removes a session from every tracking map so no new open can adopt it and no close can route to it. Idempotent
+    // via the session's torn-down flag; returns whether THIS call performed the teardown (so the caller logs once).
+    private bool TeardownSession(LiveSession session)
+    {
+        if (!session.MarkTornDown())
+        {
+            return false;
+        }
+
+        ForgetSession(session);
+        CancelAndDispose(session);
+        return true;
+    }
+
+    // Removes every map entry pointing at a session (its channel slot and any consumer ids), without disposing it.
+    private void ForgetSession(LiveSession session)
+    {
+        _byChannel.TryRemove(new KeyValuePair<string, LiveSession>(session.ChannelId, session));
+        foreach (var kv in _live)
+        {
+            if (ReferenceEquals(kv.Value, session))
+            {
+                _live.TryRemove(new KeyValuePair<string, LiveSession>(kv.Key, session));
+            }
+        }
     }
 
     // Cancels a session's producer and removes its directory once the producer has fully stopped (its segmenter is
@@ -731,16 +796,16 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
 
         TryDeleteDirectory(session.Path);
 
-        // This session has been removed from _live by the caller, so if no other session is watching this channel,
-        // drop its decoded schedule from memory. The on-disk cache remains for the next tune-in.
+        // This session has been forgotten by the caller, so if no other session is watching this channel, drop its
+        // decoded schedule from memory. The on-disk cache remains for the next tune-in.
         ReleaseScheduleIfIdle(session.Number);
     }
 
     // Releases a channel's in-memory schedule when it has no remaining live sessions, so an unwatched channel holds
-    // nothing. Called after a session has already been removed from _live.
+    // nothing. Called after a session has already been forgotten.
     private void ReleaseScheduleIfIdle(int channelNumber)
     {
-        if (!_live.Values.Any(s => s.Number == channelNumber))
+        if (!_byChannel.Values.Any(s => s.Number == channelNumber))
         {
             _channels.ReleaseFromMemory(channelNumber);
         }
@@ -750,6 +815,8 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     // than a session, which the orphan and cleanup sweeps must never delete.
     private static bool IsReservedDir(string path)
         => string.Equals(Path.GetFileName(path), ChannelService.ScheduleDirName, StringComparison.Ordinal);
+
+    private static string NewLiveId() => "lc_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
 
     private void TryDeleteFile(string path)
     {
@@ -1014,5 +1081,97 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
     }
 
-    private sealed record LiveSession(CancellationTokenSource Cts, Task Worker, string Path, string ChannelName, string ChannelId, int Number, DateTime StartedUtc, string? LogoPath, SessionStats Stats, DateTime? LingeringSinceUtc = null);
+    // One channel's live encoder and the viewers attached to it. A session is created on the first tune-in of a
+    // channel and shared by every later tune-in of the same channel (each is a consumer); it lives until its last
+    // consumer leaves (then a linger grace), so no viewer can tear it down while another is still watching. The
+    // consumer set and linger state are guarded by a lock so opens and closes on different threads stay consistent.
+    private sealed class LiveSession
+    {
+        private readonly object _gate = new();
+        private readonly List<string> _consumers = new();
+        private int _tornDown;
+
+        public LiveSession(string id, CancellationTokenSource cts, Task worker, string path, string channelName, string channelId, int number, DateTime startedUtc, SessionStats stats)
+        {
+            Id = id;
+            Cts = cts;
+            Worker = worker;
+            Path = path;
+            ChannelName = channelName;
+            ChannelId = channelId;
+            Number = number;
+            StartedUtc = startedUtc;
+            Stats = stats;
+        }
+
+        // Stable display id (the live stream id the session was created under), used by the Sessions tab and the
+        // kill/log lookups. It never changes for the session's life, even after that first consumer closes.
+        public string Id { get; }
+
+        public CancellationTokenSource Cts { get; }
+
+        public Task Worker { get; }
+
+        public string Path { get; }
+
+        public string ChannelName { get; }
+
+        public string ChannelId { get; }
+
+        public int Number { get; }
+
+        public DateTime StartedUtc { get; }
+
+        public SessionStats Stats { get; }
+
+        public string? LogoPath { get; set; }
+
+        // When the last consumer left (the session is warm, awaiting teardown), or null while a viewer is attached.
+        public DateTime? LingeringSinceUtc { get; private set; }
+
+        public bool HasConsumers
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _consumers.Count > 0;
+                }
+            }
+        }
+
+        // Attaches a viewer and clears any pending linger (a re-tune within the grace keeps the session alive).
+        public void AddConsumer(string id)
+        {
+            lock (_gate)
+            {
+                if (!_consumers.Contains(id))
+                {
+                    _consumers.Add(id);
+                }
+
+                LingeringSinceUtc = null;
+            }
+        }
+
+        // Detaches a viewer; returns whether none remain (so the caller lingers or tears the session down).
+        public bool RemoveConsumer(string id)
+        {
+            lock (_gate)
+            {
+                _consumers.Remove(id);
+                if (_consumers.Count == 0)
+                {
+                    LingeringSinceUtc = DateTime.UtcNow;
+                    return true;
+                }
+
+                return false;
+            }
+        }
+
+        // Claims the teardown exactly once, so several triggers (last-viewer linger, the reaper, the cap, dispose)
+        // cannot dispose the same session twice.
+        public bool MarkTornDown() => Interlocked.Exchange(ref _tornDown, 1) == 0;
+    }
 }

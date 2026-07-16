@@ -16,4 +16,5 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   developer:
+  - Fix a live channel dropping for the remaining viewers when one of several viewers stops watching
   - Update the README for the current features
