@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.10.3",
+        "changelog": "## Developer\r\n- Obtain HWA device based on settings instead of falling back to 128",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.10.3/jellyfin-plugin-livechannels-10.11.10.3.zip",
+        "checksum": "c6ccc416c88620122bd10deab678e73b",
+        "timestamp": "2026-07-19T05:05:22Z"
+      },
+      {
         "version": "10.11.10.2",
         "changelog": "## Developer\r\n- Fix a live channel dropping for the remaining viewers when one of several viewers stops watching\r\n- Update the README for the current features",
         "targetAbi": "10.11.9.0",
