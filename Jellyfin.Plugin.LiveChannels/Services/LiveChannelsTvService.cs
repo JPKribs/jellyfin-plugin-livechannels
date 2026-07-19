@@ -12,6 +12,7 @@ using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.LiveTv;
+using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.LiveTv;
@@ -35,6 +36,13 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     // is at most this much tail encoding per channel a viewer leaves; the session cap and timeout still bound the total.
     private static readonly TimeSpan LingerGrace = TimeSpan.FromSeconds(30);
 
+    // How long a viewer may go entirely unreported by Jellyfin's session manager before the watchdog treats it as
+    // vanished and releases it. A viewer that opened a stream but cancelled before playback ever started never
+    // sends a close, so its consumer would pin the session forever; a real viewer's client reports the live
+    // stream id in its play state well within this window, so an id absent this long has no one behind it. Long
+    // enough to ride out tune-in buffering and slow first progress reports.
+    private static readonly TimeSpan ViewerAbsenceGrace = TimeSpan.FromMinutes(5);
+
     // Client pre-roll: the player buffers this much before playback starts, riding out tune-in jitter. The
     // reader is not realtime-paced, so this fills at I/O speed from already-produced segments -- it costs a
     // fraction of a second of wait, and adjusting it in either direction is imperceptible, so it is fixed.
@@ -44,6 +52,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     private readonly StreamSessionService _streams;
     private readonly DefaultLogoService _defaultLogo;
     private readonly ActivityLogger _activity;
+    private readonly ISessionManager _sessionManager;
     private readonly ILogger<LiveChannelsTvService> _logger;
 
     private readonly bool _probeOpenedSource;
@@ -63,6 +72,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     // created under is its stable display id (LiveSession.Id); adopted viewers get fresh ids that also land here.
     private readonly ConcurrentDictionary<string, LiveSession> _live = new(StringComparer.Ordinal);
 
+    // When each currently-live consumer id was first seen with no Jellyfin playback session reporting it. An id
+    // stays here only while it remains unreported; once it has been continuously absent for the grace, the
+    // watchdog releases it. Reported or departed ids are pruned every sweep.
+    private readonly ConcurrentDictionary<string, DateTime> _unreportedSince = new(StringComparer.Ordinal);
+
     private readonly object _openGate = new();
     private readonly Timer _reaper;
 
@@ -73,15 +87,17 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     /// <param name="streams">The stream session service, used to produce each channel's ffmpeg feed.</param>
     /// <param name="defaultLogo">The generated fallback-logo service.</param>
     /// <param name="activity">The activity logger, used to record channel start/stop in Jellyfin's activity log.</param>
+    /// <param name="sessionManager">The session manager, used by the watchdog to see which live streams clients are actually playing.</param>
     /// <param name="appHost">The application host, used to read the server version the probe fix depends on.</param>
     /// <param name="appPaths">The application paths, used to default the stream directory under Jellyfin's cache.</param>
     /// <param name="logger">The logger.</param>
-    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
+    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, ISessionManager sessionManager, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
     {
         _channels = channels;
         _streams = streams;
         _defaultLogo = defaultLogo;
         _activity = activity;
+        _sessionManager = sessionManager;
         _logger = logger;
 
         // Probing the opened source defeats Jellyfin's forced-interlaced hack (playback remuxes instead of
@@ -321,7 +337,8 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
 
                 // Bound the total number of concurrent encoders. A client that never sends the close (Swiftfin on
                 // a force-quit, crash, or network drop) leaks a producer Jellyfin keeps reading, which is
-                // indistinguishable from a live one, so the only robust guard is a hard cap: over it, the oldest
+                // indistinguishable from a live one until the viewer watchdog notices no client is reporting it;
+                // the hard cap bounds how many such leaks can pile up in the meantime: over it, the oldest
                 // sessions are closed.
                 EnforceSessionCap(keep: session);
             }
@@ -569,12 +586,13 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         }
     }
 
-    // The periodic reaper: collects sessions whose producer has finished, then closes any still-running session
-    // that has passed the configured time limit. Both cases are streams Jellyfin never closed, so without this they
-    // would hold their encoder and files for the life of the process.
+    // The periodic reaper: collects sessions whose producer has finished, releases viewers no client is actually
+    // playing, then closes any still-running session that has passed the configured time limit. All are streams
+    // Jellyfin never closed, so without this they would hold their encoder and files for the life of the process.
     private void ReapSessions()
     {
         ReapCompletedSessions();
+        ReapAbandonedConsumers();
 
         // Safety net: a viewerless session's delayed teardown normally collects it, but if that task was ever
         // lost, this sweep makes sure a viewerless encoder cannot run forever.
@@ -614,6 +632,102 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
                 _logger.LogDebug("Live Channels: reaping finished session {Id} ({Name})", session.Id, session.ChannelName);
             }
         }
+    }
+
+    // The viewer watchdog: releases consumers no client is actually playing. A viewer that opens a stream but
+    // cancels before playback starts (or force-quits mid-buffer) never sends a close, so its consumer pins the
+    // session forever; the session cap only bounds how MANY such leaks accumulate, not how long one lives. Every
+    // playing client reports its live stream id (our consumer id behind Jellyfin's service prefix) in its play
+    // state, so a consumer id no session has reported for the whole grace has no viewer behind it. Releasing it
+    // routes through the same path as a real close: while other viewers remain the session keeps running, and
+    // when the last is released the session lingers and tears down normally.
+    private void ReapAbandonedConsumers()
+    {
+        List<string> reported;
+        try
+        {
+            reported = new List<string>();
+            foreach (var jellyfinSession in _sessionManager.Sessions)
+            {
+                var state = jellyfinSession.PlayState;
+                if (state is null)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(state.LiveStreamId))
+                {
+                    reported.Add(state.LiveStreamId);
+                }
+
+                if (!string.IsNullOrEmpty(state.MediaSourceId))
+                {
+                    reported.Add(state.MediaSourceId);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // Never let a session-manager hiccup take down the reaper timer; skip this sweep.
+            _logger.LogDebug(ex, "Live Channels: could not snapshot playback sessions for the viewer watchdog");
+            return;
+        }
+
+        var live = _live.Keys.ToList();
+        var unwatched = SelectUnwatchedConsumers(live, reported);
+        var unwatchedSet = new HashSet<string>(unwatched, StringComparer.Ordinal);
+
+        // A consumer that is reported again (or gone) resets: only CONTINUOUS absence for the grace counts, so a
+        // slow tune-in that starts reporting late is never reaped.
+        foreach (var id in _unreportedSince.Keys)
+        {
+            if (!unwatchedSet.Contains(id))
+            {
+                _unreportedSince.TryRemove(id, out _);
+            }
+        }
+
+        var now = DateTime.UtcNow;
+        foreach (var id in unwatched)
+        {
+            var since = _unreportedSince.GetOrAdd(id, now);
+            if (now - since < ViewerAbsenceGrace)
+            {
+                continue;
+            }
+
+            _unreportedSince.TryRemove(id, out _);
+            if (_live.TryGetValue(id, out var orphaned))
+            {
+                _logger.LogWarning(
+                    "Live Channels: no client has reported viewer {Id} of {Name} for {Minutes} minute(s); releasing it",
+                    id,
+                    orphaned.ChannelName,
+                    (int)ViewerAbsenceGrace.TotalMinutes);
+            }
+
+            if (ReleaseConsumer(id, out var session) && session is not null)
+            {
+                _ = LingerTeardownAsync(session);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Selects the consumer ids no playback session references. A client playing one of our streams reports a
+    /// live stream id of the form <c>{servicePrefix}_{consumerId}</c> (and sometimes the bare id as its media
+    /// source id), so a consumer is watched when any reported id contains it. Pure and deterministic so it can be
+    /// unit tested without a live host.
+    /// </summary>
+    /// <param name="consumerIds">Every live consumer id (one per viewer).</param>
+    /// <param name="reportedIds">Every live-stream and media-source id reported by active playback sessions.</param>
+    /// <returns>The consumer ids no reported id references.</returns>
+    public static List<string> SelectUnwatchedConsumers(IEnumerable<string> consumerIds, IEnumerable<string> reportedIds)
+    {
+        var reported = reportedIds.Where(id => !string.IsNullOrEmpty(id)).ToList();
+        return consumerIds
+            .Where(consumer => !reported.Any(id => id.Contains(consumer, StringComparison.Ordinal)))
+            .ToList();
     }
 
     /// <summary>
@@ -658,9 +772,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     }
 
     // Bounds the number of concurrent encoders to the configured cap by closing the oldest sessions. A client that
-    // never sends the close leaks a producer Jellyfin keeps reading off disk, which is indistinguishable from a
-    // live one, so a hard count is the only robust guard. The just-opened session is always kept. Zero is unlimited.
-    // Called while holding _openGate, so the session set it reads is stable.
+    // never sends the close leaks a producer Jellyfin keeps reading off disk; the viewer watchdog reaps it after
+    // its grace, and this hard count is the immediate bound until it does. The just-opened session is always kept.
+    // Zero is unlimited. Called while holding _openGate, so the session set it reads is stable.
     private void EnforceSessionCap(LiveSession keep)
     {
         var cap = Plugin.Instance?.ReadConfiguration(c => c.MaxConcurrentSessions) ?? 0;

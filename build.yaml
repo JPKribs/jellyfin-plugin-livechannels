@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.10.3"
+version: "10.11.10.4"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -16,4 +16,5 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   developer:
-  - Obtain HWA device based on settings instead of falling back to 128
+  - Add a watchdog for tracking if there is an open channel but no sessions then closing that channel
+  - Prevent hanging channels and kill their ffmpeg if unused.
