@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.10.4",
+        "changelog": "## Developer\r\n- Add a watchdog for tracking if there is an open channel but no sessions then closing that channel\r\n- Prevent hanging channels and kill their ffmpeg if unused.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.10.4/jellyfin-plugin-livechannels-10.11.10.4.zip",
+        "checksum": "82d1856120d0529065becb09ecfa782a",
+        "timestamp": "2026-07-19T18:44:46Z"
+      },
+      {
         "version": "10.11.10.3",
         "changelog": "## Developer\r\n- Obtain HWA device based on settings instead of falling back to 128",
         "targetAbi": "10.11.9.0",
