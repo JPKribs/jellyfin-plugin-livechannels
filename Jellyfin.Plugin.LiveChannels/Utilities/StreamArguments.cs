@@ -209,10 +209,12 @@ public static class StreamArguments
             {
                 // Scale first so the tone map runs on the small frames, then PAD LAST: the letterbox bars must
                 // be painted onto the SDR frame — painted before the tone map (in PQ/bt2020 space) the LUT turns
-                // them green. procamp applies Jellyfin's VPP brightness/contrast gain before the bars exist, so
-                // the gain lifts the picture without greying the bars.
+                // them green. procamp applies Jellyfin's VPP brightness/contrast gain BEFORE the tone map, the
+                // same order Jellyfin uses: the gain acts on the PQ signal and the LUT re-normalises it into SDR,
+                // compensating the LUT's dark rendering. Applied after the tone map instead, the same gain lifts
+                // the finished SDR frame's black floor and washes the whole picture out.
                 scale = "scale_vaapi=w=" + w + ":h=" + h + ":force_original_aspect_ratio=decrease:format=p010,"
-                    + "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709," + Procamp(video)
+                    + Procamp(video) + "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,"
                     + "pad_vaapi=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30";
             }
             else
@@ -646,9 +648,10 @@ public static class StreamArguments
         args.Add(AudioMap(audioOrdinal));
     }
 
-    // The brightness/contrast gain stage after a VAAPI tone map (tonemap_vaapi has no brightness knob of its
-    // own and Intel's LUT renders dark). Values come from Jellyfin's VPP tone-mapping settings via the encoder
-    // profile; neutral values (b=0, c=1) add no stage. Returns "procamp_vaapi=...," or "" for chain splicing.
+    // The brightness/contrast gain stage ahead of a VAAPI tone map (tonemap_vaapi has no brightness knob of
+    // its own and Intel's LUT renders dark; boosting the PQ input, as Jellyfin does, brightens the result
+    // without lifting the SDR black floor). Values come from Jellyfin's VPP tone-mapping settings via the
+    // encoder profile; neutral values (b=0, c=1) add no stage. Returns "procamp_vaapi=...," or "" for splicing.
     private static string Procamp(VideoEncoderProfile video)
     {
         var hasBrightness = Math.Abs(video.VppBrightness) > 0.0005;

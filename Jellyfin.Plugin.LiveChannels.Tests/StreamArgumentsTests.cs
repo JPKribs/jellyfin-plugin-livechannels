@@ -152,14 +152,15 @@ public class StreamArgumentsTests
     }
 
     [Fact]
-    public void IntelGpuPipeline_Hdr_AppliesJellyfinVppBrightness_BeforeThePad()
+    public void IntelGpuPipeline_Hdr_AppliesJellyfinVppBrightness_BeforeTheToneMap()
     {
-        // Jellyfin's VPP tone-mapping brightness gain rides the profile; the procamp stage sits between the
-        // tone map and the pad so the gain lifts the picture without greying the letterbox bars.
+        // Jellyfin's VPP tone-mapping brightness gain rides the profile; the procamp stage sits BEFORE the
+        // tone map (Jellyfin's own order), so the gain boosts the PQ signal that the LUT re-normalises into
+        // SDR. After the tone map the same gain lifts the SDR black floor and washes the picture out.
         var bright = QsvLinux with { VppBrightness = 16, VppContrast = 1 };
         var a = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, bright, "aac", 192, null, null, false, isHdr: true);
         var vf = a[a.IndexOf("-vf") + 1];
-        Assert.Contains("tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,procamp_vaapi=b=16,pad_vaapi", vf, StringComparison.Ordinal);
+        Assert.Contains("procamp_vaapi=b=16,tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,pad_vaapi", vf, StringComparison.Ordinal);
 
         // Contrast joins the same stage only when non-neutral, and SDR content gets no procamp at all.
         var contrast = QsvLinux with { VppBrightness = 16, VppContrast = 1.2 };

@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.10.4"
+version: "10.11.10.5"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -16,5 +16,5 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   developer:
-  - Add a watchdog for tracking if there is an open channel but no sessions then closing that channel
-  - Prevent hanging channels and kill their ffmpeg if unused.
+  - Apply the VPP brightness gain before the tone map instead of after, matching Jellyfin's order
+  - Fixes washed out HDR playback when a VPP tone mapping brightness gain is set
