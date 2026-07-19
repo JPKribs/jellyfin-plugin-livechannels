@@ -74,16 +74,22 @@ public class EncoderResolver
                     Empty, Empty, "format=yuv420p", false);
             case "qsv":
                 // On Linux, QSV sits on a VAAPI render node: expose Jellyfin's configured device so the per-item
-                // pipeline can run fully GPU-resident (VAAPI decode/filters, QSV encode via hwmap).
+                // pipeline can run fully GPU-resident (VAAPI decode/filters, QSV encode via hwmap). Jellyfin's
+                // dashboard stores the node in QsvDevice when QSV is the selected accelerator, not VaapiDevice.
                 var qsvDevice = OperatingSystem.IsLinux()
-                    ? (string.IsNullOrEmpty(options?.VaapiDevice) ? "/dev/dri/renderD128" : options!.VaapiDevice)
+                    ? FirstDevice(options?.QsvDevice, options?.VaapiDevice)
                     : null;
+                // With a known render node, derive the QSV device from it explicitly; the bare "qsv=hw" form
+                // lets ffmpeg auto-pick the default node (renderD128), which is wrong on multi-GPU boxes.
+                var qsvInit = qsvDevice is null
+                    ? QsvInit
+                    : new[] { "-init_hw_device", "vaapi=va:" + qsvDevice, "-init_hw_device", "qsv=hw@va", "-filter_hw_device", "hw" };
                 return new VideoEncoderProfile(family + "_qsv", label + " (QSV)", true,
-                    QsvInit, Empty, "format=nv12,hwupload=extra_hw_frames=64", false,
+                    qsvInit, Empty, "format=nv12,hwupload=extra_hw_frames=64", false,
                     DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12|p010le,",
                     GpuDevice: qsvDevice, VppBrightness: VppBrightness(options), VppContrast: VppContrast(options));
             case "vaapi":
-                var device = string.IsNullOrEmpty(options?.VaapiDevice) ? "/dev/dri/renderD128" : options!.VaapiDevice;
+                var device = FirstDevice(options?.VaapiDevice, options?.QsvDevice);
                 return new VideoEncoderProfile(family + "_vaapi", label + " (VAAPI)", true,
                     new[] { "-init_hw_device", "vaapi=va:" + device, "-filter_hw_device", "va" }, Empty,
                     "format=nv12,hwupload", false,
@@ -114,6 +120,19 @@ public class EncoderResolver
             "vaapi" => ("VAAPI", true),
             _ => ("Software (no hardware acceleration configured in Jellyfin)", false)
         };
+    }
+
+    // The render node Jellyfin is configured to encode on. QSV mode stores it in QsvDevice and VAAPI mode
+    // in VaapiDevice; the caller passes the active mode's field first, and the first node is only assumed
+    // when neither is set.
+    private static string FirstDevice(string? preferred, string? fallback)
+    {
+        if (!string.IsNullOrEmpty(preferred))
+        {
+            return preferred;
+        }
+
+        return string.IsNullOrEmpty(fallback) ? "/dev/dri/renderD128" : fallback;
     }
 
     // The brightness/contrast gain Jellyfin applies after its own VAAPI tone map (Dashboard > Playback >
