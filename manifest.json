@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.10.5",
+        "changelog": "## Developer\r\n- Apply the VPP brightness gain before the tone map instead of after, matching Jellyfin's order\r\n- Fixes washed out HDR playback when a VPP tone mapping brightness gain is set",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.10.5/jellyfin-plugin-livechannels-10.11.10.5.zip",
+        "checksum": "1dc1ec30c1c44685a490f476fa4ecfca",
+        "timestamp": "2026-07-19T19:31:44Z"
+      },
+      {
         "version": "10.11.10.4",
         "changelog": "## Developer\r\n- Add a watchdog for tracking if there is an open channel but no sessions then closing that channel\r\n- Prevent hanging channels and kill their ffmpeg if unused.",
         "targetAbi": "10.11.9.0",
