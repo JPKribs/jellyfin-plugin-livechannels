@@ -11,6 +11,7 @@ using Jellyfin.Plugin.LiveChannels.Utilities;
 using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Dto;
@@ -22,11 +23,12 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.LiveChannels.Services;
 
 /// <summary>
-/// Exposes the configured virtual channels to Jellyfin's Live TV entirely in-process, with no HTTP endpoints:
-/// channels and their precomputed schedule come straight from the plugin, and each live stream is an ffmpeg
-/// feed written to a local temp file that Jellyfin reads and re-exposes through its own authenticated Live TV.
+/// Exposes the configured virtual channels to Jellyfin's Live TV entirely in-process, with no HTTP endpoints of
+/// its own: channels and their precomputed schedule come straight from the plugin, and each live stream is an
+/// ffmpeg feed segmented to disk and served back through Jellyfin's own internal live stream endpoint (see
+/// <see cref="DirectLiveStream"/>), the same delivery route native tuner streams use.
 /// </summary>
-public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
+public sealed class LiveChannelsTvService : ILiveTvService, ISupportsDirectStreamProvider, IDisposable
 {
     // Content added within this window is treated as new (not a repeat) in the guide.
     private const int NewWindowDays = 14;
@@ -55,7 +57,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     private readonly ISessionManager _sessionManager;
     private readonly ILogger<LiveChannelsTvService> _logger;
 
-    private readonly bool _probeOpenedSource;
+    private readonly IServerApplicationHost _appHost;
     private readonly string _streamRoot;
     private readonly string _logoRoot = Path.Combine(Path.GetTempPath(), "livechannels-logos");
 
@@ -88,7 +90,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     /// <param name="defaultLogo">The generated fallback-logo service.</param>
     /// <param name="activity">The activity logger, used to record channel start/stop in Jellyfin's activity log.</param>
     /// <param name="sessionManager">The session manager, used by the watchdog to see which live streams clients are actually playing.</param>
-    /// <param name="appHost">The application host, used to read the server version the probe fix depends on.</param>
+    /// <param name="appHost">The application host, used to build the internal live stream endpoint URL each opened source points at.</param>
     /// <param name="appPaths">The application paths, used to default the stream directory under Jellyfin's cache.</param>
     /// <param name="logger">The logger.</param>
     public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, ISessionManager sessionManager, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
@@ -100,15 +102,12 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         _sessionManager = sessionManager;
         _logger = logger;
 
-        // Probing the opened source defeats Jellyfin's forced-interlaced hack (playback remuxes instead of
-        // re-encoding), but from 10.11.10 the probe normalises the live playlist's container to "ts" and the
-        // delivery ffmpeg is launched with `-f mpegts` against the .m3u8 — no playback at all. Only servers
-        // below that version probe; newer ones keep the declared streams.
-        _probeOpenedSource = appHost.ApplicationVersion < new Version(10, 11, 10);
-        _logger.LogInformation(
-            "Live Channels: server {Version}; opened-source probing {State}",
-            appHost.ApplicationVersion,
-            _probeOpenedSource ? "enabled (defeats the live-TV forced-interlace flag)" : "disabled (10.11.10+ probe breaks live HLS container detection)");
+        // Opened streams are served as a direct stream provider: each one points at Jellyfin's own
+        // /LiveTv/LiveStreamFiles endpoint (a continuous MPEG-TS backed by DirectLiveStream.GetStream), which
+        // Jellyfin probes like any native tuner stream. The probe result replaces the interlace flag Jellyfin
+        // force-sets on plugin streams (so playback direct-streams instead of re-encoding), and with no HLS
+        // playlist in the path, the 10.11.10+ probe container normalisation has nothing to break.
+        _appHost = appHost;
 
         // Where each channel's growing stream file is written (and where the schedule cache lives). Configurable,
         // since the file lives for the whole watch and the system temp is often small or RAM-backed; defaults to a
@@ -229,13 +228,51 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         var channel = _channels.FindChannel(channelId);
         var sources = channel is null
             ? new List<MediaSourceInfo>()
-            : new List<MediaSourceInfo> { BuildSource(channelId, path: null) };
+            : new List<MediaSourceInfo> { BuildMenuSource(channelId) };
 
         return Task.FromResult(sources);
     }
 
     /// <inheritdoc />
     public async Task<MediaSourceInfo> GetChannelStream(string channelId, string streamId, CancellationToken cancellationToken)
+    {
+        // Jellyfin's live-TV provider always prefers GetChannelStreamWithDirectStreamProvider when the service
+        // implements it, so this is only a safety net for any caller still on the plain interface.
+        var live = await GetChannelStreamWithDirectStreamProvider(channelId, streamId, new List<ILiveStream>(), cancellationToken).ConfigureAwait(false);
+        return live.MediaSource;
+    }
+
+    /// <inheritdoc />
+    public async Task<ILiveStream> GetChannelStreamWithDirectStreamProvider(string channelId, string streamId, List<ILiveStream> currentLiveStreams, CancellationToken cancellationToken)
+    {
+        var (session, liveStreamId) = await OpenConsumerAsync(channelId, cancellationToken).ConfigureAwait(false);
+
+        // Handing Jellyfin our own ILiveStream (instead of a MediaSourceInfo it wraps itself) keeps the plugin in
+        // control of delivery: the opened source's path is Jellyfin's internal live stream endpoint, which serves
+        // DirectLiveStream.GetStream — the session's segments as one continuous, probe-able MPEG-TS. Jellyfin
+        // closes each viewer through DirectLiveStream.Close, which releases that viewer's consumer exactly like
+        // the plain CloseLiveStream path.
+        var live = new DirectLiveStream(
+            session.ChannelName,
+            session.Path,
+            session.StartedUtc,
+            uniqueId => BuildOpenedSource(liveStreamId, uniqueId),
+            () => CloseLiveStream(liveStreamId, CancellationToken.None),
+            _logger);
+
+        _logger.LogInformation(
+            "Live Channels: {Name}: handed to Jellyfin as {Path} (session {Session}, live id {Id})",
+            session.ChannelName,
+            live.MediaSource.Path,
+            session.Id,
+            liveStreamId);
+
+        return live;
+    }
+
+    // Opens a viewer on the channel (adopting the warm session when one exists, else starting a fresh producer)
+    // and returns the session with the new viewer's live stream id already attached as a consumer.
+    private async Task<(LiveSession Session, string LiveStreamId)> OpenConsumerAsync(string channelId, CancellationToken cancellationToken)
     {
         var channel = _channels.FindChannel(channelId)
             ?? throw new InvalidOperationException("No enabled channel matches id " + channelId);
@@ -274,7 +311,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             {
                 await WaitForPlaylistAsync(warmPlaylist, adopted.Worker, cancellationToken).ConfigureAwait(false);
                 _logger.LogInformation("Live Channels: adopted the warm session for {Name}", channel.Name);
-                return BuildSource(liveStreamId, warmPlaylist);
+                return (adopted, liveStreamId);
             }
             catch (OperationCanceledException)
             {
@@ -350,9 +387,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
         // session was joined (its logo is already set).
         session.LogoPath ??= await EnsureLogoAsync(channel, CancellationToken.None).ConfigureAwait(false);
 
-        // Jellyfin opens the playlist immediately, so wait until the segmenter has written it and a first segment,
-        // and if the producer dies with nothing, drop this consumer (tearing the session down if it was the only
-        // one) and surface a clear failure rather than handing over an empty playlist.
+        // Jellyfin probes the opened stream immediately, so wait until the segmenter has written the playlist and
+        // a couple of segments, and if the producer dies with nothing, drop this consumer (tearing the session
+        // down if it was the only one) and surface a clear failure rather than handing over an empty session.
         try
         {
             await WaitForPlaylistAsync(playlist, session.Worker, cancellationToken).ConfigureAwait(false);
@@ -373,7 +410,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             "LiveChannels.ChannelStarted",
             overview: "This channel is now being encoded.");
 
-        return BuildSource(liveStreamId, playlist);
+        return (session, liveStreamId);
     }
 
     // Starts the producer for a session: the stream session runs the HLS segmenter and feeds it, writing the live
@@ -998,12 +1035,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
     /// <inheritdoc />
     public Task CancelSeriesTimerAsync(string timerId, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    // Builds the live HLS source descriptor. With no path it is the "menu" entry Jellyfin opens via
-    // GetChannelStream; with a path (the .m3u8) it is the opened stream Jellyfin reads and later closes by its Id.
-    // We produce the stream ourselves at a known resolution/codec, so we advertise concrete video/audio
-    // streams (and skip probing): without them, a client that needs transcoding crashes Jellyfin's scale
-    // filter on the null source dimensions.
-    private MediaSourceInfo BuildSource(string id, string? path)
+    // Builds the "menu" source descriptor Jellyfin lists before a stream is opened. We produce the stream
+    // ourselves at a known resolution/codec, so it advertises concrete video/audio streams: it cannot be probed
+    // (nothing is running yet), and without declared streams a client that needs transcoding crashes Jellyfin's
+    // scale filter on the null source dimensions.
+    private MediaSourceInfo BuildMenuSource(string id)
     {
         var (width, bitrateKbps, videoCodec, audioCodec) = Plugin.Instance?.ReadConfiguration(c =>
             (c.TranscodeWidth, c.TranscodeVideoBitrateKbps, c.VideoCodec, c.AudioCodec))
@@ -1038,45 +1074,62 @@ public sealed class LiveChannelsTvService : ILiveTvService, IDisposable
             SampleRate = 48000
         };
 
-        // The OPENED source (path set) must be probed by Jellyfin, counter-intuitively: after GetChannelStream
-        // returns, Jellyfin's live-TV provider force-flags every provided video stream as interlaced (a legacy
-        // "make clients deinterlace" hack: IsInterlaced=true, NalLengthSize "0", DisplayTitle "1080i"), which
-        // makes clients re-encode the whole stream with "interlaced video is not supported". The open-stream
-        // probe runs AFTER that hack and its fresh result replaces the doctored streams, so the playback decision
-        // sees the output as it really is (progressive) and direct-streams. The handover already waited for the
-        // first segments, so the probe has real content to read. The unopened "menu" source (no path) cannot be
-        // probed, so it keeps the declared streams: without them a client that needs transcoding crashes
-        // Jellyfin's scale filter on null source dimensions.
-        //
-        // VERSION CEILING: from Jellyfin 10.11.10 the probe normalises a live HLS playlist's container to its
-        // SEGMENT container ("ts" instead of "hls"), and the delivery ffmpeg is then launched with `-f mpegts`
-        // pointed at the .m3u8 -- which cannot parse, exits 187 on every attempt, and kills ALL playback. On
-        // those servers the opened source keeps the declared streams instead (see _probeOpenedSource).
-        var opened = path is not null && _probeOpenedSource;
+        // The source id feeds Jellyfin's probe cache key (via the open token), so fold the output shape into it:
+        // any config change that alters the stream (resolution, bitrate, codecs) mints a new id, forcing a fresh
+        // probe instead of serving stale cached metadata. The revision tag also retires every cache entry written
+        // by the pre-endpoint architecture; those carry Container "hls", which makes delivery run `-f hls`
+        // against the raw TS endpoint and fail on the spot.
+        var fingerprint = Hash(string.Create(
+            CultureInfo.InvariantCulture,
+            $"v2|{width}|{bitrateKbps}|{(int)videoCodec}|{(int)audioCodec}"));
+
         return new MediaSourceInfo
         {
-            Id = id,
-            Path = path,
+            Id = id + "_" + fingerprint,
             Protocol = MediaProtocol.File,
-            Container = "hls",
+            Container = "mpegts",
             IsInfiniteStream = true,
-            // Deliberately NOT ReadAtNativeFramerate: the live playlist (no end tag) already paces Jellyfin's
-            // reader to segment availability at the live edge. Adding -re on top caps it at 1x realtime even when
-            // it is behind, so the client buffer could only ever fill at realtime (slow tune-in) and a reader that
-            // hiccuped could never catch back up before falling off the back of the delete window.
-            // Pre-roll a few seconds on the client so playback starts on a full buffer instead of stuttering
-            // while it fills (the declarative form of pausing briefly then resuming on tune-in).
             BufferMs = BufferSeconds * 1000,
-            RequiresOpening = path is null,
+            RequiresOpening = true,
             RequiresClosing = true,
             SupportsDirectPlay = false,
             SupportsDirectStream = true,
-            SupportsProbing = opened,
-            // Keep the probe snappy: our TS declares its PAT/PMT and interleaves both streams within
-            // milliseconds, and the handover guarantees ~8s of segments exist, so one second of analysis is
-            // ample and every tune-in saves the difference.
-            AnalyzeDurationMs = opened ? 1000 : null,
-            MediaStreams = opened ? Array.Empty<MediaStream>() : new[] { video, audio }
+            SupportsProbing = false,
+            MediaStreams = new[] { video, audio }
+        };
+    }
+
+    // Builds the OPENED source descriptor. Its path is Jellyfin's OWN internal live stream endpoint (the same
+    // one every native tuner stream flows through), which serves the session's segments as one continuous
+    // MPEG-TS (see DirectLiveStream). It declares no streams and asks to be probed: after the open returns,
+    // Jellyfin's live-TV provider force-flags every plugin-provided video stream as interlaced (a legacy "make
+    // clients deinterlace" hack that made clients re-encode with "interlaced video is not supported"), and the
+    // open-stream probe runs AFTER that hack, replacing the doctored streams with what the output really is
+    // (progressive), so playback direct-streams. The handover already waited for the first segments, so the
+    // probe has real content to read; probing a continuous TS is also immune to the 10.11.10+ probe container
+    // normalisation that broke probing the HLS playlist directly (it rewrote the container to "ts" and delivery
+    // then ran `-f mpegts` against a .m3u8 -- fatal on every tune-in).
+    private MediaSourceInfo BuildOpenedSource(string liveStreamId, string uniqueId)
+    {
+        return new MediaSourceInfo
+        {
+            Id = liveStreamId,
+            Path = _appHost.GetApiUrlForLocalAccess() + "/LiveTv/LiveStreamFiles/" + uniqueId + "/stream.ts",
+            Protocol = MediaProtocol.Http,
+            IsInfiniteStream = true,
+            // Deliberately NOT ReadAtNativeFramerate: the endpoint already paces the reader to segment
+            // availability at the live edge. Adding -re on top caps it at 1x realtime even when it is behind, so
+            // the client buffer could only ever fill at realtime (slow tune-in) and a reader that hiccuped could
+            // never catch back up before falling off the back of the delete window.
+            // Pre-roll a few seconds on the client so playback starts on a full buffer instead of stuttering
+            // while it fills (the declarative form of pausing briefly then resuming on tune-in).
+            BufferMs = BufferSeconds * 1000,
+            RequiresOpening = false,
+            RequiresClosing = true,
+            SupportsDirectPlay = false,
+            SupportsDirectStream = true,
+            SupportsProbing = true,
+            MediaStreams = Array.Empty<MediaStream>()
         };
     }
 

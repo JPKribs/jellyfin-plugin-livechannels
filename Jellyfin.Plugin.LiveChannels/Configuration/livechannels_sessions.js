@@ -59,9 +59,47 @@ export default function (view) {
             '</span><span class="jpk-mono">' + value + '</span></div>';
     }
 
+    // Session id to { url } (a loaded blob object URL), { pending: true }, or { failed: true }. The logo is
+    // served by our controller, and from Jellyfin 10.11 a query-string api_key no longer authenticates, so an
+    // <img src> URL cannot carry the token. Each logo is fetched once with the token in a header and shown as
+    // a local object URL; the cache keeps the 5s poll from refetching, and pruneLogos revokes what is stale.
+    var _logoCache = {};
+
+    function ensureLogo(id) {
+        if (_logoCache[id]) { return; }
+        _logoCache[id] = { pending: true };
+        fetch(ApiClient.getUrl('livechannels/sessions/' + encodeURIComponent(id) + '/logo'), {
+            headers: { 'X-Emby-Token': ApiClient.accessToken() }
+        }).then(function (r) {
+            if (!r.ok) { throw new Error('logo ' + r.status); }
+            return r.blob();
+        }).then(function (blob) {
+            _logoCache[id] = { url: URL.createObjectURL(blob) };
+            // The card may have re-rendered while the fetch ran; update whichever img is in the DOM now.
+            var img = el('sessionList').querySelector('.lc-session-logo[data-session-id="' + id + '"]');
+            if (img) { img.src = _logoCache[id].url; img.style.visibility = ''; }
+        }).catch(function () {
+            _logoCache[id] = { failed: true };
+        });
+    }
+
+    function pruneLogos(sessions) {
+        var live = {};
+        (sessions || []).forEach(function (s) { live[s.Id] = true; });
+        Object.keys(_logoCache).forEach(function (id) {
+            if (!live[id]) {
+                if (_logoCache[id].url) { URL.revokeObjectURL(_logoCache[id].url); }
+                delete _logoCache[id];
+            }
+        });
+    }
+
     function sessionCard(s) {
-        // The logo is served by our controller; pass the token in the URL since an <img> sends no auth header.
-        var logoUrl = ApiClient.getUrl('livechannels/sessions/' + encodeURIComponent(s.Id) + '/logo', { api_key: ApiClient.accessToken() });
+        // Hidden until its blob URL is ready (or already cached), so no broken-image icon ever shows.
+        var cached = _logoCache[s.Id];
+        var logoImg = cached && cached.url
+            ? '<img class="lc-session-logo" data-session-id="' + Shared.escapeHtml(s.Id) + '" src="' + cached.url + '" alt="" />'
+            : '<img class="lc-session-logo" data-session-id="' + Shared.escapeHtml(s.Id) + '" alt="" style="visibility:hidden" />';
         // A winding-down session (its viewer left; the encoder stays warm briefly so a returning viewer re-tunes
         // instantly) is dimmed and labelled with its countdown. Kill still stops it right away.
         var winding = typeof s.StopsInSeconds === 'number';
@@ -72,7 +110,7 @@ export default function (view) {
         return '<div class="jpk-record-card lc-session" data-id="' + Shared.escapeHtml(s.Id) + '" data-name="' + Shared.escapeHtml(s.Name || '') + '"' +
             (winding ? ' style="opacity:0.6"' : '') + ' title="Show this session\'s ffmpeg logs">' +
             '<div class="lc-session-head">' +
-                '<img class="lc-session-logo" src="' + logoUrl + '" alt="" />' +
+                logoImg +
                 '<div class="lc-session-title">' +
                     '<div class="lc-session-name"><span class="lc-session-number">' + s.Number + '</span>' + Shared.escapeHtml(s.Name || '') + '</div>' +
                     windingNote +
@@ -95,6 +133,10 @@ export default function (view) {
         for (var i = 0; i < imgs.length; i++) {
             imgs[i].addEventListener('error', function () { this.style.visibility = 'hidden'; });
         }
+
+        // Drop (and revoke) logos for sessions that have ended, then fetch any this render is missing.
+        pruneLogos(list);
+        list.forEach(function (s) { ensureLogo(s.Id); });
     }
 
     function loadSessions() {
@@ -211,4 +253,7 @@ export default function (view) {
     });
 
     view.addEventListener('viewhide', stopPolling);
+
+    // Release every blob object URL when the page is torn down; nothing else revokes the last set.
+    view.addEventListener('viewdestroy', function () { pruneLogos([]); });
 }
