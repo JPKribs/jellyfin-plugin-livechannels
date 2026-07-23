@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.11.1",
+        "changelog": "## Developer\r\n- Stop cutting items off at midnight on channels with time-of-day rating blocks\r\n- Daypart schedules now run as one continuous chain anchored at the last configuration save, so items that cross midnight play in full",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.11.1/jellyfin-plugin-livechannels-10.11.11.1.zip",
+        "checksum": "eb3d431fd430cd917254313e61de4b32",
+        "timestamp": "2026-07-23T05:03:52Z"
+      },
+      {
         "version": "10.11.11.0",
         "changelog": "## Developer\r\n- Serve opened streams through Jellyfin's internal live stream endpoint as a direct stream provider\r\n- The opened stream is probed again on every server version, so playback direct streams instead of re-encoding as interlaced",
         "targetAbi": "10.11.9.0",
