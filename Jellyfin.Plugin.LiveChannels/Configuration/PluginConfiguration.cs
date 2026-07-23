@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Jellyfin.Plugin.LiveChannels.Models;
 using MediaBrowser.Model.Plugins;
@@ -11,6 +12,11 @@ public class PluginConfiguration : BasePluginConfiguration
 {
     /// <summary>Gets or sets the configured virtual channels.</summary>
     public List<Channel> Channels { get; set; } = new();
+
+    /// <summary>Gets or sets the UTC moment the configuration was last saved. Channels with time-of-day rating
+    /// blocks chain their schedule from local midnight of this day, so the schedule stays stable (and the
+    /// simulation walk stays short) until the next save re-anchors it. Stamped server-side on every save.</summary>
+    public DateTime ScheduleAnchorUtc { get; set; }
 
 
     /// <summary>Gets or sets the target output width. Every item is encoded to this width (height derived from a 16:9 frame) so the single continuous stream stays one uniform format across item boundaries.</summary>

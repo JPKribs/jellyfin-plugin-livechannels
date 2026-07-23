@@ -7,7 +7,7 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 
 /// <summary>
 /// One item for the per-item stream loop to play: the program, how far into it to start, and an optional playback
-/// cap (used to end an item at its scheduled stop when the time-of-day schedule truncated it at midnight).
+/// cap (a defensive bound used only if the schedule ever hands over a slot shorter than the item).
 /// </summary>
 /// <param name="Program">The item to play.</param>
 /// <param name="Offset">How far into the item to start (non-zero only on the tune-in item).</param>
@@ -58,9 +58,9 @@ internal sealed class LoopStreamSchedule : IStreamSchedule
 }
 
 /// <summary>
-/// A time-of-day schedule: items are drawn from the channel's daypart timeline (rebuilt in horizon-sized windows),
-/// each capped at its scheduled stop so a midnight-truncated item ends where the schedule says it does. The
-/// timeline is a deterministic function of the clock, so this plays exactly what the guide shows.
+/// A time-of-day schedule: items are drawn from the channel's daypart timeline (rebuilt in horizon-sized windows).
+/// The timeline is one deterministic chain from the configuration-save anchor, so this plays exactly what the
+/// guide shows, and slots are always full length (nothing is truncated at midnight).
 /// </summary>
 internal sealed class DaypartStreamSchedule : IStreamSchedule
 {
@@ -96,8 +96,8 @@ internal sealed class DaypartStreamSchedule : IStreamSchedule
                 offset = TimeSpan.Zero;
             }
 
-            // Cap playback only when the schedule shortened this slot (a midnight truncation), so full-length items
-            // still play to their natural end and can have their real duration observed.
+            // Cap playback only if the schedule shortened this slot. The continuous chain never does; this stays
+            // as a defensive bound so a schedule bug cannot make an item overrun its slot forever.
             var scheduled = slot.Stop - slot.Start;
             var full = TimeSpan.FromTicks(slot.Program.DurationTicks);
             TimeSpan? limit = scheduled < full - TimeSpan.FromSeconds(1) ? scheduled - offset : null;

@@ -30,7 +30,15 @@ public partial class ChannelService
             return ScheduleCalculator.BuildSchedule(programs, fromUtc, toUtc, ScheduleCalculator.Epoch);
         }
 
-        return DaypartSchedule.Build(programs, blocks, channel.TransitionWindowMinutes, TimeZoneInfo.Local, fromUtc, toUtc, channel.Id);
+        // The chain anchors at the last configuration save (stamped by Plugin.UpdateConfiguration and backfilled
+        // at startup), so every caller simulates the same chain. The fallback only exists for unit tests.
+        var anchorUtc = Plugin.Instance?.ReadConfiguration(c => c.ScheduleAnchorUtc) ?? default;
+        if (anchorUtc == default)
+        {
+            anchorUtc = fromUtc;
+        }
+
+        return DaypartSchedule.Build(programs, blocks, channel.TransitionWindowMinutes, TimeZoneInfo.Local, anchorUtc, fromUtc, toUtc, channel.Id);
     }
 
     /// <summary>

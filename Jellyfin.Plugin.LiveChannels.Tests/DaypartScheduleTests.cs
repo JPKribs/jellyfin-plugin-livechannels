@@ -9,7 +9,8 @@ namespace Jellyfin.Plugin.LiveChannels.Tests;
 
 /// <summary>
 /// Tests for <see cref="DaypartSchedule"/>: content is placed under the rating window active at its start time,
-/// the simulation is deterministic, and the guide and stream (which call it with different ranges) agree.
+/// the chain is deterministic from the anchor, nothing is truncated at midnight, and the guide and stream
+/// (which call it with different ranges) agree.
 /// </summary>
 public class DaypartScheduleTests
 {
@@ -31,7 +32,7 @@ public class DaypartScheduleTests
     [Fact]
     public void Build_PlacesEveryItemUnderItsStartWindow()
     {
-        var schedule = DaypartSchedule.Build(Loop, Blocks, transitionMinutes: 0, TimeZoneInfo.Utc, Midnight, Midnight.AddDays(1), "chan");
+        var schedule = DaypartSchedule.Build(Loop, Blocks, transitionMinutes: 0, TimeZoneInfo.Utc, Midnight, Midnight, Midnight.AddDays(1), "chan");
 
         Assert.NotEmpty(schedule);
         foreach (var slot in schedule)
@@ -47,7 +48,7 @@ public class DaypartScheduleTests
     [Fact]
     public void Build_DaytimeNeverExceedsPg()
     {
-        var schedule = DaypartSchedule.Build(Loop, Blocks, transitionMinutes: 0, TimeZoneInfo.Utc, Midnight, Midnight.AddDays(1), "chan");
+        var schedule = DaypartSchedule.Build(Loop, Blocks, transitionMinutes: 0, TimeZoneInfo.Utc, Midnight, Midnight, Midnight.AddDays(1), "chan");
 
         foreach (var slot in schedule.Where(s => s.Start.Hour is >= 6 and < 20))
         {
@@ -58,8 +59,8 @@ public class DaypartScheduleTests
     [Fact]
     public void Build_IsDeterministic()
     {
-        var a = DaypartSchedule.Build(Loop, Blocks, 0, TimeZoneInfo.Utc, Midnight, Midnight.AddDays(2), "chan");
-        var b = DaypartSchedule.Build(Loop, Blocks, 0, TimeZoneInfo.Utc, Midnight, Midnight.AddDays(2), "chan");
+        var a = DaypartSchedule.Build(Loop, Blocks, 0, TimeZoneInfo.Utc, Midnight, Midnight, Midnight.AddDays(2), "chan");
+        var b = DaypartSchedule.Build(Loop, Blocks, 0, TimeZoneInfo.Utc, Midnight, Midnight, Midnight.AddDays(2), "chan");
 
         Assert.Equal(a.Count, b.Count);
         for (var i = 0; i < a.Count; i++)
@@ -73,10 +74,10 @@ public class DaypartScheduleTests
     [Fact]
     public void Build_GuideAndStreamAgreeOnTheOverlap()
     {
-        // The guide asks for a wide window; the stream tunes in mid-way. Both anchor per local day, so every
-        // programme the later call produces must match the wider call exactly (same item, same start and stop).
-        var wide = DaypartSchedule.Build(Loop, Blocks, 0, TimeZoneInfo.Utc, Midnight, Midnight.AddDays(2), "chan");
-        var later = DaypartSchedule.Build(Loop, Blocks, 0, TimeZoneInfo.Utc, Midnight.AddHours(30), Midnight.AddDays(2), "chan");
+        // The guide asks for a wide window; the stream tunes in mid-way. Both simulate the same chain from the
+        // same anchor, so every programme the later call produces must match the wider call exactly.
+        var wide = DaypartSchedule.Build(Loop, Blocks, 0, TimeZoneInfo.Utc, Midnight, Midnight, Midnight.AddDays(2), "chan");
+        var later = DaypartSchedule.Build(Loop, Blocks, 0, TimeZoneInfo.Utc, Midnight, Midnight.AddHours(30), Midnight.AddDays(2), "chan");
 
         Assert.NotEmpty(later);
         foreach (var slot in later)
@@ -86,14 +87,38 @@ public class DaypartScheduleTests
     }
 
     [Fact]
-    public void Build_TruncatesTheLastItemAtMidnight()
+    public void Build_DoesNotTruncateAtMidnight()
     {
-        // 90-minute items do not tile a 24h day evenly, so the item crossing midnight is cut there.
-        var loop = new[] { Entry(0, Pg, minutes: 90) };
-        var schedule = DaypartSchedule.Build(loop, new[] { new ResolvedRatingBlock(new RatingWindow(null, R, true), false, 0, 12 * 60) }, 0, TimeZoneInfo.Utc, Midnight, Midnight.AddDays(1), "chan");
+        // 100-minute items do not tile a 24h day evenly, so some item must cross midnight; it airs in full.
+        var loop = new[] { Entry(0, Pg, minutes: 100) };
+        var schedule = DaypartSchedule.Build(loop, new[] { new ResolvedRatingBlock(new RatingWindow(null, R, true), false, 0, 12 * 60) }, 0, TimeZoneInfo.Utc, Midnight, Midnight, Midnight.AddDays(2), "chan");
 
-        var lastOfDay = schedule.Last(s => s.Start < Midnight.AddDays(1));
-        Assert.Equal(Midnight.AddDays(1), lastOfDay.Stop);
+        Assert.All(schedule, s => Assert.Equal(TimeSpan.FromMinutes(100), s.Stop - s.Start));
+        Assert.Contains(schedule, s => s.Start < Midnight.AddDays(1) && s.Stop > Midnight.AddDays(1));
+    }
+
+    [Fact]
+    public void Build_IsContiguousFromLocalMidnightOfTheAnchorDay()
+    {
+        // A mid-afternoon save anchors the chain at that day's local midnight, and the chain has no gaps.
+        var anchor = Midnight.AddHours(14).AddMinutes(37);
+        var schedule = DaypartSchedule.Build(Loop, Blocks, 0, TimeZoneInfo.Utc, anchor, Midnight, Midnight.AddDays(1), "chan");
+
+        Assert.NotEmpty(schedule);
+        Assert.Equal(Midnight, schedule[0].Start);
+        for (var i = 1; i < schedule.Count; i++)
+        {
+            Assert.Equal(schedule[i - 1].Stop, schedule[i].Start);
+        }
+    }
+
+    [Fact]
+    public void Build_ReturnsNothingBeforeTheAnchorDay()
+    {
+        var anchor = Midnight.AddDays(5);
+        var schedule = DaypartSchedule.Build(Loop, Blocks, 0, TimeZoneInfo.Utc, anchor, Midnight, Midnight.AddDays(1), "chan");
+
+        Assert.Empty(schedule);
     }
 
     private static ProgramEntry[] BuildLoop()

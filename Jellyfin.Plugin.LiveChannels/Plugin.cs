@@ -29,6 +29,20 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
     {
         ArgumentNullException.ThrowIfNull(logger);
         _applicationPaths = applicationPaths;
+
+        // Time-of-day schedules chain from the last configuration save. An install upgrading past that feature
+        // has no recorded save yet, so stamp one now; without it every build would have to invent an anchor.
+        MutateConfiguration(config =>
+        {
+            if (config.ScheduleAnchorUtc != default)
+            {
+                return false;
+            }
+
+            config.ScheduleAnchorUtc = DateTime.UtcNow;
+            return true;
+        });
+
         logger.LogInformation("Live Channels plugin initialized");
     }
 
@@ -54,6 +68,10 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
         if (configuration is PluginConfiguration config)
         {
             ConfigurationValidator.Validate(config);
+
+            // Every save re-anchors the time-of-day schedule chain (the cache below is dropped anyway, so the
+            // reshuffle this causes coincides with the rebuild the user already expects from saving).
+            config.ScheduleAnchorUtc = DateTime.UtcNow;
         }
 
         // A channel edit must not be served from a stale schedule, so drop every cached schedule; the next guide

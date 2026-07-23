@@ -7,33 +7,42 @@ namespace Jellyfin.Plugin.LiveChannels.Utilities;
 
 /// <summary>
 /// Builds a time-of-day-aware wall-clock schedule for a channel whose rating limits vary by daypart. Unlike the
-/// free-running <see cref="ScheduleCalculator"/> loop, the content that airs depends on the clock, so the schedule
-/// is simulated forward from local midnight -- a deterministic function of the loop, the blocks, and the date, so
-/// the guide and the live stream independently agree. Each item is placed under the effective rating window for its
-/// start time (widened by the channel's transition buffer) and skipped when it does not fit, so an item airs only
-/// while it is allowed. Items are truncated at local midnight, the daily anchor that keeps the simulation bounded.
+/// free-running <see cref="ScheduleCalculator"/> loop, the content that airs depends on the clock, so items are
+/// placed back to back in one continuous chain simulated from a fixed anchor: local midnight of the day the
+/// plugin configuration was last saved. The chain is a deterministic function of the loop, the blocks, and the
+/// anchor, so the guide and the live stream independently agree. Each item is placed under the effective rating
+/// window for its start time (widened by the channel's transition buffer) and skipped when it does not comply.
+/// Nothing is ever truncated: an item that starts before midnight simply runs across it, and the next pick
+/// happens under whatever window is active when it ends.
 /// </summary>
 public static class DaypartSchedule
 {
-    /// <summary>A hard cap on placed programmes so a channel of very short items cannot produce an unbounded schedule.</summary>
+    /// <summary>A hard cap on emitted programmes so a channel of very short items cannot produce an unbounded schedule.</summary>
     private const int MaxPrograms = 10000;
 
+    /// <summary>A hard cap on chain steps per build, bounding a pathologically old anchor. Every configuration
+    /// save re-anchors the chain, so real walks cover days, not years; at three-minute items this cap still
+    /// reaches over five years past the anchor.</summary>
+    private const int MaxWalk = 1_000_000;
+
     /// <summary>
-    /// Simulates the schedule covering <c>[fromUtc, toUtc)</c>.
+    /// Simulates the chain from the anchor and returns the programmes covering <c>[fromUtc, toUtc)</c>.
     /// </summary>
     /// <param name="loop">The channel's resolved loop (loop-builder ordered), carrying each item's parental score.</param>
     /// <param name="blocks">The resolved rating blocks.</param>
     /// <param name="transitionMinutes">The channel's transition buffer, in minutes.</param>
     /// <param name="timeZone">The time zone the block times are expressed in (server local).</param>
+    /// <param name="anchorUtc">The chain anchor (the last configuration save); the chain starts at local midnight of its day.</param>
     /// <param name="fromUtc">The inclusive UTC start of the window.</param>
     /// <param name="toUtc">The exclusive UTC end of the window.</param>
-    /// <param name="seed">A per-channel seed (the channel id) so different channels lead each day differently.</param>
-    /// <returns>The ordered, contiguous programmes covering the window (the first may start before <paramref name="fromUtc"/>).</returns>
+    /// <param name="seed">A per-channel seed (the channel id) so different channels lead the chain differently.</param>
+    /// <returns>The ordered, contiguous programmes covering the window (the first may start before <paramref name="fromUtc"/>; nothing precedes the anchor).</returns>
     public static IReadOnlyList<ScheduledProgram> Build(
         IReadOnlyList<ProgramEntry> loop,
         IReadOnlyList<ResolvedRatingBlock> blocks,
         int transitionMinutes,
         TimeZoneInfo timeZone,
+        DateTime anchorUtc,
         DateTime fromUtc,
         DateTime toUtc,
         string seed)
@@ -49,50 +58,36 @@ public static class DaypartSchedule
             return schedule;
         }
 
-        // Start at local midnight of the day fromUtc falls in, so an item already airing at fromUtc is captured.
-        var localFrom = TimeZoneInfo.ConvertTimeFromUtc(fromUtc, timeZone);
-        var dayLocal = DateTime.SpecifyKind(localFrom.Date, DateTimeKind.Unspecified);
-
-        while (schedule.Count < MaxPrograms)
+        // The chain starts at local midnight of the anchor's day, so the whole save day is covered.
+        var anchorLocal = TimeZoneInfo.ConvertTimeFromUtc(anchorUtc, timeZone);
+        var anchorDayLocal = DateTime.SpecifyKind(anchorLocal.Date, DateTimeKind.Unspecified);
+        if (timeZone.IsInvalidTime(anchorDayLocal))
         {
-            var dayStartUtc = TimeZoneInfo.ConvertTimeToUtc(dayLocal, timeZone);
-            var nextMidnightLocal = DateTime.SpecifyKind(dayLocal.AddDays(1), DateTimeKind.Unspecified);
-            var nextMidnightUtc = TimeZoneInfo.ConvertTimeToUtc(nextMidnightLocal, timeZone);
+            anchorDayLocal = anchorDayLocal.AddHours(1); // A zone whose DST jump skips midnight.
+        }
 
-            if (dayStartUtc >= toUtc)
+        var t = TimeZoneInfo.ConvertTimeToUtc(anchorDayLocal, timeZone);
+        var cursor = SeededStart(seed, anchorDayLocal, loop.Count);
+
+        for (var walked = 0; walked < MaxWalk && t < toUtc && schedule.Count < MaxPrograms; walked++)
+        {
+            var localT = TimeZoneInfo.ConvertTimeFromUtc(t, timeZone);
+            var minute = (localT.Hour * 60) + localT.Minute;
+            var window = RatingSchedule.WindowForStart(blocks, minute, transitionMinutes);
+
+            cursor = PickNext(loop, cursor, window, out var item);
+            var stop = t + TimeSpan.FromTicks(item.DurationTicks);
+            if (stop <= t)
             {
-                break;
+                break; // Defensive: a non-positive duration would not advance the clock.
             }
 
-            var cursor = SeededStart(seed, dayLocal, loop.Count);
-            var t = dayStartUtc;
-            while (t < nextMidnightUtc && schedule.Count < MaxPrograms)
+            if (stop > fromUtc)
             {
-                var localT = TimeZoneInfo.ConvertTimeFromUtc(t, timeZone);
-                var minute = (localT.Hour * 60) + localT.Minute;
-                var window = RatingSchedule.WindowForStart(blocks, minute, transitionMinutes);
-
-                cursor = PickNext(loop, cursor, window, out var item);
-                var stop = t + TimeSpan.FromTicks(item.DurationTicks);
-                if (stop > nextMidnightUtc)
-                {
-                    stop = nextMidnightUtc; // Truncate at midnight -- the daily anchor that bounds the simulation.
-                }
-
-                if (stop <= t)
-                {
-                    break; // Defensive: a non-positive duration would not advance the clock.
-                }
-
-                if (stop > fromUtc && t < toUtc)
-                {
-                    schedule.Add(new ScheduledProgram(item, t, stop));
-                }
-
-                t = stop;
+                schedule.Add(new ScheduledProgram(item, t, stop));
             }
 
-            dayLocal = nextMidnightLocal;
+            t = stop;
         }
 
         return schedule;
@@ -128,8 +123,9 @@ public static class DaypartSchedule
 
     private static int Score(ProgramEntry entry) => entry.ParentalRatingValue ?? int.MaxValue;
 
-    // A stable per-day start index into the loop, so the day leads with different content over time while the guide
-    // and stream still agree for any given date. FNV-1a of the channel seed and the local date.
+    // A stable start index into the loop for the chain's first pick, so different channels (and different anchor
+    // days) lead with different content while the guide and stream still agree. FNV-1a of the channel seed and
+    // the anchor's local date.
     private static int SeededStart(string seed, DateTime dayLocal, int count)
     {
         unchecked
