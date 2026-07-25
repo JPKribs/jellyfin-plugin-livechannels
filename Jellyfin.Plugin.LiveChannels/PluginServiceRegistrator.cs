@@ -24,6 +24,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<DefaultLogoService>();
         serviceCollection.AddSingleton<ActivityLogger>();
         serviceCollection.AddSingleton<TimerService>();
+        serviceCollection.AddSingleton<RecordingService>();
 
         // Register the Live TV service as a concrete singleton and alias ILiveTvService to it, so Jellyfin
         // discovers the channels in-process and the cleanup scheduled task shares the exact same instance (and

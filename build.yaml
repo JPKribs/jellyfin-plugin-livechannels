@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.12.0"
+version: "10.11.12.1"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -16,5 +16,11 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   developer:
-  - DVR timers are now persisted and honored, so scheduling, listing, updating, and cancelling recordings works from any client and survives restarts
-  - When a channel produces no playable output the session's ffmpeg log is now surfaced in the server log, so failure reports carry the cause instead of just the symptom
+  - Timers now produce real recordings. When a timer's window ends the aired program is resolved back to the library item it replayed and that file is placed in the Live TV recordings folder, hardlinked on the same volume or copied otherwise, with no capture or transcoding
+  - Recordings use the built in DVR's folder and naming scheme, honoring the server's configured recording paths and subfolder option, so they land as Series/Season folders and Movie (Year) folders the recordings library groups correctly
+  - The recordings folder is registered as a library when nothing serves it and a targeted refresh runs after each recording, so new recordings appear on the Recordings shelf immediately
+  - Record Series now works. One rule per series per channel (duplicate rules consolidate automatically and their timers follow the surviving rule), expanding into linked upcoming timers a day ahead, one per distinct episode, honoring day and time constraints. Cancelling a rule removes it and its timers
+  - Cancelling a timer sticks and aborts it in place, so no recording is delivered. Cancelled timers become tombstones series expansion cannot recreate, and pressing record again re arms the program
+  - Completed timers carry their recording path and age out of the timer list while the recording lives on as a normal library item. Failed recordings retry up to three times before the timer is marked errored
+  - Recording a program that already aired works, since the content it replayed already exists
+  - Tuning into a continuous channel deep in its loop no longer times out. The playlist now starts at the item currently airing, so the tune in seek stays inside one file instead of decoding through every prior item to reach the current position

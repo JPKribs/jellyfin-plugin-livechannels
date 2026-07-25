@@ -55,6 +55,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     private readonly DefaultLogoService _defaultLogo;
     private readonly ActivityLogger _activity;
     private readonly TimerService _timers;
+    private readonly RecordingService _recordings;
     private readonly ISessionManager _sessionManager;
     private readonly ILogger<LiveChannelsTvService> _logger;
 
@@ -91,17 +92,19 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <param name="defaultLogo">The generated fallback-logo service.</param>
     /// <param name="activity">The activity logger, used to record channel start/stop in Jellyfin's activity log.</param>
     /// <param name="timers">The timer store, backing the DVR timer surface.</param>
+    /// <param name="recordings">The recording service, which fulfils timers by materializing their recordings.</param>
     /// <param name="sessionManager">The session manager, used by the watchdog to see which live streams clients are actually playing.</param>
     /// <param name="appHost">The application host, used to build the internal live stream endpoint URL each opened source points at.</param>
     /// <param name="appPaths">The application paths, used to default the stream directory under Jellyfin's cache.</param>
     /// <param name="logger">The logger.</param>
-    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, TimerService timers, ISessionManager sessionManager, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
+    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, TimerService timers, RecordingService recordings, ISessionManager sessionManager, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
     {
         _channels = channels;
         _streams = streams;
         _defaultLogo = defaultLogo;
         _activity = activity;
         _timers = timers;
+        _recordings = recordings;
         _sessionManager = sessionManager;
         _logger = logger;
 
@@ -121,9 +124,18 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         // A fresh process owns no live streams, so anything left in the stream root is an orphan from a previous
         // run that ended without CloseLiveStream (a crash). Sweep it now, then periodically reap sessions whose
         // producer has stopped, or that have run past the configured time limit, but that Jellyfin never closed,
-        // so neither files nor encoders pile up.
+        // so neither files nor encoders pile up. The same heartbeat drives the DVR: expiring timers get their
+        // recordings materialized and series rules expand into upcoming child timers.
         ReapOrphanFiles();
-        _reaper = new Timer(_ => ReapSessions(), state: null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+        _reaper = new Timer(
+            _ =>
+            {
+                ReapSessions();
+                _recordings.Kick();
+            },
+            state: null,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(1));
     }
 
     /// <inheritdoc />
@@ -1012,9 +1024,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <inheritdoc />
     public Task ResetTuner(string id, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    // DVR timer surface, backed by TimerService. Timers are persisted and reported faithfully so client DVR
-    // flows (schedule, upcoming, cancel) work end to end; the channels replay library content that is already
-    // on disk, so no recording file is produced when a timer's window arrives. Creates route through
+    // DVR timer surface, backed by TimerService and fulfilled by RecordingService: when a timer's window ends,
+    // the aired program's library file is materialized into the Live TV recordings folder (see
+    // RecordingService for why a recording must be a real file there). Creates route through
     // ISupportsNewTimerIds so Jellyfin learns the id each new timer was stored under.
 
     /// <inheritdoc />
@@ -1040,6 +1052,10 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     public Task CreateSeriesTimerAsync(SeriesTimerInfo info, CancellationToken cancellationToken)
     {
         _timers.SaveSeriesTimer(info);
+
+        // Expand the rule into its child timers right away (not just on the next heartbeat), so the client
+        // that created it sees the scheduled airings on its very next timers fetch.
+        _recordings.Kick();
         return Task.CompletedTask;
     }
 
@@ -1049,7 +1065,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
 
     /// <inheritdoc />
     Task<string> ISupportsNewTimerIds.CreateSeriesTimer(SeriesTimerInfo info, CancellationToken cancellationToken)
-        => Task.FromResult(_timers.SaveSeriesTimer(info));
+    {
+        var id = _timers.SaveSeriesTimer(info);
+        _recordings.Kick();
+        return Task.FromResult(id);
+    }
 
     /// <inheritdoc />
     public Task UpdateTimerAsync(TimerInfo updatedTimer, CancellationToken cancellationToken)

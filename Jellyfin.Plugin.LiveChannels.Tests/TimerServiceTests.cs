@@ -66,32 +66,154 @@ public sealed class TimerServiceTests : IDisposable
     }
 
     [Fact]
-    public void CancelTimer_RemovesIt_AcrossReloads()
+    public void CancelTimer_LeavesATombstone_ThatBlocksRecreation()
     {
         var service = NewService();
-        var keep = service.SaveTimer(Timer("prog-1", InHours(1), InHours(2)));
+        service.SaveTimer(Timer("prog-1", InHours(1), InHours(2)));
         var cancel = service.SaveTimer(Timer("prog-2", InHours(3), InHours(4)));
 
         service.CancelTimer(cancel);
 
-        Assert.Equal(keep, Assert.Single(NewService().GetTimers()).Id);
+        // The cancelled timer stays as a tombstone (so series expansion cannot re-create the airing), keeps
+        // its status across reloads, and is never due for recording.
+        var reloaded = NewService();
+        var cancelled = reloaded.GetTimers().Single(t => t.ProgramId == "prog-2");
+        Assert.Equal(RecordingStatus.Cancelled, cancelled.Status);
+        Assert.True(reloaded.HasTimerForProgram("prog-2"));
+        Assert.DoesNotContain(reloaded.TimersDueForRecording(), t => t.ProgramId == "prog-2");
     }
 
     [Fact]
-    public void GetTimers_DropsExpired_AndMarksActiveInProgress()
+    public void CancelDuringWindow_AbortsInPlace_NoRecordingDelivered()
+    {
+        var service = NewService();
+        var id = service.SaveTimer(Timer("prog-1", InHours(-1), InHours(1)));
+
+        service.CancelTimer(id);
+
+        // Cancel aborts wherever the window stands: the timer becomes a tombstone and is never due for
+        // materialization, so no recording is delivered.
+        Assert.Empty(service.TimersDueForRecording());
+        Assert.Equal(RecordingStatus.Cancelled, service.GetTimers().Single(t => t.Id == id).Status);
+    }
+
+    [Fact]
+    public void CancelledTimer_AgesOutAfterWindow_AndRecordAgainReplacesIt()
+    {
+        var service = NewService();
+        var expired = service.SaveTimer(Timer("prog-1", InHours(-2), InHours(-1)));
+        service.CancelTimer(expired);
+        Assert.Empty(service.GetTimers());
+
+        var again = service.SaveTimer(Timer("prog-2", InHours(1), InHours(2)));
+        service.CancelTimer(again);
+        var replacement = service.SaveTimer(Timer("prog-2", InHours(1), InHours(2)));
+
+        // Re-pressing record replaces the tombstone with a live timer via the per-program dedupe.
+        var timer = Assert.Single(service.GetTimers());
+        Assert.Equal(replacement, timer.Id);
+        Assert.Equal(RecordingStatus.New, timer.Status);
+    }
+
+    [Fact]
+    public void GetTimers_KeepsExpiredUntilMaterialized_AndMarksActiveInProgress()
     {
         var service = NewService();
         service.SaveTimer(Timer("ended", InHours(-3), InHours(-2)));
         service.SaveTimer(Timer("airing", InHours(-1), InHours(1)));
         service.SaveTimer(Timer("upcoming", InHours(1), InHours(2)));
 
+        // The expired timer is NOT dropped: the recording service still owes it a materialization pass, and it
+        // is the only one listed as due.
         var timers = service.GetTimers();
-        Assert.Equal(2, timers.Count);
+        Assert.Equal(3, timers.Count);
         Assert.Equal(RecordingStatus.InProgress, timers.Single(t => t.ProgramId == "airing").Status);
         Assert.Equal(RecordingStatus.New, timers.Single(t => t.ProgramId == "upcoming").Status);
+        Assert.Equal("ended", Assert.Single(service.TimersDueForRecording()).ProgramId);
+    }
 
-        // The expired timer is gone from the persisted store too, not just this read.
-        Assert.Equal(2, NewService().GetTimers().Count);
+    [Fact]
+    public void CompleteTimer_SticksAndThenAgesOut()
+    {
+        var service = NewService();
+        var id = service.SaveTimer(Timer("ended", InHours(-3), InHours(-2)));
+
+        service.CompleteTimer(id, RecordingStatus.Completed, "/tmp/rec.mkv");
+
+        // No longer due, and the terminal outcome survives a reload; the next read then ages it out of the
+        // store entirely (the recording lives on as a library item).
+        Assert.Empty(service.TimersDueForRecording());
+        Assert.Empty(NewService().GetTimers());
+        Assert.Empty(NewService().GetTimers());
+    }
+
+    [Fact]
+    public void SaveSeriesTimer_ForSameProgram_ReplacesInsteadOfStacking()
+    {
+        var service = NewService();
+        var first = service.SaveSeriesTimer(new SeriesTimerInfo { Name = "Show", ChannelId = "chan-1", ProgramId = "prog-1" });
+        var second = service.SaveSeriesTimer(new SeriesTimerInfo { Name = "Show", ChannelId = "chan-1", ProgramId = "prog-1" });
+
+        var rule = Assert.Single(service.GetSeriesTimers());
+        Assert.Equal(second, rule.Id);
+        Assert.NotEqual(first, second);
+    }
+
+    [Fact]
+    public void SaveSeriesTimer_Replace_RelinksChildren()
+    {
+        var service = NewService();
+        var first = service.SaveSeriesTimer(new SeriesTimerInfo { Name = "Show", ChannelId = "chan-1", ProgramId = "prog-1" });
+        var child = Timer("prog-2", InHours(1), InHours(2));
+        child.SeriesTimerId = first;
+        service.SaveTimer(child);
+
+        var second = service.SaveSeriesTimer(new SeriesTimerInfo { Name = "Show", ChannelId = "chan-1", ProgramId = "prog-1" });
+
+        // The replacement rule adopts the old rule's children, so no child dangles off a dead rule id.
+        Assert.Equal(second, service.GetTimers().Single(t => t.ProgramId == "prog-2").SeriesTimerId);
+    }
+
+    [Fact]
+    public void RelinkAndRemove_CollapseDuplicateRules_WithoutOrphans()
+    {
+        var service = NewService();
+        var older = service.SaveSeriesTimer(new SeriesTimerInfo { Name = "Show", ChannelId = "chan-1", ProgramId = "prog-1" });
+        var newer = service.SaveSeriesTimer(new SeriesTimerInfo { Name = "Show", ChannelId = "chan-1", ProgramId = "prog-9" });
+        var child = Timer("prog-2", InHours(1), InHours(2));
+        child.SeriesTimerId = older;
+        service.SaveTimer(child);
+
+        service.RelinkSeriesChildren(older, newer);
+        service.RemoveSeriesTimer(older);
+        service.RemoveOrphanSeriesChildren(new[] { newer });
+
+        Assert.Equal(newer, Assert.Single(service.GetSeriesTimers()).Id);
+        Assert.Equal(newer, service.GetTimers().Single(t => t.ProgramId == "prog-2").SeriesTimerId);
+    }
+
+    [Fact]
+    public void RemoveOrphanSeriesChildren_DropsDanglers_KeepsManualTimers()
+    {
+        var service = NewService();
+        service.SaveTimer(Timer("manual", InHours(1), InHours(2)));
+        var orphan = Timer("orphan", InHours(1), InHours(2));
+        orphan.SeriesTimerId = "lc_timer_gone";
+        service.SaveTimer(orphan);
+
+        service.RemoveOrphanSeriesChildren(Array.Empty<string>());
+
+        Assert.Equal("manual", Assert.Single(NewService().GetTimers()).ProgramId);
+    }
+
+    [Fact]
+    public void HasTimerForProgram_SeesExistingTimers()
+    {
+        var service = NewService();
+        service.SaveTimer(Timer("prog-1", InHours(1), InHours(2)));
+
+        Assert.True(service.HasTimerForProgram("prog-1"));
+        Assert.False(service.HasTimerForProgram("prog-2"));
     }
 
     [Fact]

@@ -238,12 +238,6 @@ public class StreamSessionService
             "livechannels-" + channel.Number.ToString(CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N") + ".txt");
         try
         {
-            // The concat demuxer reads "file '<path>'" lines; single quotes in a path are escaped as '\''.
-            await File.WriteAllLinesAsync(
-                listFile,
-                playable.Select(p => "file '" + p.Path!.Replace("'", "'\\''", StringComparison.Ordinal) + "'"),
-                cancellationToken).ConfigureAwait(false);
-
             var (width, bitrate, videoCodec, audioCodec) = Plugin.Instance?.ReadConfiguration(c =>
                 (c.TranscodeWidth, c.TranscodeVideoBitrateKbps, c.VideoCodec, c.AudioCodec))
                 ?? (1280, 4000, Models.VideoCodec.H264, Models.AudioCodec.Aac);
@@ -266,8 +260,20 @@ public class StreamSessionService
             var shortRuns = 0;
             while (!cancellationToken.IsCancellationRequested)
             {
-                var seek = SeekToNow(playable);
-                var args = StreamArguments.BuildConcat(listFile, seek, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel);
+                // Start the list AT the item now airing and seek only within it. A single -ss spanning the
+                // whole loop makes the concat demuxer (wrapped in -stream_loop) grind through every prior item
+                // to reach the target -- observed as minutes of full-tilt decode against the 20-second tune-in
+                // deadline on a channel deep into its loop. The playlist is a cycle, so rotating it preserves
+                // the exact play order while turning the seek into an index hop inside the first file. The list
+                // is rewritten every (re)start because the rotation point is the current wall-clock position.
+                // The concat demuxer reads "file '<path>'" lines; single quotes in a path escape as '\''.
+                var (index, intoItem) = ScheduleCalculator.CurrentProgram(playable, DateTime.UtcNow, ScheduleCalculator.Epoch);
+                await File.WriteAllLinesAsync(
+                    listFile,
+                    Rotate(playable, index).Select(p => "file '" + p.Path!.Replace("'", "'\\''", StringComparison.Ordinal) + "'"),
+                    cancellationToken).ConfigureAwait(false);
+
+                var args = StreamArguments.BuildConcat(listFile, intoItem, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel);
 
                 var started = DateTime.UtcNow;
                 var (total, _, _) = await RunFfmpegAsync(ffmpeg, args, channel.Name, output, cancellationToken, stats).ConfigureAwait(false);
@@ -340,17 +346,10 @@ public class StreamSessionService
 
     // The seek offset into the concatenated playlist for the current wall-clock position. Recomputed on each
     // (re)start so a resumed stream lands at "now", not the original tune-in point.
-    private static TimeSpan SeekToNow(List<ProgramEntry> playable)
-    {
-        var (index, intoItem) = ScheduleCalculator.CurrentProgram(playable, DateTime.UtcNow, ScheduleCalculator.Epoch);
-        var seek = intoItem;
-        for (var i = 0; i < index; i++)
-        {
-            seek += TimeSpan.FromTicks(playable[i].DurationTicks);
-        }
-
-        return seek;
-    }
+    // Rotates the playlist to start at the given item. The loop is a cycle, so the cyclic play order is
+    // untouched; only the entry point moves.
+    internal static IEnumerable<ProgramEntry> Rotate(IReadOnlyList<ProgramEntry> items, int startIndex)
+        => items.Skip(startIndex).Concat(items.Take(startIndex));
 
     // Streams item-by-item (one ffmpeg per item, timestamps stitched with -output_ts_offset). Used only for
     // subtitle burn-in, high-resolution, HDR, or GPU-upload encoders, which need a per-item pipeline the concat
