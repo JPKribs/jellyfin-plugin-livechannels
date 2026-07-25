@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.12.0",
+        "changelog": "## Developer\r\n- DVR timers are now persisted and honored, so scheduling, listing, updating, and cancelling recordings works from any client and survives restarts\r\n- When a channel produces no playable output the session's ffmpeg log is now surfaced in the server log, so failure reports carry the cause instead of just the symptom",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.12.0/jellyfin-plugin-livechannels-10.11.12.0.zip",
+        "checksum": "b95c6e828e73fb5587c5dcd9da1bab97",
+        "timestamp": "2026-07-25T02:12:42Z"
+      },
+      {
         "version": "10.11.11.1",
         "changelog": "## Developer\r\n- Stop cutting items off at midnight on channels with time-of-day rating blocks\r\n- Daypart schedules now run as one continuous chain anchored at the last configuration save, so items that cross midnight play in full",
         "targetAbi": "10.11.9.0",
