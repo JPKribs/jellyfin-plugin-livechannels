@@ -28,7 +28,7 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// ffmpeg feed segmented to disk and served back through Jellyfin's own internal live stream endpoint (see
 /// <see cref="DirectLiveStream"/>), the same delivery route native tuner streams use.
 /// </summary>
-public sealed class LiveChannelsTvService : ILiveTvService, ISupportsDirectStreamProvider, IDisposable
+public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds, ISupportsDirectStreamProvider, IDisposable
 {
     // Content added within this window is treated as new (not a repeat) in the guide.
     private const int NewWindowDays = 14;
@@ -54,6 +54,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsDirectStrea
     private readonly StreamSessionService _streams;
     private readonly DefaultLogoService _defaultLogo;
     private readonly ActivityLogger _activity;
+    private readonly TimerService _timers;
     private readonly ISessionManager _sessionManager;
     private readonly ILogger<LiveChannelsTvService> _logger;
 
@@ -89,16 +90,18 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsDirectStrea
     /// <param name="streams">The stream session service, used to produce each channel's ffmpeg feed.</param>
     /// <param name="defaultLogo">The generated fallback-logo service.</param>
     /// <param name="activity">The activity logger, used to record channel start/stop in Jellyfin's activity log.</param>
+    /// <param name="timers">The timer store, backing the DVR timer surface.</param>
     /// <param name="sessionManager">The session manager, used by the watchdog to see which live streams clients are actually playing.</param>
     /// <param name="appHost">The application host, used to build the internal live stream endpoint URL each opened source points at.</param>
     /// <param name="appPaths">The application paths, used to default the stream directory under Jellyfin's cache.</param>
     /// <param name="logger">The logger.</param>
-    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, ISessionManager sessionManager, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
+    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, TimerService timers, ISessionManager sessionManager, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
     {
         _channels = channels;
         _streams = streams;
         _defaultLogo = defaultLogo;
         _activity = activity;
+        _timers = timers;
         _sessionManager = sessionManager;
         _logger = logger;
 
@@ -325,6 +328,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsDirectStrea
                 // The warm session turned out to be broken; its producer is dead, so every consumer is stuck.
                 // Tear the whole session down and fall through to a fresh start.
                 _logger.LogWarning(ex, "Live Channels: the warm session for {Name} was not playable; starting fresh", channel.Name);
+                LogFfmpegTail(adopted);
                 ReleaseConsumer(liveStreamId);
                 TeardownSession(adopted);
             }
@@ -396,12 +400,17 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsDirectStrea
         }
         catch (Exception ex)
         {
+            _logger.LogWarning(ex, "Live Channels: {Name} produced no playable output", channel.Name);
+            if (ex is not OperationCanceledException)
+            {
+                LogFfmpegTail(session);
+            }
+
             if (ReleaseConsumer(liveStreamId))
             {
                 TeardownSession(session);
             }
 
-            _logger.LogWarning(ex, "Live Channels: {Name} produced no playable output", channel.Name);
             throw;
         }
 
@@ -1003,37 +1012,72 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsDirectStrea
     /// <inheritdoc />
     public Task ResetTuner(string id, CancellationToken cancellationToken) => Task.CompletedTask;
 
-    // The plugin provides no DVR; the timer surface is stubbed so Jellyfin's Live TV never errors calling it.
+    // DVR timer surface, backed by TimerService. Timers are persisted and reported faithfully so client DVR
+    // flows (schedule, upcoming, cancel) work end to end; the channels replay library content that is already
+    // on disk, so no recording file is produced when a timer's window arrives. Creates route through
+    // ISupportsNewTimerIds so Jellyfin learns the id each new timer was stored under.
 
     /// <inheritdoc />
     public Task<IEnumerable<TimerInfo>> GetTimersAsync(CancellationToken cancellationToken)
-        => Task.FromResult(Enumerable.Empty<TimerInfo>());
+        => Task.FromResult<IEnumerable<TimerInfo>>(_timers.GetTimers());
 
     /// <inheritdoc />
     public Task<IEnumerable<SeriesTimerInfo>> GetSeriesTimersAsync(CancellationToken cancellationToken)
-        => Task.FromResult(Enumerable.Empty<SeriesTimerInfo>());
+        => Task.FromResult<IEnumerable<SeriesTimerInfo>>(_timers.GetSeriesTimers());
 
     /// <inheritdoc />
     public Task<SeriesTimerInfo> GetNewTimerDefaultsAsync(CancellationToken cancellationToken, ProgramInfo? program = null)
-        => Task.FromResult(new SeriesTimerInfo());
+        => Task.FromResult(TimerService.NewTimerDefaults(program));
 
     /// <inheritdoc />
-    public Task CreateTimerAsync(TimerInfo info, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task CreateTimerAsync(TimerInfo info, CancellationToken cancellationToken)
+    {
+        _timers.SaveTimer(info);
+        return Task.CompletedTask;
+    }
 
     /// <inheritdoc />
-    public Task CreateSeriesTimerAsync(SeriesTimerInfo info, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task CreateSeriesTimerAsync(SeriesTimerInfo info, CancellationToken cancellationToken)
+    {
+        _timers.SaveSeriesTimer(info);
+        return Task.CompletedTask;
+    }
 
     /// <inheritdoc />
-    public Task UpdateTimerAsync(TimerInfo updatedTimer, CancellationToken cancellationToken) => Task.CompletedTask;
+    Task<string> ISupportsNewTimerIds.CreateTimer(TimerInfo info, CancellationToken cancellationToken)
+        => Task.FromResult(_timers.SaveTimer(info));
 
     /// <inheritdoc />
-    public Task UpdateSeriesTimerAsync(SeriesTimerInfo info, CancellationToken cancellationToken) => Task.CompletedTask;
+    Task<string> ISupportsNewTimerIds.CreateSeriesTimer(SeriesTimerInfo info, CancellationToken cancellationToken)
+        => Task.FromResult(_timers.SaveSeriesTimer(info));
 
     /// <inheritdoc />
-    public Task CancelTimerAsync(string timerId, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task UpdateTimerAsync(TimerInfo updatedTimer, CancellationToken cancellationToken)
+    {
+        _timers.SaveTimer(updatedTimer);
+        return Task.CompletedTask;
+    }
 
     /// <inheritdoc />
-    public Task CancelSeriesTimerAsync(string timerId, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task UpdateSeriesTimerAsync(SeriesTimerInfo info, CancellationToken cancellationToken)
+    {
+        _timers.SaveSeriesTimer(info);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task CancelTimerAsync(string timerId, CancellationToken cancellationToken)
+    {
+        _timers.CancelTimer(timerId);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task CancelSeriesTimerAsync(string timerId, CancellationToken cancellationToken)
+    {
+        _timers.CancelSeriesTimer(timerId);
+        return Task.CompletedTask;
+    }
 
     // Builds the "menu" source descriptor Jellyfin lists before a stream is opened. We produce the stream
     // ourselves at a known resolution/codec, so it advertises concrete video/audio streams: it cannot be probed
@@ -1164,6 +1208,40 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsDirectStrea
         if (!File.Exists(playlist) || CountSegments(dir) < 1)
         {
             throw new InvalidOperationException("The channel produced no playable output.");
+        }
+    }
+
+    // Surfaces the tail of a failed session's ffmpeg diagnostic log in the server log, at warning so it shows at
+    // the default level. The log lives in the session directory, which teardown deletes, and per-process stderr
+    // is otherwise only logged at debug -- so this moment is the only chance to attach the CAUSE (the spawned
+    // commands, exit codes, and stderr) to a "produced no playable output" report instead of just the symptom.
+    private void LogFfmpegTail(LiveSession session)
+    {
+        const int MaxTailChars = 4000;
+        try
+        {
+            var path = session.Stats.LogPath;
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                return;
+            }
+
+            var text = File.ReadAllText(path).Trim();
+            if (text.Length == 0)
+            {
+                return;
+            }
+
+            if (text.Length > MaxTailChars)
+            {
+                text = "[… older log trimmed …]" + text[^MaxTailChars..];
+            }
+
+            _logger.LogWarning("Live Channels: ffmpeg log for the failed {Name} session:\n{FfmpegLog}", session.ChannelName, text);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Live Channels: could not read the session ffmpeg log for {Name}", session.ChannelName);
         }
     }
 

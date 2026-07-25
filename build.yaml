@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.11.1"
+version: "10.11.12.0"
 targetAbi: "10.11.9.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -16,5 +16,5 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   developer:
-  - Stop cutting items off at midnight on channels with time-of-day rating blocks
-  - Daypart schedules now run as one continuous chain anchored at the last configuration save, so items that cross midnight play in full
+  - DVR timers are now persisted and honored, so scheduling, listing, updating, and cancelling recordings works from any client and survives restarts
+  - When a channel produces no playable output the session's ffmpeg log is now surfaced in the server log, so failure reports carry the cause instead of just the symptom
