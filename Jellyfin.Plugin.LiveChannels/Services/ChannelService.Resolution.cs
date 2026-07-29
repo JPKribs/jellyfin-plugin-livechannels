@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.LiveChannels.Models;
+using Jellyfin.Plugin.LiveChannels.Utilities;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
@@ -15,6 +17,11 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 // ChannelService: resolving a channel's configured sources into the ordered, probed program loop.
 public partial class ChannelService
 {
+    // Series artwork memoised for the duration of one build, so a series contributing dozens of episodes is
+    // loaded once rather than per episode. Cleared when a build starts, so a metadata refresh is picked up by the
+    // next guide refresh rather than being cached for the life of the process.
+    private readonly ConcurrentDictionary<Guid, ArtworkSet> _seriesArtwork = new();
+
     // The item kinds a channel includes, from its Content Types toggles. Episodes are queried when either regular
     // episodes or specials are wanted; the season-0 split between them is applied per item during the build.
     private static BaseItemKind[] BuildKinds(Channel channel)
@@ -93,7 +100,8 @@ public partial class ChannelService
                 AbsoluteIndex = s.Index,
                 IsForced = s.IsForced,
                 IsDefault = s.IsDefault,
-                IsText = s.IsTextSubtitleStream
+                IsText = s.IsTextSubtitleStream,
+                IsExternal = s.IsExternal
             };
         }
 
@@ -123,6 +131,7 @@ public partial class ChannelService
     /// <returns>The ordered program loop.</returns>
     private IReadOnlyList<ProgramEntry> BuildPrograms(Channel channel)
     {
+        _seriesArtwork.Clear();
         if (string.Equals(channel.Id, PopularChannelId, StringComparison.Ordinal))
         {
             return ResolvePopularPrograms(channel);
@@ -523,6 +532,7 @@ public partial class ChannelService
         }
 
         var defaultAudio = DefaultAudio(streams);
+        var images = ResolveGuideImages(item);
 
         return new ProgramEntry(item.Id, title, item.Overview, ticks, item.Path)
         {
@@ -536,7 +546,10 @@ public partial class ChannelService
             SeriesId = seriesId,
             SeriesName = seriesName,
             RawName = rawName,
-            GuideImagePath = ResolveGuideImage(item),
+            PrimaryImagePath = images.Primary,
+            ThumbImagePath = images.Thumb,
+            BackdropImagePath = images.Backdrop,
+            LogoImagePath = images.Logo,
             SourceHeight = item.Height,
             DateAdded = item.DateCreated,
             CommunityRating = item.CommunityRating,
@@ -548,25 +561,44 @@ public partial class ChannelService
         };
     }
 
-    // Picks landscape-friendly guide artwork: a movie's backdrop, otherwise the primary image (episode and
-    // music-video primaries are already landscape thumbnails). Falls back to the other type so a program still
-    // shows something when its preferred art is missing.
-    private static string? ResolveGuideImage(BaseItem item)
+    // Every image an item carries, so the guide can offer a client both a portrait poster and a landscape thumb
+    // (plus a backdrop and a clear logo) instead of one image forced into whichever shape the client lays out.
+    // An episode's own primary is a landscape still, so its poster comes from the series, resolved once per
+    // series and memoised for the rest of the build.
+    private ArtworkSet ResolveGuideImages(BaseItem item)
     {
-        var isMovie = item.GetBaseItemKind() == BaseItemKind.Movie;
-        var preferred = isMovie ? ImageType.Backdrop : ImageType.Primary;
-        var fallback = isMovie ? ImageType.Primary : ImageType.Backdrop;
+        var own = ArtworkOf(item);
+        var kind = item.GetBaseItemKind();
+        var landscapePrimary = kind is BaseItemKind.Episode or BaseItemKind.MusicVideo;
+        var parent = item is Episode { SeriesId: var seriesId } && seriesId != Guid.Empty
+            ? ArtworkOfSeries(seriesId)
+            : default;
 
-        if (item.HasImage(preferred))
-        {
-            return item.GetImagePath(preferred, 0);
-        }
-
-        if (item.HasImage(fallback))
-        {
-            return item.GetImagePath(fallback, 0);
-        }
-
-        return null;
+        return GuideImages.Select(own, parent, landscapePrimary);
     }
+
+    // A series' artwork, resolved once per series per build. A series that cannot be loaded caches as "no
+    // artwork", so a broken link is not re-queried for every one of its episodes.
+    private ArtworkSet ArtworkOfSeries(Guid seriesId)
+    {
+        if (_seriesArtwork.TryGetValue(seriesId, out var cached))
+        {
+            return cached;
+        }
+
+        var series = _libraryManager.GetItemById(seriesId);
+        var artwork = series is null ? default : ArtworkOf(series);
+        _seriesArtwork[seriesId] = artwork;
+        return artwork;
+    }
+
+    private static ArtworkSet ArtworkOf(BaseItem item)
+        => new(
+            ImagePathOrNull(item, ImageType.Primary),
+            ImagePathOrNull(item, ImageType.Thumb),
+            ImagePathOrNull(item, ImageType.Backdrop),
+            ImagePathOrNull(item, ImageType.Logo));
+
+    private static string? ImagePathOrNull(BaseItem item, ImageType type)
+        => item.HasImage(type) ? item.GetImagePath(type, 0) : null;
 }

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using Jellyfin.Plugin.LiveChannels.Configuration;
 using Jellyfin.Plugin.LiveChannels.Models;
+using Jellyfin.Plugin.LiveChannels.Utilities;
 
 namespace Jellyfin.Plugin.LiveChannels.Services;
 
@@ -22,6 +24,8 @@ public static class ConfigurationValidator
     public static void Validate(PluginConfiguration config)
     {
         ArgumentNullException.ThrowIfNull(config);
+
+        ValidatePlayback(config);
 
         var numbers = new HashSet<int>();
         foreach (var channel in config.Channels)
@@ -50,6 +54,47 @@ public static class ConfigurationValidator
             {
                 throw new ArgumentException("Duplicate channel number: " + channel.Number);
             }
+        }
+    }
+
+    // Playback settings that apply to every channel. A value out of range would either be silently clamped or
+    // silently ignored at stream time, so it is rejected here instead: a saved setting that does nothing is worse
+    // than a save that says why.
+    private static void ValidatePlayback(PluginConfiguration config)
+    {
+        if (config.StartupBufferSeconds != 0
+            && config.StartupBufferSeconds is < PluginConfiguration.MinStartupBufferSeconds or > PluginConfiguration.MaxStartupBufferSeconds)
+        {
+            throw new ArgumentException(
+                "Start-up buffer must be between "
+                + PluginConfiguration.MinStartupBufferSeconds.ToString(CultureInfo.InvariantCulture)
+                + " and "
+                + PluginConfiguration.MaxStartupBufferSeconds.ToString(CultureInfo.InvariantCulture)
+                + " seconds.");
+        }
+
+        // Zero means "never set" (a configuration saved before subtitle styling existed), which renders at the
+        // subtitle's own size.
+        if (config.SubtitleFontScalePercent != 0
+            && config.SubtitleFontScalePercent is < SubtitleStyle.MinScalePercent or > SubtitleStyle.MaxScalePercent)
+        {
+            throw new ArgumentException(
+                "Subtitle size must be between "
+                + SubtitleStyle.MinScalePercent.ToString(CultureInfo.InvariantCulture)
+                + "% and "
+                + SubtitleStyle.MaxScalePercent.ToString(CultureInfo.InvariantCulture)
+                + "%.");
+        }
+
+        ValidateColor(config.SubtitleTextColor, "Subtitle text colour");
+        ValidateColor(config.SubtitleOutlineColor, "Subtitle outline colour");
+    }
+
+    private static void ValidateColor(string? value, string label)
+    {
+        if (!string.IsNullOrWhiteSpace(value) && !SubtitleStyle.TryConvertColor(value, out _))
+        {
+            throw new ArgumentException(label + " must be a hex colour like #FFFFFF.");
         }
     }
 

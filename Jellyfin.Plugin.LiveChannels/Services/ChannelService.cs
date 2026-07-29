@@ -6,6 +6,7 @@ using System.Linq;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.LiveChannels.Models;
 using MediaBrowser.Common.Configuration;
+using MediaBrowser.Controller.IO;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Model.Globalization;
@@ -28,6 +29,7 @@ public partial class ChannelService
     private readonly ILibraryManager _libraryManager;
     private readonly IMediaSourceManager _mediaSourceManager;
     private readonly ISubtitleEncoder _subtitleEncoder;
+    private readonly IPathManager _pathManager;
     private readonly ILocalizationManager _localization;
     private readonly IUserManager _userManager;
     private readonly IUserDataManager _userDataManager;
@@ -48,16 +50,18 @@ public partial class ChannelService
     /// <param name="libraryManager">The library manager used to resolve items.</param>
     /// <param name="mediaSourceManager">The media source manager used to inspect subtitle streams.</param>
     /// <param name="subtitleEncoder">The subtitle encoder used to extract (and cache) embedded subtitles for burn-in.</param>
+    /// <param name="pathManager">The path manager, used to locate the fonts Jellyfin extracted from a media file's attachments so burned-in ASS subtitles render in the font they were authored with.</param>
     /// <param name="localization">The localization manager used to rank official ratings.</param>
     /// <param name="userManager">The user manager, used to read server-wide watch data for the Popular channel.</param>
     /// <param name="userDataManager">The user-data manager, used to read per-item play counts for the Popular channel.</param>
     /// <param name="appPaths">The application paths, used to locate the stream root the schedule cache lives in.</param>
     /// <param name="logger">The logger.</param>
-    public ChannelService(ILibraryManager libraryManager, IMediaSourceManager mediaSourceManager, ISubtitleEncoder subtitleEncoder, ILocalizationManager localization, IUserManager userManager, IUserDataManager userDataManager, IApplicationPaths appPaths, ILogger<ChannelService> logger)
+    public ChannelService(ILibraryManager libraryManager, IMediaSourceManager mediaSourceManager, ISubtitleEncoder subtitleEncoder, IPathManager pathManager, ILocalizationManager localization, IUserManager userManager, IUserDataManager userDataManager, IApplicationPaths appPaths, ILogger<ChannelService> logger)
     {
         _libraryManager = libraryManager;
         _mediaSourceManager = mediaSourceManager;
         _subtitleEncoder = subtitleEncoder;
+        _pathManager = pathManager;
         _localization = localization;
         _userManager = userManager;
         _userDataManager = userDataManager;

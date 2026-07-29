@@ -35,7 +35,10 @@ public partial class ChannelService
             return null;
         }
 
-        var subtitles = program.Subtitles;
+        // An external bitmap subtitle (a .sup beside the media) is the one kind nothing can burn: it is a picture,
+        // so it has to be composited from a mapped stream, and being external it has no stream inside the media
+        // file to map. Dropping it here lets another track be chosen instead of the channel silently showing none.
+        var subtitles = program.Subtitles.Where(s => s.IsText || !s.IsExternal).ToList();
 
         // Forced always wins when present, in either mode.
         for (var i = 0; i < subtitles.Count; i++)
@@ -77,18 +80,22 @@ public partial class ChannelService
     }
 
     /// <summary>
-    /// Extracts the chosen embedded text subtitle to an ASS file (extracted once and cached by Jellyfin) and
-    /// returns its path, so a burn-in tune-in can read a tiny subtitle file instead of scanning the whole media
-    /// file from the start. Bounded by a short timeout: a cold extraction keeps running in the background to warm
-    /// the cache while the caller falls back to no subtitle for that one tune-in.
+    /// Resolves the chosen embedded text subtitle to a burn-ready file the same way Jellyfin's own transcodes do:
+    /// <see cref="ISubtitleEncoder.GetSubtitleFilePath"/> extracts the track once into Jellyfin's subtitle cache
+    /// (shared with normal playback, so it is usually already warm) and returns that file. Burning the extracted
+    /// file rather than the media file means libass reads a few kilobytes instead of scanning gigabytes to reach a
+    /// deep tune-in point, and the file keeps the markup the track was authored with, so bold, italic, and colour
+    /// tags survive into the picture.
+    /// <para>
+    /// Bounded by a short timeout, because this sits on the producer's critical path: a cold extraction keeps
+    /// running in the background to warm the cache while the caller falls back for this one item.
+    /// </para>
     /// </summary>
     /// <param name="itemId">The item id.</param>
     /// <param name="relativeIndex">The chosen subtitle's index among the item's subtitle streams.</param>
-    /// <param name="offset">How far into the item the tune-in is; only events from here on are kept.</param>
-    /// <param name="outputDirectory">Where to write the burn-ready ASS file.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The ASS file path, or <c>null</c> when it could not be produced in time.</returns>
-    public async Task<string?> TryExtractTuneInSubtitleAsync(Guid itemId, int relativeIndex, TimeSpan offset, string outputDirectory, CancellationToken cancellationToken)
+    /// <returns>The subtitle file and any attached-font directory, or <c>null</c> when it was not ready in time.</returns>
+    public async Task<BurnInSubtitleFile?> TryResolveBurnInSubtitleAsync(Guid itemId, int relativeIndex, CancellationToken cancellationToken)
     {
         var key = itemId.ToString("N", CultureInfo.InvariantCulture) + "-" + relativeIndex.ToString(CultureInfo.InvariantCulture);
 
@@ -120,51 +127,27 @@ public partial class ChannelService
                 return null;
             }
 
-            var absoluteIndex = subtitles[relativeIndex].Index;
+            // CancellationToken.None so a cold extraction still finishes caching even after we stop waiting for
+            // it below; the next airing of this item then burns it immediately.
+            var resolve = _subtitleEncoder.GetSubtitleFilePath(subtitles[relativeIndex], source, CancellationToken.None);
+            var ready = await Task.WhenAny(resolve, Task.Delay(TimeSpan.FromSeconds(1.5), cancellationToken)).ConfigureAwait(false);
+            if (ready != resolve || resolve.Status != TaskStatus.RanToCompletion)
+            {
+                _logger.LogDebug("Live Channels: subtitle extraction for {ItemId} is still warming; burning from the media file instead", itemId);
+                return null;
+            }
 
-            // GetSubtitles extracts the embedded subtitle to ASS (reading the file once, then caching it) and
-            // filters it to the events from the tune-in point on, keeping their original timestamps so they line
-            // up with the -copyts video. CancellationToken.None so a cold extraction still finishes caching even
-            // when we stop waiting for it below.
-            //
-            // Wait only briefly: this runs on the producer's critical path, so a long wait delays the first frame
-            // and the player gives up. A cached subtitle parses well within this; an uncold one keeps extracting
-            // in the background and is used on the next tune-in, while this one starts immediately without it.
-            var extract = _subtitleEncoder.GetSubtitles(item, source.Id, absoluteIndex, "ass", offset.Ticks, 0, true, CancellationToken.None);
-            var ready = await Task.WhenAny(extract, Task.Delay(TimeSpan.FromSeconds(1.5), cancellationToken)).ConfigureAwait(false);
-            if (ready != extract || extract.Status != TaskStatus.RanToCompletion)
+            var path = await resolve.ConfigureAwait(false);
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
             {
                 return null;
             }
 
-            Directory.CreateDirectory(outputDirectory);
-            var path = Path.Combine(outputDirectory, "lc-sub-" + key + ".ass");
-            var temp = path + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
-
-            var subtitleStream = await extract.ConfigureAwait(false);
-            var file = new FileStream(temp, FileMode.Create, FileAccess.Write);
-            try
-            {
-                await using (subtitleStream.ConfigureAwait(false))
-                await using (file.ConfigureAwait(false))
-                {
-                    await subtitleStream.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
-                }
-
-                // Publish atomically so a reader (libass) or a concurrent writer never sees a half-written ASS.
-                File.Move(temp, path, overwrite: true);
-            }
-            catch
-            {
-                TryDeleteSubtitle(temp);
-                throw;
-            }
-
-            return path;
+            return new BurnInSubtitleFile(path, AttachmentFontsDirectory(source.Id));
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Could not prepare a tune-in subtitle for {ItemId}", itemId);
+            _logger.LogDebug(ex, "Could not prepare a burn-in subtitle for {ItemId}", itemId);
             return null;
         }
         finally
@@ -173,18 +156,27 @@ public partial class ChannelService
         }
     }
 
-    private void TryDeleteSubtitle(string path)
+    // The fonts Jellyfin extracted from the media's attachments, so an ASS subtitle authored against an embedded
+    // font renders in it rather than a substitute. Null when the item carries none.
+    private string? AttachmentFontsDirectory(string mediaSourceId)
     {
         try
         {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
+            var directory = _pathManager.GetAttachmentFolderPath(mediaSourceId);
+            return !string.IsNullOrEmpty(directory) && Directory.Exists(directory) ? directory : null;
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Could not delete temp subtitle {Path}", path);
+            _logger.LogDebug(ex, "Could not resolve the attachment font directory for {MediaSourceId}", mediaSourceId);
+            return null;
         }
     }
 }
+
+/// <summary>
+/// A burn-ready subtitle: the extracted subtitle file plus, when the media carries attached fonts, the directory
+/// libass should load them from.
+/// </summary>
+/// <param name="Path">The subtitle file to burn.</param>
+/// <param name="FontsDirectory">The attached-font directory, or <c>null</c>.</param>
+public sealed record BurnInSubtitleFile(string Path, string? FontsDirectory);

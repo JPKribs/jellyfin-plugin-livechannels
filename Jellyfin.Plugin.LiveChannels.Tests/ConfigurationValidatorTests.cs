@@ -122,4 +122,47 @@ public class ConfigurationValidatorTests
 
         Assert.Empty(new Channel().EffectiveRatingBlocks()); // all defaults -> no restriction
     }
+
+    [Fact]
+    public void StartupBuffer_OutOfRange_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { StartupBufferSeconds = 1 }));
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { StartupBufferSeconds = 600 }));
+    }
+
+    [Fact]
+    public void StartupBuffer_UnsetOrInRange_IsAccepted()
+    {
+        ConfigurationValidator.Validate(new PluginConfiguration { StartupBufferSeconds = 0 });
+        ConfigurationValidator.Validate(new PluginConfiguration { StartupBufferSeconds = 30 });
+    }
+
+    [Fact]
+    public void EffectiveStartupBuffer_ClampsWhatWasStored()
+    {
+        Assert.Equal(PluginConfiguration.DefaultStartupBufferSeconds, new PluginConfiguration().EffectiveStartupBufferSeconds());
+        Assert.Equal(PluginConfiguration.DefaultStartupBufferSeconds, new PluginConfiguration { StartupBufferSeconds = 0 }.EffectiveStartupBufferSeconds());
+        Assert.Equal(PluginConfiguration.DefaultStartupBufferSeconds, new PluginConfiguration { StartupBufferSeconds = -5 }.EffectiveStartupBufferSeconds());
+        Assert.Equal(PluginConfiguration.MinStartupBufferSeconds, new PluginConfiguration { StartupBufferSeconds = 1 }.EffectiveStartupBufferSeconds());
+        Assert.Equal(PluginConfiguration.MaxStartupBufferSeconds, new PluginConfiguration { StartupBufferSeconds = 5000 }.EffectiveStartupBufferSeconds());
+        Assert.Equal(20, new PluginConfiguration { StartupBufferSeconds = 20 }.EffectiveStartupBufferSeconds());
+    }
+
+    [Fact]
+    public void SubtitleColour_MustBeHex()
+    {
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { SubtitleTextColor = "yellow" }));
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { SubtitleOutlineColor = "#12345" }));
+
+        // Blank means "leave the subtitle's own colour alone", which is the default.
+        ConfigurationValidator.Validate(new PluginConfiguration { SubtitleTextColor = string.Empty, SubtitleOutlineColor = "#101820" });
+    }
+
+    [Fact]
+    public void SubtitleSize_OutOfRange_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { SubtitleFontScalePercent = 10 }));
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { SubtitleFontScalePercent = 1000 }));
+        ConfigurationValidator.Validate(new PluginConfiguration { SubtitleFontScalePercent = 0 }); // saved before styling existed
+    }
 }

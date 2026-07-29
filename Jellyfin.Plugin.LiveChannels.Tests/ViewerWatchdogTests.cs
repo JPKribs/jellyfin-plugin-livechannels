@@ -15,6 +15,30 @@ public class ViewerWatchdogTests
     private const string ConsumerB = "lc_ffeeddccbbaa99887766554433221100";
 
     [Fact]
+    public void SessionIsWatched_WhenAnyOfItsViewersIsReported()
+    {
+        // The guard that keeps the cap, the time limit, and the linger from closing a stream someone is playing.
+        var reported = new List<string> { "9e0c1f2a3b4c5d6e7f8091a2b3c4d5e6_" + ConsumerB };
+
+        Assert.True(LiveChannelsTvService.AnyConsumerReported(new[] { ConsumerA, ConsumerB }, reported));
+        Assert.False(LiveChannelsTvService.AnyConsumerReported(new[] { ConsumerA }, reported));
+    }
+
+    [Fact]
+    public void SessionWithNoViewers_IsNotWatched()
+    {
+        Assert.False(LiveChannelsTvService.AnyConsumerReported(new List<string>(), new List<string> { ConsumerA }));
+        Assert.False(LiveChannelsTvService.AnyConsumerReported(new[] { ConsumerA }, new List<string>()));
+    }
+
+    [Fact]
+    public void EmptyReportedIds_AreIgnored_NotTreatedAsAMatch()
+    {
+        // A session with no playback state reports an empty id; a blank must never match every consumer.
+        Assert.False(LiveChannelsTvService.AnyConsumerReported(new[] { ConsumerA }, new List<string> { string.Empty, string.Empty }));
+    }
+
+    [Fact]
     public void PrefixedLiveStreamId_CountsAsWatched()
     {
         // Jellyfin reports our id behind an MD5 service prefix: {prefix}_{consumerId}.

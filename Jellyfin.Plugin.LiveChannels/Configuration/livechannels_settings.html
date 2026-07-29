@@ -91,8 +91,59 @@
                                 <div class="fieldDescription">Your native language. A channel set to Forced only burns in subtitles when its audio is in another language, so foreign content stays followable.</div>
                             </div>
 
+                            <div class="inputContainer">
+                                <label for="startupBuffer">Start-up buffer (seconds)</label>
+                                <input is="emby-input" type="number" id="startupBuffer" min="4" max="60" step="1" autocomplete="off" />
+                                <div class="fieldDescription">How much of a channel is encoded before playback starts, and how far ahead of you it stays. Raise it if the first seconds stutter, at the cost of a slightly longer wait for the picture.</div>
+                            </div>
+                        </div>
+                    </div>
 
+                    <div class="jpk-collapsible-section">
+                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionSubtitles">
+                            <span class="jpk-collapsible-title">Subtitle appearance</span>
+                            <span class="jpk-collapsible-icon">&#9660;</span>
+                        </button>
+                        <div id="sectionSubtitles" class="jpk-collapsible-content collapsed">
+                            <div class="fieldDescription">How burned-in subtitles look. Channels burn subtitles according to their own subtitle rule; this styles them wherever they appear. Leave everything untouched to render each subtitle exactly as it was authored, including its own bold, italic, and colour tags.</div>
 
+                            <div class="inputContainer">
+                                <label for="subFont">Font</label>
+                                <input is="emby-input" type="text" id="subFont" autocomplete="off" placeholder="Leave blank to use the subtitle's own font" />
+                                <div class="fieldDescription">A font family installed on the server, such as Arial.</div>
+                            </div>
+
+                            <div class="inputContainer">
+                                <label for="subScale">Size (%)</label>
+                                <input is="emby-input" type="number" id="subScale" min="50" max="300" step="5" autocomplete="off" />
+                                <div class="fieldDescription">A percentage of normal. 100 keeps the size the subtitle was authored at.</div>
+                            </div>
+
+                            <div class="inputContainer">
+                                <label for="subTextColor">Text colour</label>
+                                <input is="emby-input" type="text" id="subTextColor" autocomplete="off" placeholder="#FFFFFF" />
+                            </div>
+
+                            <div class="inputContainer">
+                                <label for="subOutlineColor">Outline colour</label>
+                                <input is="emby-input" type="text" id="subOutlineColor" autocomplete="off" placeholder="#000000" />
+                                <div class="fieldDescription">Used for the outline, or for the box behind the text.</div>
+                            </div>
+
+                            <div class="selectContainer">
+                                <label class="selectLabel" for="subBorder">Background</label>
+                                <select id="subBorder" class="jpk-selector-dropdown">
+                                    <option value="Default">As authored</option>
+                                    <option value="Outline">Outline</option>
+                                    <option value="Box">Solid box</option>
+                                </select>
+                                <div class="fieldDescription">A solid box is the most readable over bright scenes.</div>
+                            </div>
+
+                            <label class="emby-checkbox-label">
+                                <input type="checkbox" is="emby-checkbox" id="subBold" />
+                                <span class="checkboxLabel">Bold</span>
+                            </label>
                         </div>
                     </div>
 

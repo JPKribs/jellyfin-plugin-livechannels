@@ -21,6 +21,7 @@ public sealed class SegmentConcatStream : Stream
     private readonly int _startBehind;
     private readonly int _holdBehind;
     private readonly Action<string>? _log;
+    private readonly Action? _onData;
     private FileStream? _segment;
     private long _number = -1;
     private long _firstNumber = -1;
@@ -40,7 +41,10 @@ public sealed class SegmentConcatStream : Stream
     /// segment puts every viewer one encoder hiccup from a stall; holding the edge back keeps that many segments
     /// in reserve, and producer gaps shorter than the reserve are absorbed invisibly. Clamped so at least the
     /// oldest available segment is always servable (a brand-new session must still feed the probe).</param>
-    public SegmentConcatStream(string directory, Action<string>? log = null, int startBehind = 2, int holdBehind = 0)
+    /// <param name="onData">Optional sink called whenever bytes are actually served. Delivering data is the one
+    /// unambiguous sign that someone is watching (a client that vanished cannot keep pulling), so the session
+    /// uses it to refuse to shut a stream down out from under a live viewer.</param>
+    public SegmentConcatStream(string directory, Action<string>? log = null, int startBehind = 2, int holdBehind = 0, Action? onData = null)
     {
         ArgumentNullException.ThrowIfNull(directory);
         ArgumentOutOfRangeException.ThrowIfNegative(startBehind);
@@ -49,6 +53,7 @@ public sealed class SegmentConcatStream : Stream
         _log = log;
         _startBehind = startBehind;
         _holdBehind = holdBehind;
+        _onData = onData;
     }
 
     /// <inheritdoc />
@@ -98,6 +103,7 @@ public sealed class SegmentConcatStream : Stream
                 if (read > 0)
                 {
                     _bytesServed += read;
+                    _onData?.Invoke();
                     return read;
                 }
 

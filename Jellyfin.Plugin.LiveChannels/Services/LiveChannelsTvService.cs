@@ -45,10 +45,25 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     // enough to ride out tune-in buffering and slow first progress reports.
     private static readonly TimeSpan ViewerAbsenceGrace = TimeSpan.FromMinutes(5);
 
-    // Client pre-roll: the player buffers this much before playback starts, riding out tune-in jitter. The
-    // reader is not realtime-paced, so this fills at I/O speed from already-produced segments -- it costs a
-    // fraction of a second of wait, and adjusting it in either direction is imperceptible, so it is fixed.
-    private const int BufferSeconds = 3;
+    // A session is "watched" when Jellyfin's session manager reports one of its viewers as playing. That is the
+    // authoritative answer -- it is a real playback session belonging to a real user, and it keeps reporting while
+    // the player is paused, which is when a viewer is most likely to be sitting in front of a stream that is
+    // sending nothing. A watched session is never shut down by the cap, the time limit, or the viewerless linger,
+    // so only an explicit administrator kill (or server shutdown) can take a stream away from someone.
+    //
+    // Recent delivery is the second opinion, for the gap the first one has: some clients never report a live
+    // stream id at all (the watchdog's grace below exists for exactly that), and a stream that is still pushing
+    // bytes to a reader has someone on the other end whatever the session list says. A client that force-quit,
+    // crashed, or dropped off the network cannot keep pulling, so this cannot be faked -- it can only go quiet,
+    // which is why it corroborates rather than decides.
+    private static readonly TimeSpan RecentDeliveryWindow = TimeSpan.FromMinutes(2);
+
+    // How long after a producer dies unexpectedly before the session may start a replacement, and how many
+    // replacements one session may run. A producer that keeps dying is a broken pipeline, not a hiccup: the
+    // interval keeps a restart loop from spinning, and the cap eventually lets the session be collected instead
+    // of restarting forever.
+    private static readonly TimeSpan RestartInterval = TimeSpan.FromSeconds(5);
+    private const int MaxProducerRestarts = 10;
 
     private readonly ChannelService _channels;
     private readonly StreamSessionService _streams;
@@ -229,8 +244,16 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 IsHD = p.SourceHeight >= 720,
                 IsRepeat = !isNew,
                 IsPremiere = isNew,
-                ImagePath = p.GuideImagePath,
-                HasImage = !string.IsNullOrEmpty(p.GuideImagePath)
+                // Every artwork shape the item has, each in its own slot: Jellyfin's guide builder maps ImagePath
+                // to Primary and the three *ImageUrl fields to Thumb, Backdrop, and Logo (they are stored as
+                // ItemImageInfo paths, and a path that does not start with "http" is treated as a local file, so
+                // these never hit the network). Clients that lay out posters and clients that lay out landscape
+                // cards then both render the right shape instead of one image stretched into the other.
+                ImagePath = p.PrimaryImagePath,
+                ThumbImageUrl = p.ThumbImagePath,
+                BackdropImageUrl = p.BackdropImagePath,
+                LogoImageUrl = p.LogoImagePath,
+                HasImage = !string.IsNullOrEmpty(p.PrimaryImagePath) || !string.IsNullOrEmpty(p.ThumbImagePath)
             });
         }
 
@@ -273,7 +296,8 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             session.StartedUtc,
             uniqueId => BuildOpenedSource(liveStreamId, uniqueId),
             () => CloseLiveStream(liveStreamId, CancellationToken.None),
-            _logger);
+            _logger,
+            session.MarkData);
 
         _logger.LogInformation(
             "Live Channels: {Name}: handed to Jellyfin as {Path} (session {Session}, live id {Id})",
@@ -388,6 +412,10 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 _live[liveStreamId] = session;
                 _byChannel[channelId] = session;
 
+                // Notice a producer that dies the moment it happens: while a viewer is still being served, the
+                // session starts a replacement encoder rather than going dark until the next reaper sweep.
+                WatchProducer(session);
+
                 // Bound the total number of concurrent encoders. A client that never sends the close (Swiftfin on
                 // a force-quit, crash, or network drop) leaks a producer Jellyfin keeps reading, which is
                 // indistinguishable from a live one until the viewer watchdog notices no client is reporting it;
@@ -483,7 +511,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     public void KillSession(string id)
     {
         var session = Lookup(id);
-        if (session is null || !TeardownSession(session))
+        if (session is null || !TeardownSession(session, force: true))
         {
             return;
         }
@@ -507,6 +535,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             return;
         }
 
+        // TeardownSession refuses while the session is still delivering bytes (a viewer whose consumer
+        // bookkeeping went wrong is still a viewer). The reaper's over-linger sweep retries every minute, so the
+        // session is collected as soon as delivery genuinely stops.
         if (TeardownSession(session))
         {
             _activity.Log(
@@ -624,8 +655,8 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
     }
 
-    // The extracted-subtitle cache is small and reused across sessions, so keep recent entries but drop stale
-    // ones and any leftover temp file from an interrupted atomic write.
+    // Burn-in subtitles now come from Jellyfin's own subtitle cache (which Jellyfin maintains), so nothing writes
+    // here any more. The sweep stays to clear out what earlier versions left behind.
     private void ReapSubtitleCache()
     {
         var subtitleRoot = Path.Combine(Path.GetTempPath(), "livechannels-subs");
@@ -652,12 +683,15 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         ReapCompletedSessions();
         ReapAbandonedConsumers();
 
+        // One snapshot of who is playing for the whole sweep, so every rule below judges the same moment.
+        var reported = ReportedStreamIds();
+
         // Safety net: a viewerless session's delayed teardown normally collects it, but if that task was ever
         // lost, this sweep makes sure a viewerless encoder cannot run forever.
         foreach (var session in DistinctSessions())
         {
             if (session.LingeringSinceUtc is { } since && DateTime.UtcNow - since > LingerGrace * 3
-                && !session.HasConsumers && TeardownSession(session))
+                && !session.HasConsumers && TeardownSession(session, force: false, reported))
             {
                 _logger.LogWarning("Live Channels: reaping over-lingered session {Id} ({Name})", session.Id, session.ChannelName);
             }
@@ -669,10 +703,13 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             return;
         }
 
+        // The time limit is a backstop for clients that never send the close, so it only collects streams nobody
+        // is watching: TeardownSession refuses while a playback session is playing this stream, and the sweep runs
+        // every minute, so a session that reaches the limit mid-watch is collected once its viewer really stops.
         var cutoff = DateTime.UtcNow - TimeSpan.FromMinutes(timeoutMinutes);
         foreach (var session in DistinctSessions())
         {
-            if (session.StartedUtc <= cutoff && TeardownSession(session))
+            if (session.StartedUtc <= cutoff && TeardownSession(session, force: false, reported))
             {
                 _logger.LogInformation("Live Channels: closing session {Id} ({Name}) after reaching the {Minutes}-minute time limit", session.Id, session.ChannelName, timeoutMinutes);
             }
@@ -681,15 +718,114 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
 
     // Reaps sessions whose producer task has already finished (the stream ended or failed) but that Jellyfin
     // never closed, so the CancellationTokenSource and the temp file do not linger for the life of the process.
+    // A producer that died while someone was still watching is replaced instead (see TryRestartProducer).
     private void ReapCompletedSessions()
     {
+        List<string>? reported = null;
         foreach (var session in DistinctSessions())
         {
-            if (session.Worker.IsCompleted && TeardownSession(session))
+            if (!session.Worker.IsCompleted)
+            {
+                continue;
+            }
+
+            if (TryRestartProducer(session))
+            {
+                continue;
+            }
+
+            // Taken lazily: most sweeps find nothing finished and never need to ask who is playing.
+            reported ??= ReportedStreamIds();
+            if (TeardownSession(session, force: false, reported))
             {
                 _logger.LogDebug("Live Channels: reaping finished session {Id} ({Name})", session.Id, session.ChannelName);
             }
         }
+    }
+
+    // Watches a session's producer so its death is noticed the moment it happens rather than on the next reaper
+    // sweep, which would leave a viewer staring at a stalled picture for up to a minute.
+    private void WatchProducer(LiveSession session)
+    {
+        _ = session.Worker.ContinueWith(_ => TryRestartProducer(session), TaskScheduler.Default);
+    }
+
+    // Replaces the producer of a session whose encoder stopped while a viewer is still watching, so an ffmpeg
+    // failure costs a few seconds of stall instead of the whole stream. The replacement writes into the SAME
+    // session directory: it continues the segment numbering past what is already there (so a reader working
+    // through the window is not overwritten) and resumes the channel timeline where the previous output ended (so
+    // timestamps move forward, never back). Returns whether a replacement was started.
+    private bool TryRestartProducer(LiveSession session)
+    {
+        // Nothing to rescue when the session is being torn down, when its producer is still running, or when
+        // nobody is on the other end: the ordinary reap path collects those. A consumer is enough here (a viewer
+        // whose player is mid-buffer is reporting nothing and receiving nothing, and is exactly who this saves).
+        if (session.IsTornDown || !session.Worker.IsCompleted || !(session.HasConsumers || IsWatched(session)))
+        {
+            return false;
+        }
+
+        // A session that never produced a single segment did not lose its encoder mid-watch, it failed to start:
+        // the tune-in path reports that failure and tears the session down, which is the right answer. Restarting
+        // is only for a stream that WAS running.
+        var nextSegment = NextSegmentNumber(session.Path);
+        if (nextSegment == 0)
+        {
+            return false;
+        }
+
+        var channel = _channels.FindChannel(session.ChannelId);
+        if (channel is null || !session.TryClaimRestart(RestartInterval, MaxProducerRestarts))
+        {
+            return false;
+        }
+
+        var timeline = TimeSpan.FromSeconds(session.Stats.TimelineSeconds);
+        _logger.LogWarning(
+            "Live Channels: the encoder for {Name} stopped while someone was watching; restarting it (attempt {Attempt}) from seg{Segment} at {Timeline:F0}s",
+            session.ChannelName,
+            session.Restarts,
+            nextSegment,
+            timeline.TotalSeconds);
+        session.Stats.AppendLog("producer stopped unexpectedly; restarting at seg"
+            + nextSegment.ToString(CultureInfo.InvariantCulture));
+
+        session.AdoptWorker(Task.Run(
+            () => RunProducerAsync(
+                () => _streams.StreamToHlsAsync(channel, session.Path, session.Cts.Token, session.Stats, nextSegment, timeline),
+                channel.Name),
+            CancellationToken.None));
+        WatchProducer(session);
+        return true;
+    }
+
+    /// <summary>
+    /// The segment number a replacement segmenter should start writing at: one past the newest segment already in
+    /// the session directory, so it appends to the window instead of overwriting segments a reader is still
+    /// working through. Zero for a directory with no segments.
+    /// </summary>
+    /// <param name="sessionDirectory">The session directory holding the rolling <c>seg&lt;n&gt;.ts</c> files.</param>
+    /// <returns>The first segment number to write.</returns>
+    public static long NextSegmentNumber(string sessionDirectory)
+    {
+        var highest = -1L;
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(sessionDirectory, "seg*.ts"))
+            {
+                var name = Path.GetFileNameWithoutExtension(file.AsSpan());
+                if (name.Length > 3 && long.TryParse(name[3..], NumberStyles.None, CultureInfo.InvariantCulture, out var number) && number > highest)
+                {
+                    highest = number;
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // The directory is gone or unreadable; start from scratch.
+        }
+
+        return highest + 1;
     }
 
     // The viewer watchdog: releases consumers no client is actually playing. A viewer that opens a stream but
@@ -701,33 +837,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     // when the last is released the session lingers and tears down normally.
     private void ReapAbandonedConsumers()
     {
-        List<string> reported;
-        try
+        var reported = ReportedStreamIds();
+        if (reported is null)
         {
-            reported = new List<string>();
-            foreach (var jellyfinSession in _sessionManager.Sessions)
-            {
-                var state = jellyfinSession.PlayState;
-                if (state is null)
-                {
-                    continue;
-                }
-
-                if (!string.IsNullOrEmpty(state.LiveStreamId))
-                {
-                    reported.Add(state.LiveStreamId);
-                }
-
-                if (!string.IsNullOrEmpty(state.MediaSourceId))
-                {
-                    reported.Add(state.MediaSourceId);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            // Never let a session-manager hiccup take down the reaper timer; skip this sweep.
-            _logger.LogDebug(ex, "Live Channels: could not snapshot playback sessions for the viewer watchdog");
+            // The session manager could not be read, so nothing can be said about who is watching; skip the sweep
+            // rather than releasing viewers on no evidence.
             return;
         }
 
@@ -754,6 +868,14 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 continue;
             }
 
+            // Being unreported is circumstantial (some clients simply never report a live stream id); bytes going
+            // out of the door are not. A session still delivering keeps every one of its viewers, so a client
+            // that reports nothing is never mistaken for one that left.
+            if (_live.TryGetValue(id, out var watched) && watched.IsDeliveringData(RecentDeliveryWindow))
+            {
+                continue;
+            }
+
             _unreportedSince.TryRemove(id, out _);
             if (_live.TryGetValue(id, out var orphaned))
             {
@@ -769,6 +891,67 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 _ = LingerTeardownAsync(session);
             }
         }
+    }
+
+    // Every live-stream and media-source id Jellyfin's session manager currently reports as playing, or null when
+    // the session manager could not be read. This is the authority on who is watching: each entry belongs to a
+    // real playback session, and it keeps being reported while a player is paused, which byte delivery cannot say.
+    private List<string>? ReportedStreamIds()
+    {
+        try
+        {
+            var reported = new List<string>();
+            foreach (var jellyfinSession in _sessionManager.Sessions)
+            {
+                var state = jellyfinSession.PlayState;
+                if (state is null)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(state.LiveStreamId))
+                {
+                    reported.Add(state.LiveStreamId);
+                }
+
+                if (!string.IsNullOrEmpty(state.MediaSourceId))
+                {
+                    reported.Add(state.MediaSourceId);
+                }
+            }
+
+            return reported;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Live Channels: could not snapshot playback sessions");
+            return null;
+        }
+    }
+
+    // Whether anyone is watching a session, against an already-taken snapshot of the reported ids. A playback
+    // session reporting one of its viewers is the answer; recent delivery covers the clients that report nothing.
+    // When the session manager cannot be read at all, delivery is all there is to go on.
+    private static bool IsWatched(LiveSession session, IReadOnlyList<string>? reported)
+        => (reported is not null && AnyConsumerReported(session.ConsumerIds, reported))
+            || session.IsDeliveringData(RecentDeliveryWindow);
+
+    // Takes its own snapshot, for the callers that check a single session.
+    private bool IsWatched(LiveSession session) => IsWatched(session, ReportedStreamIds());
+
+    /// <summary>
+    /// Whether any of a session's viewers is reported as playing. The matching rule is the same one the watchdog
+    /// uses (see <see cref="SelectUnwatchedConsumers"/>): a client reports a live stream id of the form
+    /// <c>{servicePrefix}_{consumerId}</c>, so a consumer is watched when a reported id contains it. Pure and
+    /// deterministic so it can be unit tested without a live host.
+    /// </summary>
+    /// <param name="consumerIds">The session's live consumer ids (one per viewer).</param>
+    /// <param name="reportedIds">Every live-stream and media-source id reported by active playback sessions.</param>
+    /// <returns>Whether a playback session is playing this stream.</returns>
+    public static bool AnyConsumerReported(IEnumerable<string> consumerIds, IEnumerable<string> reportedIds)
+    {
+        var reported = reportedIds.Where(id => !string.IsNullOrEmpty(id)).ToList();
+        return consumerIds.Any(consumer => reported.Any(id => id.Contains(consumer, StringComparison.Ordinal)));
     }
 
     /// <summary>
@@ -842,27 +1025,45 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
 
         var sessions = DistinctSessions();
-        var victims = SelectCapVictims(sessions.Select(s => (s.Id, s.StartedUtc)), keep.Id, cap);
+        var reported = ReportedStreamIds();
+        var victims = SelectCapVictims(
+            sessions.Select(s => (s.Id, s.StartedUtc, Watched: IsWatched(s, reported))),
+            keep.Id,
+            cap);
+
         foreach (var id in victims)
         {
             var victim = sessions.FirstOrDefault(s => string.Equals(s.Id, id, StringComparison.Ordinal));
-            if (victim is not null && TeardownSession(victim))
+            if (victim is not null && TeardownSession(victim, force: false, reported))
             {
                 _logger.LogInformation("Live Channels: closing session {Id} ({Name}) to stay within the {Cap}-session cap", victim.Id, victim.ChannelName, cap);
             }
         }
+
+        // Every other session is being watched, so there is nothing the cap may reclaim: run over it rather than
+        // cutting someone off. The extra encoder goes away on its own when one of them stops being watched.
+        if (sessions.Count > cap && victims.Count < sessions.Count - cap)
+        {
+            _logger.LogWarning(
+                "Live Channels: {Count} sessions are running with a cap of {Cap}, but the rest are being watched; leaving them alone",
+                sessions.Count,
+                cap);
+        }
     }
 
     /// <summary>
-    /// Chooses which sessions to close so the live count fits the cap. Returns the oldest sessions first, never the
-    /// one just opened (<paramref name="keep"/>), and only as many as the overflow above the cap. A cap of zero or
-    /// less is unlimited and selects nothing. Pure and deterministic so it can be unit tested without a live host.
+    /// Chooses which sessions to close so the live count fits the cap. Only sessions nobody is watching are
+    /// eligible: the cap exists to reclaim streams that leaked, not to cut off a viewer, so when every other
+    /// session is being watched it returns fewer victims than the overflow (or none) and the count runs over.
+    /// Returns the oldest eligible sessions first and never the one just opened (<paramref name="keep"/>). A cap
+    /// of zero or less is unlimited and selects nothing. Pure and deterministic so it can be unit tested without a
+    /// live host.
     /// </summary>
-    /// <param name="sessions">Every live session as an id and its start time.</param>
+    /// <param name="sessions">Every live session as an id, its start time, and whether it is currently delivering to a viewer.</param>
     /// <param name="keep">The just-opened session that must never be evicted.</param>
     /// <param name="cap">The maximum number of concurrent sessions; zero or less means unlimited.</param>
     /// <returns>The ids to close, oldest first.</returns>
-    public static List<string> SelectCapVictims(IEnumerable<(string Id, DateTime StartedUtc)> sessions, string keep, int cap)
+    public static List<string> SelectCapVictims(IEnumerable<(string Id, DateTime StartedUtc, bool Watched)> sessions, string keep, int cap)
     {
         var all = sessions.ToList();
         var overflow = all.Count - cap;
@@ -872,7 +1073,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
 
         return all
-            .Where(s => !string.Equals(s.Id, keep, StringComparison.Ordinal))
+            .Where(s => !s.Watched && !string.Equals(s.Id, keep, StringComparison.Ordinal))
             .OrderBy(s => s.StartedUtc)
             .Take(overflow)
             .Select(s => s.Id)
@@ -913,8 +1114,26 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
 
     // Removes a session from every tracking map so no new open can adopt it and no close can route to it. Idempotent
     // via the session's torn-down flag; returns whether THIS call performed the teardown (so the caller logs once).
-    private bool TeardownSession(LiveSession session)
+    //
+    // A session someone is watching is never collected by a background rule (the linger, the reaper, the
+    // concurrency cap, or the time limit): those rules exist to reclaim streams nobody is watching, and each one
+    // has at some point been able to cut off a viewer who was. Only an explicit administrator kill and server
+    // shutdown pass force, because those are deliberate.
+    private bool TeardownSession(LiveSession session, bool force = false)
+        => TeardownSession(session, force, force ? null : ReportedStreamIds());
+
+    // The overload the sweeps use, so one pass over every session shares a single snapshot of who is playing.
+    private bool TeardownSession(LiveSession session, bool force, IReadOnlyList<string>? reported)
     {
+        if (!force && IsWatched(session, reported))
+        {
+            _logger.LogDebug(
+                "Live Channels: keeping session {Id} ({Name}) alive; someone is watching it",
+                session.Id,
+                session.ChannelName);
+            return false;
+        }
+
         if (!session.MarkTornDown())
         {
             return false;
@@ -1153,7 +1372,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             Protocol = MediaProtocol.File,
             Container = "mpegts",
             IsInfiniteStream = true,
-            BufferMs = BufferSeconds * 1000,
+            BufferMs = StreamSessionService.BufferSeconds() * 1000,
             RequiresOpening = true,
             RequiresClosing = true,
             SupportsDirectPlay = false,
@@ -1185,9 +1404,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             // availability at the live edge. Adding -re on top caps it at 1x realtime even when it is behind, so
             // the client buffer could only ever fill at realtime (slow tune-in) and a reader that hiccuped could
             // never catch back up before falling off the back of the delete window.
-            // Pre-roll a few seconds on the client so playback starts on a full buffer instead of stuttering
-            // while it fills (the declarative form of pausing briefly then resuming on tune-in).
-            BufferMs = BufferSeconds * 1000,
+            // Pre-roll the configured start-up buffer on the client so playback starts on a full buffer instead
+            // of stuttering while it fills (the declarative form of pausing briefly then resuming on tune-in).
+            // The handover already waited for that much content to exist, so this fills at I/O speed off the disk
+            // rather than at realtime.
+            BufferMs = StreamSessionService.BufferSeconds() * 1000,
             RequiresOpening = false,
             RequiresClosing = true,
             SupportsDirectPlay = false,
@@ -1199,17 +1420,20 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
 
     private static async Task WaitForPlaylistAsync(string playlist, Task worker, CancellationToken cancellationToken)
     {
-        // Hand Jellyfin the playlist only once the segmenter has written it and buffered a couple of segments, so
-        // playback starts on a small cushion (the per-item path spawns a fresh ffmpeg per item, and these
-        // buffered segments ride over the brief gap between items). The initial burst fills them fast, and keeps
-        // filling well past this gate while Jellyfin spins up its own repackager, so two segments (8s) is enough
-        // to hand over on without risking an under-run.
-        const int MinSegments = 2;
+        // Hand Jellyfin the playlist only once the segmenter has written it and buffered the configured start-up
+        // cushion, so playback starts on content that already exists instead of chasing the encoder (the per-item
+        // path spawns a fresh ffmpeg per item, and these buffered segments ride over the gap between items). The
+        // producer bursts well ahead of realtime, so filling the cushion costs a fraction of its length in real
+        // time, and it keeps filling past this gate while Jellyfin spins up its own repackager.
+        var minSegments = StreamArguments.SegmentsForBuffer(StreamSessionService.BufferSeconds());
         var dir = Path.GetDirectoryName(playlist) ?? string.Empty;
-        var deadline = DateTime.UtcNow.AddSeconds(20);
+
+        // The deadline scales with the cushion: a deep buffer legitimately takes longer to fill, and a tune-in
+        // must never be failed for waiting exactly as long as it was told to.
+        var deadline = DateTime.UtcNow.AddSeconds(20 + (minSegments * StreamArguments.SegmentSeconds));
         while (DateTime.UtcNow < deadline && !worker.IsCompleted)
         {
-            if (File.Exists(playlist) && CountSegments(dir) >= MinSegments)
+            if (File.Exists(playlist) && CountSegments(dir) >= minSegments)
             {
                 return;
             }
@@ -1355,6 +1579,8 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         private readonly object _gate = new();
         private readonly List<string> _consumers = new();
         private int _tornDown;
+        private long _lastDataTicks;
+        private DateTime _lastRestartUtc = DateTime.MinValue;
 
         public LiveSession(string id, CancellationTokenSource cts, Task worker, string path, string channelName, string channelId, int number, DateTime startedUtc, SessionStats stats)
         {
@@ -1375,7 +1601,13 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
 
         public CancellationTokenSource Cts { get; }
 
-        public Task Worker { get; }
+        // The producer task. Replaced (not restarted in place) when a producer dies under a viewer who is still
+        // watching, so the session survives an encoder failure instead of taking the viewer down with it.
+        public Task Worker { get; private set; }
+
+        // How many replacement producers this session has run, so a permanently broken pipeline stops being
+        // restarted rather than looping forever.
+        public int Restarts { get; private set; }
 
         public string Path { get; }
 
@@ -1402,6 +1634,62 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 {
                     return _consumers.Count > 0;
                 }
+            }
+        }
+
+        // Whether the session has been torn down, so a producer that finishes because of that teardown is not
+        // mistaken for one that died on its own.
+        public bool IsTornDown => Volatile.Read(ref _tornDown) != 0;
+
+        // The live stream ids of this session's viewers, which is what a playing client reports back to Jellyfin.
+        public IReadOnlyList<string> ConsumerIds
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _consumers.ToList();
+                }
+            }
+        }
+
+        /// <summary>Records that a reader was served bytes: someone is pulling this stream right now.</summary>
+        public void MarkData() => Interlocked.Exchange(ref _lastDataTicks, DateTime.UtcNow.Ticks);
+
+        /// <summary>Whether the session delivered data to a reader within the given window.</summary>
+        /// <param name="window">How recent the delivery must be.</param>
+        /// <returns>Whether bytes went out recently.</returns>
+        public bool IsDeliveringData(TimeSpan window)
+        {
+            var ticks = Interlocked.Read(ref _lastDataTicks);
+            return ticks > 0 && DateTime.UtcNow - new DateTime(ticks, DateTimeKind.Utc) < window;
+        }
+
+        // Claims the right to start a replacement producer, refusing when the session is gone, when replacements
+        // are coming too fast, or when it has already had too many.
+        public bool TryClaimRestart(TimeSpan minimumInterval, int maxRestarts)
+        {
+            lock (_gate)
+            {
+                var now = DateTime.UtcNow;
+                if (IsTornDown || Restarts >= maxRestarts || now - _lastRestartUtc < minimumInterval)
+                {
+                    return false;
+                }
+
+                _lastRestartUtc = now;
+                Restarts++;
+                return true;
+            }
+        }
+
+        /// <summary>Attaches the replacement producer this session now runs on.</summary>
+        /// <param name="worker">The new producer task.</param>
+        public void AdoptWorker(Task worker)
+        {
+            lock (_gate)
+            {
+                Worker = worker;
             }
         }
 

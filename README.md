@@ -49,13 +49,15 @@ Every filter is optional and they combine. Leave a filter empty or zero to ignor
 * **Loop order** arranges the channel. **Shuffle** is fixed and repeatable, so the guide and the stream always agree, and each series contributes one block per loop before waiting for every other series so nothing dominates. **Alphabetical** plays by name, and **Chronological** plays oldest to newest by release date.
 * **Episode order** plays a series in air order or at random.
 * **Favor content type** weights a shuffled channel toward movies, shows, or music videos.
-* **Subtitle burn in** bakes a subtitle track into the video: **Never**, **Forced only**, or **Always**. Forced only switches to Always behaviour when the audio is not your **Default language**, so foreign content stays readable.
+* **Subtitle burn in** bakes a subtitle track into the video: **Never**, **Forced only**, or **Always**. Forced only switches to Always behaviour when the audio is not your **Default language**, so foreign content stays readable. Subtitles are burned from the file Jellyfin extracts, the same one its own transcodes use, so the track's own bold, italic, and colour markup carries into the picture and fonts attached to the media are honoured. How they look is set once on the **Settings** tab.
 
 ### Output
 
 Resolution, codecs, and bitrate are set on the **Settings** tab and apply to every channel. Encoding and decoding follow Jellyfin's own hardware-acceleration settings (with a switch to force software), and HDR is tone-mapped to SDR using Jellyfin's VPP brightness gain where available. On Linux with Intel hardware (QSV or VA-API), the whole pipeline (decode, deinterlacing, scaling, tone mapping, subtitle burn-in, and encode) runs on the GPU, bound to the render node from Jellyfin's transcoding settings. Stream pacing is automatic: the encoder runs at realtime, builds a head start at tune-in, and bursts to recover time lost at item transitions, so there is nothing to tune.
 
-A **Sessions** section bounds cost: a **maximum concurrent streams** cap closes the oldest stream when a new viewer would exceed it, and an optional **stream time limit** closes anything open too long (the client simply re-tunes). Each active channel keeps a short rolling window of segments on disk, so disk use stays bounded regardless of watch time. A **Stress test** on the same tab measures the right cap: it encodes a demanding item with the real channel pipeline, adding one concurrent stream per round until one drops below realtime. Nothing about the test is saved.
+A **Playback** section sets the **start-up buffer**: how much of a channel is encoded before playback begins, and how far ahead of you the encoder stays afterwards. The default of 12 seconds suits most servers; raise it if the first seconds of a tune-in stutter, at the cost of a slightly longer wait for the picture. **Subtitle appearance** styles burned-in subtitles (font, relative size, text and outline colour, an outline or solid box background, and bold), and leaving it untouched renders each subtitle exactly as its author wrote it.
+
+A **Sessions** section bounds cost: a **maximum concurrent streams** cap closes the oldest stream nobody is watching when a new viewer would exceed it, and an optional **stream time limit** closes anything open too long (the client simply re-tunes). Neither ever closes a stream Jellyfin reports as playing, paused included, so the count can run over while everything is in use, and only **Kill** on the Sessions tab stops a stream someone is watching. If an encoder dies mid-watch it is replaced in place, continuing where it stopped, rather than ending the stream. Each active channel keeps a short rolling window of segments on disk, so disk use stays bounded regardless of watch time. A **Stress test** on the same tab measures the right cap: it encodes a demanding item with the real channel pipeline, adding one concurrent stream per round until one drops below realtime. Nothing about the test is saved.
 
 ### The Sessions tab
 
@@ -63,7 +65,7 @@ Lists every channel currently encoding: logo, number and name, start time, runti
 
 ### Guide
 
-Every program is filled out from your library: description, genres, ratings, year, air date, and season or episode numbers, with recently added content flagged as new and programs tagged by their category (kids, movie, news, or sports). Artwork is always landscape, so the guide stays tidy.
+Every program is filled out from your library: description, genres, ratings, year, air date, and season or episode numbers, with recently added content flagged as new and programs tagged by their category (kids, movie, news, or sports). Every artwork shape the content has is offered (poster, landscape thumb, backdrop, and clear logo), with an episode taking its poster from its series, so each client renders the shape its layout calls for.
 
 ## Versioning
 

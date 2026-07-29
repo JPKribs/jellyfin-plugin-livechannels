@@ -29,7 +29,10 @@ public class ScheduleCacheSerializationTests
             SeriesId = Guid.NewGuid(),
             SeriesName = "American Dad!",
             RawName = "Pilot",
-            GuideImagePath = "/cache/img/ad.jpg",
+            PrimaryImagePath = "/cache/img/ad-poster.jpg",
+            ThumbImagePath = "/cache/img/ad-thumb.jpg",
+            BackdropImagePath = "/cache/img/ad-backdrop.jpg",
+            LogoImagePath = "/cache/img/ad-logo.png",
             SourceHeight = 1080,
             DateAdded = new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc),
             CommunityRating = 7.3f,
@@ -63,7 +66,10 @@ public class ScheduleCacheSerializationTests
         Assert.Equal(original.SeriesId, entry.SeriesId);
         Assert.Equal(original.SeriesName, entry.SeriesName);
         Assert.Equal(original.RawName, entry.RawName);
-        Assert.Equal(original.GuideImagePath, entry.GuideImagePath);
+        Assert.Equal(original.PrimaryImagePath, entry.PrimaryImagePath);
+        Assert.Equal(original.ThumbImagePath, entry.ThumbImagePath);
+        Assert.Equal(original.BackdropImagePath, entry.BackdropImagePath);
+        Assert.Equal(original.LogoImagePath, entry.LogoImagePath);
         Assert.Equal(original.SourceHeight, entry.SourceHeight);
         Assert.Equal(original.DateAdded, entry.DateAdded);
         Assert.Equal(original.CommunityRating, entry.CommunityRating);

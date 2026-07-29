@@ -69,8 +69,17 @@ public sealed class ProgramEntry
     /// <summary>Gets the item's own name (the episode title, without the series prefix), used to detect multi-part siblings.</summary>
     public string? RawName { get; init; }
 
-    /// <summary>Gets the file-system path to the item's landscape guide artwork, or <c>null</c>: a movie's backdrop, otherwise the primary image (episode and music-video primaries are already landscape thumbnails).</summary>
-    public string? GuideImagePath { get; init; }
+    /// <summary>Gets the file-system path to the program's portrait artwork (the poster), or <c>null</c>. For an episode this is the series poster, since an episode's own primary image is a landscape still.</summary>
+    public string? PrimaryImagePath { get; init; }
+
+    /// <summary>Gets the file-system path to the program's landscape artwork, or <c>null</c>: the item's thumb, its series' thumb, or an episode's own primary still.</summary>
+    public string? ThumbImagePath { get; init; }
+
+    /// <summary>Gets the file-system path to the program's backdrop, or <c>null</c>, falling back to the series' backdrop for an episode.</summary>
+    public string? BackdropImagePath { get; init; }
+
+    /// <summary>Gets the file-system path to the program's clear logo, or <c>null</c>, falling back to the series' logo for an episode.</summary>
+    public string? LogoImagePath { get; init; }
 
     /// <summary>Gets the source video height in pixels (0 when unknown), used to choose the decode pipeline (software concat vs per-item hardware decode for high-resolution sources).</summary>
     public int SourceHeight { get; init; }
@@ -117,6 +126,9 @@ public sealed class SubtitleStreamInfo
 
     /// <summary>Gets a value indicating whether the stream is text-based (libass) rather than bitmap (PGS/VOBSUB).</summary>
     public bool IsText { get; init; }
+
+    /// <summary>Gets a value indicating whether the subtitle is a separate file beside the media rather than a track inside it. An external subtitle has no stream index within the media file, so it can only be burned from the file Jellyfin resolves for it.</summary>
+    public bool IsExternal { get; init; }
 }
 
 /// <summary>

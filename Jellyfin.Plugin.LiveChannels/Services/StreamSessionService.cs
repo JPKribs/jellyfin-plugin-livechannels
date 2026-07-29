@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Plugin.LiveChannels.Configuration;
 using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Utilities;
 using MediaBrowser.Controller.MediaEncoding;
@@ -27,9 +28,6 @@ public class StreamSessionService
     // and shows standby. Failures reset on any success, so this only trips when the library is genuinely
     // unreachable — and then quickly (~5s), instead of walking every item of a large playlist first.
     private const int MaxConsecutiveFailures = 25;
-
-    // Where pre-extracted burn-in subtitles for tune-in items are written.
-    private readonly string _subtitleRoot = Path.Combine(Path.GetTempPath(), "livechannels-subs");
 
     private readonly IMediaEncoder _encoder;
     private readonly ChannelService _channels;
@@ -59,8 +57,9 @@ public class StreamSessionService
     /// <param name="output">The destination stream (the temp file Jellyfin reads).</param>
     /// <param name="cancellationToken">Cancelled when the live stream is closed.</param>
     /// <param name="stats">The shared per-session stats sink, or <c>null</c>.</param>
+    /// <param name="timelineBase">Where on the channel timeline this producer's output starts. Non-zero only when a producer is restarted under a viewer who is still watching, so the timestamps it appends continue forward instead of rewinding to zero.</param>
     /// <returns>A task that completes when streaming stops.</returns>
-    public async Task StreamToAsync(Channel channel, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
+    public async Task StreamToAsync(Channel channel, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan timelineBase = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(output);
@@ -76,7 +75,7 @@ public class StreamSessionService
         if (programs.Count == 0)
         {
             _logger.LogWarning("Live channel {Name} resolved to no playable items; showing standby", channel.Name);
-            await StreamSlateAsync(ffmpeg, TimeSpan.Zero, output, cancellationToken).ConfigureAwait(false);
+            await StreamSlateAsync(ffmpeg, timelineBase, output, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -112,7 +111,7 @@ public class StreamSessionService
         {
             var (concatIndex, _) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow, ScheduleCalculator.Epoch);
             LogEncodePlan(channel, programs.Count, concatIndex, perItem, uniform, hasHdr);
-            await StreamConcatAsync(ffmpeg, channel, programs, output, cancellationToken, stats).ConfigureAwait(false);
+            await StreamConcatAsync(ffmpeg, channel, programs, output, cancellationToken, stats, timelineBase).ConfigureAwait(false);
             return;
         }
 
@@ -131,8 +130,16 @@ public class StreamSessionService
         }
 
         LogEncodePlan(channel, programs.Count, planIndex, perItem, uniform, hasHdr);
-        await StreamPerItemLoopAsync(ffmpeg, channel, schedule, output, cancellationToken, stats).ConfigureAwait(false);
+        await StreamPerItemLoopAsync(ffmpeg, channel, schedule, output, cancellationToken, stats, timelineBase).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// The configured start-up buffer in seconds, clamped to a workable range. It is how much already-encoded
+    /// content a tune-in waits for before playback begins, and it sets how far ahead of realtime the producer runs.
+    /// </summary>
+    /// <returns>The buffer in seconds.</returns>
+    public static int BufferSeconds()
+        => Plugin.Instance?.ReadConfiguration(c => c.EffectiveStartupBufferSeconds()) ?? PluginConfiguration.DefaultStartupBufferSeconds;
 
     /// <summary>
     /// Streams the channel as a self-trimming HLS playlist in <paramref name="hlsDir"/>. A long-lived segmenter
@@ -143,8 +150,11 @@ public class StreamSessionService
     /// <param name="channel">The channel to stream.</param>
     /// <param name="hlsDir">The directory the playlist and segments are written to.</param>
     /// <param name="cancellationToken">Cancelled when the live stream is closed.</param>
+    /// <param name="stats">The shared per-session stats sink, or <c>null</c>.</param>
+    /// <param name="startSegmentNumber">The first segment number to write. Non-zero when this producer is restarted into a directory that already holds segments a reader is still working through, so the new segmenter appends past them instead of overwriting them.</param>
+    /// <param name="timelineBase">Where on the channel timeline this producer's output starts, so a restart continues the timestamps forward.</param>
     /// <returns>A task that completes when streaming stops.</returns>
-    public async Task StreamToHlsAsync(Channel channel, string hlsDir, CancellationToken cancellationToken, SessionStats? stats = null)
+    public async Task StreamToHlsAsync(Channel channel, string hlsDir, CancellationToken cancellationToken, SessionStats? stats = null, long startSegmentNumber = 0, TimeSpan timelineBase = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(hlsDir);
@@ -161,7 +171,7 @@ public class StreamSessionService
         // worst-case self-heal (the concat thrash guard can advance the edge up to 6 restarts x 30s of burst
         // before standing by). Disk cost is bounded at roughly bitrate x 5 minutes per active channel.
         var listSize = StreamArguments.SegmentsForWindow(5);
-        var args = StreamArguments.BuildHlsSegmenter(Path.Combine(hlsDir, "seg%d.ts"), Path.Combine(hlsDir, "stream.m3u8"), listSize);
+        var args = StreamArguments.BuildHlsSegmenter(Path.Combine(hlsDir, "seg%d.ts"), Path.Combine(hlsDir, "stream.m3u8"), listSize, startSegmentNumber);
         var startInfo = new ProcessStartInfo
         {
             FileName = ffmpeg,
@@ -196,7 +206,7 @@ public class StreamSessionService
         {
             // The per-item/concat producer and the slate all write to this one stream, so the segmenter receives
             // a single unbroken TS feed it can package into the playlist.
-            await StreamToAsync(channel, segmenter.StandardInput.BaseStream, cancellationToken, stats).ConfigureAwait(false);
+            await StreamToAsync(channel, segmenter.StandardInput.BaseStream, cancellationToken, stats, timelineBase).ConfigureAwait(false);
         }
         finally
         {
@@ -223,13 +233,13 @@ public class StreamSessionService
     // Streams the channel as ONE continuous ffmpeg using the concat demuxer, so item boundaries are seamless
     // (no timestamp or continuity reset). Software decode (hardware decoders fail on the per-segment resolution
     // changes a playlist produces) with the hardware encoder.
-    private async Task StreamConcatAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
+    private async Task StreamConcatAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan timelineBase = default)
     {
         var playable = programs.Where(p => !string.IsNullOrEmpty(p.Path) && File.Exists(p.Path)).ToList();
         if (playable.Count == 0)
         {
             _logger.LogWarning("Every item on channel {Name} is unreachable; showing standby", channel.Name);
-            await StreamSlateAsync(ffmpeg, TimeSpan.Zero, output, cancellationToken).ConfigureAwait(false);
+            await StreamSlateAsync(ffmpeg, timelineBase, output, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -258,6 +268,8 @@ public class StreamSessionService
             // strikes drop hardware decode, and after a few more stop thrashing and show standby, rather than
             // relaunching an encoder every few seconds for as long as the bad item stays on the schedule.
             var shortRuns = 0;
+            var headStart = StreamArguments.HeadStartFor(BufferSeconds());
+            var timeline = timelineBase;
             while (!cancellationToken.IsCancellationRequested)
             {
                 // Start the list AT the item now airing and seek only within it. A single -ss spanning the
@@ -273,16 +285,22 @@ public class StreamSessionService
                     Rotate(playable, index).Select(p => "file '" + p.Path!.Replace("'", "'\\''", StringComparison.Ordinal) + "'"),
                     cancellationToken).ConfigureAwait(false);
 
-                var args = StreamArguments.BuildConcat(listFile, intoItem, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel);
+                var args = StreamArguments.BuildConcat(listFile, intoItem, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel, headStart, timeline);
 
                 var started = DateTime.UtcNow;
-                var (total, _, _) = await RunFfmpegAsync(ffmpeg, args, channel.Name, output, cancellationToken, stats).ConfigureAwait(false);
+                var (total, lastOut, _) = await RunFfmpegAsync(ffmpeg, args, channel.Name, output, cancellationToken, stats).ConfigureAwait(false);
                 if (cancellationToken.IsCancellationRequested)
                 {
                     break;
                 }
 
                 var ranFor = DateTime.UtcNow - started;
+
+                // A restart appends to the stream the reader is already following, so it must continue the
+                // timeline rather than rewind it: pick up where this run's output actually ended (its final
+                // progress timestamp, which already includes the offset above), falling back to the wall clock it
+                // ran for when no reading was parsed.
+                timeline = NextTimeline(timeline, ranFor, lastOut);
                 var quickFail = total == 0 || ranFor < TimeSpan.FromSeconds(2);
                 if (quickFail && decodeHwaccel is not null)
                 {
@@ -296,7 +314,7 @@ public class StreamSessionService
                 if (quickFail)
                 {
                     _logger.LogWarning("Channel {Name}: continuous stream failed to run; showing standby", channel.Name);
-                    await StreamSlateAsync(ffmpeg, TimeSpan.Zero, output, cancellationToken).ConfigureAwait(false);
+                    await StreamSlateAsync(ffmpeg, timeline, output, cancellationToken).ConfigureAwait(false);
                     break;
                 }
 
@@ -313,7 +331,7 @@ public class StreamSessionService
                     if (shortRuns >= 6)
                     {
                         _logger.LogWarning("Channel {Name}: continuous stream keeps dying; showing standby", channel.Name);
-                        await StreamSlateAsync(ffmpeg, TimeSpan.Zero, output, cancellationToken).ConfigureAwait(false);
+                        await StreamSlateAsync(ffmpeg, timeline, output, cancellationToken).ConfigureAwait(false);
                         break;
                     }
                 }
@@ -356,18 +374,19 @@ public class StreamSessionService
     // path cannot provide. Every item cold-starts at its boundary; the wall clock a cold start costs is healed by
     // that producer's deficit burst, and the viewer rides the tune-in head start well behind the live edge, so
     // boundaries stay invisible without ever running two encoders at once.
-    private async Task StreamPerItemLoopAsync(string ffmpeg, Channel channel, IStreamSchedule schedule, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
+    private async Task StreamPerItemLoopAsync(string ffmpeg, Channel channel, IStreamSchedule schedule, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan timelineBase = default)
     {
         var consecutiveFailures = 0;
         var itemsPlayed = 0;
-        var timeline = TimeSpan.Zero;
+        var timeline = timelineBase;
 
         // The session's wall-clock anchor for catch-up bursts. Each per-item ffmpeg re-anchors its -readrate
         // schedule at its own start, so time lost BETWEEN processes (cold starts, retries) never self-heals at
         // realtime. Every producer therefore bursts the session's current deficit against this anchor: the first
         // item's deficit is exactly the full head start, later items' exactly the wall clock the boundaries lost.
         var sessionStart = DateTime.UtcNow;
-        double BurstNow() => StreamArguments.BurstForDeficit(DateTime.UtcNow - sessionStart, timeline);
+        var headStart = StreamArguments.HeadStartFor(BufferSeconds());
+        double BurstNow() => StreamArguments.BurstForDeficit(DateTime.UtcNow - sessionStart, timeline - timelineBase, headStart);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -483,23 +502,36 @@ public class StreamSessionService
 
         var subtitle = ChannelService.FindBurnInSubtitle(program, channel.SubtitleBurnIn);
 
-        // Burning a text subtitle uses the libass `subtitles` filter, which reads the media file from the start
-        // to reach the current position -- fatal on a deep tune-in seek into a multi-GB file (it scans gigabytes
-        // and the producer stalls). So on the partial tune-in item, burn a small pre-extracted subtitle file
-        // instead (Jellyfin extracts and caches it). If it is not cached yet, skip the burn for this one tune-in;
-        // it warms the cache for next time. Full items from offset 0 and bitmap subtitles are unaffected.
+        // Burn the file Jellyfin extracted into its own subtitle cache, the same source its transcodes burn, not
+        // the media file itself. The libass `subtitles` filter reads its source from the start to reach the
+        // current position, which is fatal on a deep tune-in seek into a multi-GB file (it scans gigabytes while
+        // the producer stalls), and the extracted file keeps the track's own markup, so bold, italic, and colour
+        // tags survive into the picture.
+        //
+        // While that extraction is still warming, an item playing from its start can still burn straight out of
+        // the media file (at position zero there is nothing to scan through); a seeked tune-in skips the burn for
+        // this one item and picks it up next time. Bitmap subtitles are composited from the mapped stream either
+        // way, so they never take this path.
         string? subtitlePath = null;
-        if (subtitle.HasValue && subtitle.Value.IsText && offset > TimeSpan.Zero)
+        string? subtitleFonts = null;
+        if (subtitle is { IsText: true })
         {
-            subtitlePath = await _channels.TryExtractTuneInSubtitleAsync(program.ItemId, subtitle.Value.RelativeIndex, offset, _subtitleRoot, cancellationToken).ConfigureAwait(false);
-            if (subtitlePath is null)
+            var file = await _channels.TryResolveBurnInSubtitleAsync(program.ItemId, subtitle.Value.RelativeIndex, cancellationToken).ConfigureAwait(false);
+            subtitlePath = file?.Path;
+            subtitleFonts = file?.FontsDirectory;
+
+            // The media-file fallback addresses the track by its index INSIDE the file, which only exists for an
+            // embedded track: a subtitle that lives in a file beside the media has no such index, so without the
+            // resolved path there is nothing to burn.
+            var external = program.Subtitles.FirstOrDefault(s => s.RelativeIndex == subtitle.Value.RelativeIndex)?.IsExternal ?? false;
+            if (subtitlePath is null && (offset > TimeSpan.Zero || external))
             {
-                _logger.LogDebug("Channel {Name}: tune-in subtitle not ready; skipping it on this item", channel.Name);
+                _logger.LogDebug("Channel {Name}: burn-in subtitle not ready; skipping it on this item", channel.Name);
                 subtitle = null;
             }
         }
 
-        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit);
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts);
         var (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
@@ -507,7 +539,7 @@ public class StreamSessionService
         if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
-            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit);
+            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts);
             (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken, stats).ConfigureAwait(false);
         }
 
@@ -699,13 +731,14 @@ public class StreamSessionService
     public (List<string> Args, bool HardwareDecode) BuildStressArguments(string path, int sourceHeight, bool isHdr, TimeSpan offset, TimeSpan duration)
         => BuildArguments(path, offset, TimeSpan.Zero, null, sourceHeight, null, softwareDecode: false, isHdr, null, initialBurstSeconds: 0, duration);
 
-    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal, double initialBurstSeconds, TimeSpan? durationLimit = null)
+    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal, double initialBurstSeconds, TimeSpan? durationLimit = null, string? subtitleFontsDir = null)
     {
         // Read just the scalars we need inside the config lock, rather than holding a reference to the live
         // (mutable, shared) configuration object after the lock releases.
         var (width, bitrate, videoCodec, audioCodec) = Plugin.Instance?.ReadConfiguration(c =>
             (c.TranscodeWidth, c.TranscodeVideoBitrateKbps, c.VideoCodec, c.AudioCodec))
             ?? (1280, 4000, Models.VideoCodec.H264, Models.AudioCodec.Aac);
+        var subtitleStyle = ResolveSubtitleStyle();
 
         // The hardware encoder still applies to burn-in; only the decode side cares about the overlay -- and
         // the GPU-resident Intel pipeline composites the overlay on the GPU (overlay_vaapi), so burn-in there
@@ -734,9 +767,20 @@ public class StreamSessionService
         // Every hardware pipeline reports as such, so a no-output failure retries the item in software
         // (StreamItemAsync) instead of blanking the channel.
         var hardwareDecode = intelGpu || (!forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel));
-        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurstSeconds, durationLimit);
+        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurstSeconds, durationLimit, subtitleStyle, subtitleFontsDir);
         return (args, hardwareDecode);
     }
+
+    // The configured burn-in appearance as a libass style override, or null when nothing was customised (the
+    // subtitle then renders exactly as authored).
+    private static string? ResolveSubtitleStyle()
+        => Plugin.Instance?.ReadConfiguration(c => SubtitleStyle.Build(
+            c.SubtitleFont,
+            c.SubtitleFontScalePercent,
+            c.SubtitleTextColor,
+            c.SubtitleOutlineColor,
+            c.SubtitleBorder,
+            c.SubtitleBold));
 
     private static async Task<string> ReadStandardErrorAsync(Process process, SessionStats? stats, CancellationToken cancellationToken, SpeedTracker? tracker = null)
     {
@@ -879,6 +923,10 @@ public class StreamSessionService
             }
 
             var contentSeconds = micros / 1_000_000.0;
+
+            // out_time already includes the producer's -output_ts_offset, so it IS the channel timeline: record
+            // it so a producer restarted under a live viewer knows where to resume the timestamps from.
+            stats.ObserveTimeline(contentSeconds);
             // A monotonic timestamp, so an NTP/VM clock step cannot skew the elapsed time into a false speed.
             var nowStamp = Stopwatch.GetTimestamp();
 

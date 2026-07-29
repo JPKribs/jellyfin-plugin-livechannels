@@ -27,16 +27,21 @@ public static class StreamArguments
     private const double MinBurstSeconds = 0.05;
 
     /// <summary>
-    /// The tune-in head start in seconds: how much content the first item (or the single concat ffmpeg) bursts
-    /// ahead of realtime before the player joins, and the cap on any later item's catch-up burst.
+    /// The default tune-in head start in seconds: how much content the first item (or the single concat ffmpeg)
+    /// bursts ahead of realtime before the player joins, and the cap on any later item's catch-up burst. A channel
+    /// whose configured start-up buffer is larger raises it (see <see cref="HeadStartFor"/>), so the producer is
+    /// always comfortably further ahead than the cushion the viewer waits for.
     /// </summary>
     public const double InitialBurstSeconds = 30;
+
+    /// <summary>The length of one HLS segment in seconds; the granularity of every buffer measured in segments.</summary>
+    public const int SegmentSeconds = 4;
 
     // The HLS segmenter packages the producer's continuous TS into a rolling, self-trimming playlist of fixed
     // length segments. How many segments are retained (the window) is fixed by the caller (see
     // StreamSessionService.StreamToHlsAsync): it has to cover the tune-in head start plus the worst-case burst
     // advance of the self-heal path, and it is also the upper bound on disk use per active channel.
-    private const int HlsSegmentSeconds = 4;
+    private const int HlsSegmentSeconds = SegmentSeconds;
 
     // Never keep fewer than this many segments, so even a tiny configured window leaves the player something to
     // work with on tune-in.
@@ -56,6 +61,14 @@ public static class StreamArguments
     /// <param name="audioEncoder">The ffmpeg audio encoder name (e.g. <c>aac</c>, <c>ac3</c>, <c>eac3</c>).</param>
     /// <param name="audioBitrate">Target audio bitrate in kbps.</param>
     /// <param name="forcedSubtitle">The subtitle to burn in (relative index, is-text), or <c>null</c>.</param>
+    /// <param name="externalSubtitlePath">The extracted subtitle file to burn (Jellyfin's own cached extraction), or <c>null</c> to read the track out of the media file.</param>
+    /// <param name="softwareDecode">Whether to force software decoding.</param>
+    /// <param name="isHdr">Whether the source carries an HDR transfer and must be tone-mapped.</param>
+    /// <param name="audioOrdinal">The audio track to map, among the item's audio streams.</param>
+    /// <param name="initialBurstSeconds">How much content to produce ahead of realtime before settling to the paced read rate.</param>
+    /// <param name="durationLimit">How much content to read, or <c>null</c> for the whole item.</param>
+    /// <param name="subtitleStyle">The libass <c>force_style</c> override for burned-in subtitles, or <c>null</c> to render them as authored.</param>
+    /// <param name="subtitleFontsDir">A directory of fonts attached to the media, so an ASS subtitle renders in the font it was authored with, or <c>null</c>.</param>
     /// <returns>The ffmpeg argument list.</returns>
     public static List<string> Build(
         string path,
@@ -72,7 +85,9 @@ public static class StreamArguments
         bool isHdr = false,
         int? audioOrdinal = null,
         double initialBurstSeconds = 0,
-        TimeSpan? durationLimit = null)
+        TimeSpan? durationLimit = null,
+        string? subtitleStyle = null,
+        string? subtitleFontsDir = null)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(video);
@@ -246,11 +261,11 @@ public static class StreamArguments
 
         if (burnIn && intelGpu)
         {
-            AppendIntelGpuSubtitleFilter(args, path, forcedSubtitle!.Value, scale, gpuTail, externalSubtitlePath, audioOrdinal, w, h, hasOffset ? seconds : "0");
+            AppendIntelGpuSubtitleFilter(args, path, forcedSubtitle!.Value, scale, gpuTail, externalSubtitlePath, audioOrdinal, w, h, hasOffset ? seconds : "0", subtitleStyle, subtitleFontsDir);
         }
         else if (burnIn)
         {
-            AppendSubtitleFilter(args, path, forcedSubtitle!.Value, scale, externalSubtitlePath, audioOrdinal);
+            AppendSubtitleFilter(args, path, forcedSubtitle!.Value, scale, externalSubtitlePath, audioOrdinal, subtitleStyle, subtitleFontsDir);
         }
         else
         {
@@ -338,6 +353,9 @@ public static class StreamArguments
     /// hardware *encoder* still applies.</param>
     /// <param name="audioEncoder">The ffmpeg audio encoder name.</param>
     /// <param name="audioBitrate">Target audio bitrate in kbps.</param>
+    /// <param name="decodeHwaccel">The hardware decoder to use, or <c>null</c> to decode in software.</param>
+    /// <param name="initialBurstSeconds">The tune-in head start: how much content is produced ahead of realtime before the player joins.</param>
+    /// <param name="timelineBase">Where on the channel timeline this process's output starts, so a producer restarted mid-session continues forward instead of resetting timestamps to zero.</param>
     /// <returns>The ffmpeg argument list.</returns>
     public static List<string> BuildConcat(
         string listFilePath,
@@ -347,7 +365,9 @@ public static class StreamArguments
         VideoEncoderProfile video,
         string audioEncoder,
         int audioBitrate,
-        string? decodeHwaccel = null)
+        string? decodeHwaccel = null,
+        double initialBurstSeconds = InitialBurstSeconds,
+        TimeSpan timelineBase = default)
     {
         ArgumentNullException.ThrowIfNull(listFilePath);
         ArgumentNullException.ThrowIfNull(video);
@@ -387,7 +407,7 @@ public static class StreamArguments
         // Read at exactly realtime so segments are produced at the player's consumption rate. This is one
         // long-lived ffmpeg with no item boundaries, so a single up-front burst safely fills the tune-in head start
         // without ever lurching the live edge mid-stream. Loop the whole playlist forever and read it as one input.
-        Add(args, "-readrate", RealtimeReadRate, "-readrate_initial_burst", InitialBurstSeconds.ToString("0.###", CultureInfo.InvariantCulture));
+        Add(args, "-readrate", RealtimeReadRate, "-readrate_initial_burst", initialBurstSeconds.ToString("0.###", CultureInfo.InvariantCulture));
         Add(args, "-stream_loop", "-1", "-safe", "0", "-f", "concat", "-i", listFilePath);
 
         var height = (int)Math.Round(width * 9.0 / 16.0);
@@ -434,9 +454,18 @@ public static class StreamArguments
         Add(args, "-c:a", audioEncoder, "-b:a", abr + "k", "-ac", "2", "-ar", "48000", "-af", "aresample=async=1:min_hard_comp=0.100");
         Add(args, "-max_muxing_queue_size", "1024");
 
-        // One continuous encoder, so no per-item timeline offset is needed. But mark the first packets as a
-        // discontinuity: the self-heal loop restarts ffmpeg and appends to the same file Jellyfin keeps reading,
-        // so the fresh stream's reset continuity counters/PCR must be flagged or the reader sees a broken seam.
+        // One continuous encoder, so within a run no per-item timeline offset is needed. Across runs it matters:
+        // a producer restarted mid-session (self-heal, or a session whose producer died under an active viewer)
+        // must not rewind the timeline it appends to, so it starts where the previous output ended.
+        if (timelineBase > TimeSpan.Zero)
+        {
+            args.Add("-output_ts_offset");
+            args.Add(timelineBase.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture));
+        }
+
+        // Mark the first packets as a discontinuity: the self-heal loop restarts ffmpeg and appends to the same
+        // stream the reader is following, so the fresh output's reset continuity counters/PCR must be flagged or
+        // the reader sees a broken seam.
         // ffmpeg writes to stdout (pipe:1) and our process pumps that to the file. -y overwrites without prompting.
         Add(args, "-y", "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-muxpreload", "0", "-muxdelay", "0", "pipe:1");
 
@@ -514,6 +543,28 @@ public static class StreamArguments
         Math.Max(MinHlsSegments, Math.Max(1, windowMinutes) * 60 / HlsSegmentSeconds);
 
     /// <summary>
+    /// How many finished segments cover the configured start-up buffer: the cushion of already-encoded content a
+    /// tune-in waits for before playback is handed to the player, so the first seconds (the probe, the player's
+    /// own start-up, and the first item boundary) play out of the buffer instead of off the encoder's heels.
+    /// Never fewer than two, so even a tiny buffer hands over something a player can work with.
+    /// </summary>
+    /// <param name="bufferSeconds">The configured start-up buffer in seconds.</param>
+    /// <returns>The number of segments to wait for.</returns>
+    public static int SegmentsForBuffer(int bufferSeconds)
+        => Math.Max(2, (Math.Max(0, bufferSeconds) + HlsSegmentSeconds - 1) / HlsSegmentSeconds);
+
+    /// <summary>
+    /// The tune-in head start for a given start-up buffer: how far ahead of realtime the producer runs before the
+    /// player joins. It must exceed the buffer itself (the buffer is filled OUT of the head start), with enough
+    /// margin left over for the probe, the handover, and the reserve the delivery reader holds back, so a viewer
+    /// who asked for a deep cushion still gets it without the tune-in wait running to its deadline.
+    /// </summary>
+    /// <param name="bufferSeconds">The configured start-up buffer in seconds.</param>
+    /// <returns>The head start in seconds.</returns>
+    public static double HeadStartFor(int bufferSeconds)
+        => Math.Max(InitialBurstSeconds, Math.Max(0, bufferSeconds) + (2 * HlsSegmentSeconds) + 10);
+
+    /// <summary>
     /// Computes the catch-up burst for a per-item producer, anchored to the session's wall clock. The live edge
     /// SHOULD sit at <c>elapsed + InitialBurstSeconds</c> of content; the session has actually produced
     /// <paramref name="timeline"/>. The difference is wall-clock time lost between processes (cold starts,
@@ -524,9 +575,10 @@ public static class StreamArguments
     /// </summary>
     /// <param name="elapsed">Wall-clock time since the per-item session started.</param>
     /// <param name="timeline">Content produced so far on the channel timeline (the next item's start position).</param>
-    /// <returns>The burst in seconds for the next producer, in [0, <see cref="InitialBurstSeconds"/>].</returns>
-    public static double BurstForDeficit(TimeSpan elapsed, TimeSpan timeline)
-        => Math.Clamp(elapsed.TotalSeconds + InitialBurstSeconds - timeline.TotalSeconds, 0, InitialBurstSeconds);
+    /// <param name="headStartSeconds">The session's tune-in head start, which is both the target lead and the cap.</param>
+    /// <returns>The burst in seconds for the next producer, in [0, <paramref name="headStartSeconds"/>].</returns>
+    public static double BurstForDeficit(TimeSpan elapsed, TimeSpan timeline, double headStartSeconds = InitialBurstSeconds)
+        => Math.Clamp(elapsed.TotalSeconds + headStartSeconds - timeline.TotalSeconds, 0, headStartSeconds);
 
     /// <summary>
     /// Builds the ffmpeg arguments for the HLS segmenter: it reads the producer's continuous MPEG-TS on stdin and
@@ -536,8 +588,9 @@ public static class StreamArguments
     /// <param name="segmentPattern">The ffmpeg segment filename pattern (e.g. <c>.../seg%d.ts</c>).</param>
     /// <param name="playlistPath">The playlist (.m3u8) path Jellyfin reads.</param>
     /// <param name="listSize">How many segments to retain in the playlist window (see <see cref="SegmentsForWindow"/>).</param>
+    /// <param name="startNumber">The first segment number to write. Non-zero when a producer is restarted into a directory that already holds segments, so the new segmenter appends past them instead of overwriting files a reader is still working through.</param>
     /// <returns>The ffmpeg argument list.</returns>
-    public static List<string> BuildHlsSegmenter(string segmentPattern, string playlistPath, int listSize)
+    public static List<string> BuildHlsSegmenter(string segmentPattern, string playlistPath, int listSize, long startNumber = 0)
     {
         ArgumentNullException.ThrowIfNull(segmentPattern);
         ArgumentNullException.ThrowIfNull(playlistPath);
@@ -554,6 +607,7 @@ public static class StreamArguments
         Add(args, "-fflags", "+genpts", "-i", "pipe:0", "-c", "copy",
             "-f", "hls",
             "-hls_time", HlsSegmentSeconds.ToString(CultureInfo.InvariantCulture),
+            "-start_number", Math.Max(0, startNumber).ToString(CultureInfo.InvariantCulture),
             "-hls_list_size", listSize.ToString(CultureInfo.InvariantCulture),
             "-hls_flags", "delete_segments+append_list+omit_endlist+independent_segments+temp_file",
             "-hls_segment_type", "mpegts",
@@ -584,25 +638,27 @@ public static class StreamArguments
 
     // Burns the chosen forced subtitle into the picture. Text subtitles render through the libass-backed
     // `subtitles` filter; bitmap subtitles (PGS/VOBSUB) are composited with `overlay`.
-    private static void AppendSubtitleFilter(List<string> args, string path, (int RelativeIndex, bool IsText) forced, string scale, string? externalSubtitlePath, int? audioOrdinal)
+    private static void AppendSubtitleFilter(List<string> args, string path, (int RelativeIndex, bool IsText) forced, string scale, string? externalSubtitlePath, int? audioOrdinal, string? style = null, string? fontsDir = null)
     {
         var index = forced.RelativeIndex.ToString(CultureInfo.InvariantCulture);
+        var options = SubtitleOptions(style, fontsDir);
         string filter;
         if (!forced.IsText)
         {
-            // Bitmap subtitle (PGS/VOBSUB): composite the mapped, already-seeked subtitle stream.
+            // Bitmap subtitle (PGS/VOBSUB): composite the mapped, already-seeked subtitle stream. It is a picture,
+            // so neither the style override nor a font directory applies.
             filter = "[0:v][0:s:" + index + "]overlay," + scale + "[v]";
         }
         else if (!string.IsNullOrEmpty(externalSubtitlePath))
         {
-            // A pre-extracted subtitle file (used on a deep tune-in): a tiny file libass reads instantly,
-            // instead of scanning the whole media file to reach the seek point.
-            filter = "[0:v]subtitles=filename='" + EscapeSubtitlePath(externalSubtitlePath) + "'," + scale + "[v]";
+            // Jellyfin's own extracted subtitle file (the same one its transcodes burn): a tiny file libass reads
+            // instantly, instead of scanning the whole media file to reach the seek point.
+            filter = "[0:v]subtitles=filename='" + EscapeSubtitlePath(externalSubtitlePath) + "'" + options + "," + scale + "[v]";
         }
         else
         {
-            // Text subtitle read straight from the media file (full items playing from the start).
-            filter = "[0:v]subtitles=filename='" + EscapeSubtitlePath(path) + "':si=" + index + "," + scale + "[v]";
+            // Text subtitle read straight from the media file (the fallback while Jellyfin's extraction warms).
+            filter = "[0:v]subtitles=filename='" + EscapeSubtitlePath(path) + "':si=" + index + options + "," + scale + "[v]";
         }
 
         args.Add("-filter_complex");
@@ -618,9 +674,10 @@ public static class StreamArguments
     // subtitles filter draws onto), bitmaps as sparse sub2video frames -- and is uploaded once for a GPU
     // overlay_vaapi composite. This mirrors Jellyfin's own Intel burn-in graphs, so a Forced-only channel
     // playing foreign-language 4K keeps the full GPU speed instead of dropping to the software chain.
-    private static void AppendIntelGpuSubtitleFilter(List<string> args, string path, (int RelativeIndex, bool IsText) forced, string mainChain, string gpuTail, string? externalSubtitlePath, int? audioOrdinal, string w, string h, string startSeconds)
+    private static void AppendIntelGpuSubtitleFilter(List<string> args, string path, (int RelativeIndex, bool IsText) forced, string mainChain, string gpuTail, string? externalSubtitlePath, int? audioOrdinal, string w, string h, string startSeconds, string? style = null, string? fontsDir = null)
     {
         var index = forced.RelativeIndex.ToString(CultureInfo.InvariantCulture);
+        var options = SubtitleOptions(style, fontsDir);
         string subChain;
         if (!forced.IsText)
         {
@@ -634,7 +691,7 @@ public static class StreamArguments
             var source = !string.IsNullOrEmpty(externalSubtitlePath) ? EscapeSubtitlePath(externalSubtitlePath) : EscapeSubtitlePath(path);
             var si = string.IsNullOrEmpty(externalSubtitlePath) ? ":si=" + index : string.Empty;
             subChain = "alphasrc=s=" + w + "x" + h + ":r=10:start=" + startSeconds + "[bg];"
-                + "[bg]subtitles=filename='" + source + "'" + si + ":alpha=1[subsw];[subsw]hwupload[sub]";
+                + "[bg]subtitles=filename='" + source + "'" + si + options + ":alpha=1[subsw];[subsw]hwupload[sub]";
         }
 
         // eof_action=pass keeps the video flowing after the subtitle track runs dry (it usually ends early).
@@ -668,6 +725,27 @@ public static class StreamArguments
         }
 
         return stage + ",";
+    }
+
+    // The trailing options every libass `subtitles` invocation shares: the appearance override and the directory
+    // of fonts attached to the media. Both values are single-quoted, so the commas inside a style override are
+    // not read as the end of the filter, and both are omitted entirely when unset, leaving the subtitle rendered
+    // exactly as authored (inline bold/italic/colour tags included, since those are per-event overrides that win
+    // over any style).
+    private static string SubtitleOptions(string? style, string? fontsDir)
+    {
+        var options = string.Empty;
+        if (!string.IsNullOrEmpty(fontsDir))
+        {
+            options += ":fontsdir='" + EscapeSubtitlePath(fontsDir) + "'";
+        }
+
+        if (!string.IsNullOrEmpty(style))
+        {
+            options += ":force_style='" + style + "'";
+        }
+
+        return options;
     }
 
     // libavfilter parses the subtitles filename: backslash, single quote, and colon must be escaped so the

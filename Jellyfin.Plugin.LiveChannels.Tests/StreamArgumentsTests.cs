@@ -468,6 +468,94 @@ public class StreamArgumentsTests
     }
 
     [Fact]
+    public void Segmenter_ContinuesTheNumbering_WhenAProducerIsReplaced()
+    {
+        // A replacement producer writes into the same directory a reader is still working through, so its
+        // segments must land past the existing ones instead of overwriting them.
+        Assert.True(Pair(StreamArguments.BuildHlsSegmenter("/s/seg%d.ts", "/s/stream.m3u8", 75), "-start_number", "0"));
+        Assert.True(Pair(StreamArguments.BuildHlsSegmenter("/s/seg%d.ts", "/s/stream.m3u8", 75, 431), "-start_number", "431"));
+    }
+
+    [Fact]
+    public void ReplacementProducer_ContinuesTheTimeline_RatherThanRewindingIt()
+    {
+        // A restarted continuous producer appends to the stream the viewer is already following: rewinding the
+        // timestamps to zero is exactly the backward jump hardware decoders stall on.
+        var restarted = StreamArguments.BuildConcat("/tmp/list.txt", default, 1280, 4000, SoftwareH264, "aac", 192, null, 30, TimeSpan.FromSeconds(742.5));
+        Assert.True(Pair(restarted, "-output_ts_offset", "742.500"));
+
+        var first = StreamArguments.BuildConcat("/tmp/list.txt", default, 1280, 4000, SoftwareH264, "aac", 192);
+        Assert.DoesNotContain("-output_ts_offset", first);
+    }
+
+    [Theory]
+    [InlineData(4, 2)]     // the floor: never hand over on less than two segments
+    [InlineData(12, 3)]    // the default buffer
+    [InlineData(13, 4)]    // rounds up: a partial segment does not count as buffered
+    [InlineData(60, 15)]
+    public void SegmentsForBuffer_RoundsUpToWholeSegments(int bufferSeconds, int expected)
+        => Assert.Equal(expected, StreamArguments.SegmentsForBuffer(bufferSeconds));
+
+    [Theory]
+    [InlineData(12, 30)]   // the default buffer sits well inside the standard head start
+    [InlineData(4, 30)]
+    [InlineData(30, 48)]   // a deep buffer raises the head start so it can actually be filled
+    [InlineData(60, 78)]
+    public void HeadStart_AlwaysExceedsTheBufferItHasToFill(int bufferSeconds, double expected)
+    {
+        Assert.Equal(expected, StreamArguments.HeadStartFor(bufferSeconds));
+        Assert.True(StreamArguments.HeadStartFor(bufferSeconds) > bufferSeconds);
+    }
+
+    [Fact]
+    public void SubtitleStyleOverride_IsQuoted_SoItsCommasDoNotEndTheFilter()
+    {
+        // force_style is a comma-separated list inside a filter chain that is itself comma-separated, so the
+        // value has to be quoted or ffmpeg reads the first comma as the end of the subtitles filter.
+        var a = StreamArguments.Build(
+            "/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, (0, true), "/cache/sub.srt",
+            false, false, null, 0, null, "FontName=Arial,ScaleX=1.5,ScaleY=1.5", "/cache/attachments/1");
+
+        var filter = a[a.IndexOf("-filter_complex") + 1];
+        Assert.Contains(":force_style='FontName=Arial,ScaleX=1.5,ScaleY=1.5'", filter, StringComparison.Ordinal);
+        Assert.Contains(":fontsdir='/cache/attachments/1'", filter, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SubtitleStyleOverride_IsAbsent_WhenNothingWasCustomised()
+    {
+        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, (0, true), "/cache/sub.srt");
+
+        var filter = a[a.IndexOf("-filter_complex") + 1];
+        Assert.DoesNotContain("force_style", filter, StringComparison.Ordinal);
+        Assert.DoesNotContain("fontsdir", filter, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SubtitleStyleOverride_ReachesTheGpuOverlayChainToo()
+    {
+        var a = StreamArguments.Build(
+            "/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, (0, true), "/cache/sub.ass",
+            false, false, null, 0, null, "BorderStyle=3", null);
+
+        var filter = a[a.IndexOf("-filter_complex") + 1];
+        Assert.Contains("force_style='BorderStyle=3'", filter, StringComparison.Ordinal);
+        Assert.Contains("overlay_vaapi", filter, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BitmapSubtitles_TakeNoStyleOverride()
+    {
+        // A PGS/VOBSUB subtitle is a picture composited with overlay, so there is no text to restyle.
+        var a = StreamArguments.Build(
+            "/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, (0, false), null,
+            false, false, null, 0, null, "FontName=Arial", "/cache/attachments/1");
+
+        var filter = a[a.IndexOf("-filter_complex") + 1];
+        Assert.DoesNotContain("force_style", filter, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Slate_FallsBackToColourBars_WithoutAFont()
     {
         var a = StreamArguments.BuildSlate(1280, 4000, 10, TimeSpan.Zero, null);
