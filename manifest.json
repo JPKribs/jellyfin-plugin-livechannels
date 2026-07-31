@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.13.2",
+        "changelog": "## Developer\r\n- A channel whose filters legitimately match nothing now reuses its cached empty schedule instead of re running the full library resolve on every tune in\r\n- Guide refreshes no longer pin every enabled channel's decoded schedule in memory forever, only channels actually being watched keep a hot copy\r\n- Long running time of day channels now resume their schedule chain where the last window ended instead of re simulating it from the anchor at every refill, so the walk no longer grows with session length\r\n- Code scanning cleanup across the encoder resolver, stress test, recording copy, and tune in deadline, with no behaviour changes",
+        "targetAbi": "10.11.10.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.13.2/jellyfin-plugin-livechannels-10.11.13.2.zip",
+        "checksum": "38eb488a918387f48466996f031de272",
+        "timestamp": "2026-07-31T16:30:18Z"
+      },
+      {
         "version": "10.11.13.1",
         "changelog": "## Developer\r\n- A custom stream file location is validated at save and marked on disk, and cleanup only ever deletes the plugin's own session folders, so pointing it at a folder with existing content can no longer delete that content\r\n- Settings saved through the API are validated like the dashboard enforces them, so an out of range resolution, bitrate, session limit, or channel number is rejected with a reason instead of silently breaking streams later\r\n- The Popular Channel's settings are validated like every other channel's\r\n- The channel editor now edits a copy, so only Save channel persists its changes, switching channels asks before discarding unsaved edits, and a failed save shows the server's reason\r\n- An item with a broken production year can no longer take down a chronological channel's guide build\r\n- Generated logos and the icon font moved from the shared system temp folder into Jellyfin's cache\r\n- Tuning in to a channel cancels a running stress test, so a real viewer always wins the encoder\r\n- The plugin now correctly declares Jellyfin 10.11.10 as its minimum server version",
         "targetAbi": "10.11.10.0",
