@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.13.1",
+        "changelog": "## Developer\r\n- A custom stream file location is validated at save and marked on disk, and cleanup only ever deletes the plugin's own session folders, so pointing it at a folder with existing content can no longer delete that content\r\n- Settings saved through the API are validated like the dashboard enforces them, so an out of range resolution, bitrate, session limit, or channel number is rejected with a reason instead of silently breaking streams later\r\n- The Popular Channel's settings are validated like every other channel's\r\n- The channel editor now edits a copy, so only Save channel persists its changes, switching channels asks before discarding unsaved edits, and a failed save shows the server's reason\r\n- An item with a broken production year can no longer take down a chronological channel's guide build\r\n- Generated logos and the icon font moved from the shared system temp folder into Jellyfin's cache\r\n- Tuning in to a channel cancels a running stress test, so a real viewer always wins the encoder\r\n- The plugin now correctly declares Jellyfin 10.11.10 as its minimum server version",
+        "targetAbi": "10.11.10.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.13.1/jellyfin-plugin-livechannels-10.11.13.1.zip",
+        "checksum": "ce9e00849eae3f7c83b232d0cb8f2047",
+        "timestamp": "2026-07-31T05:44:16Z"
+      },
+      {
         "version": "10.11.13.0",
         "changelog": "## Developer\r\n- Guide programs now carry a poster, a landscape thumb, a backdrop, and a logo instead of one image, with episodes taking their poster from the series, so every client renders the shape its layout wants\r\n- New Start up buffer setting, defaulting to 12 seconds, sets how much of a channel is encoded before playback starts and how far ahead of you it stays. Raise it if the first seconds of a tune in stutter\r\n- Burned in subtitles now come from the file Jellyfin extracts, so bold, italic, and colour markup survives, external subtitle files burn correctly, and attached fonts are used\r\n- {'New subtitle appearance settings': 'font, size, text and outline colour, outline or solid box background, and bold. Untouched, subtitles render exactly as authored'}\r\n- Streams Jellyfin reports as playing, paused included, are never closed by the stream cap, the time limit, or the idle timer. Only Kill on the Sessions tab stops a stream someone is watching\r\n- An encoder that dies mid watch is replaced in place, continuing where it stopped, instead of ending the stream",
         "targetAbi": "10.11.9.0",
