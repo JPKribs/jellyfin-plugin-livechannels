@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using Jellyfin.Plugin.LiveChannels.Configuration;
 using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Services;
@@ -8,7 +9,8 @@ namespace Jellyfin.Plugin.LiveChannels.Tests;
 
 /// <summary>
 /// Tests for <see cref="ConfigurationValidator"/> — the server-side guard against bad config from any API
-/// client (duplicate channel numbers, malformed or oversized logos).
+/// client (duplicate channel numbers, malformed or oversized logos, out-of-range numerics, and a stream
+/// directory that would point the destructive sweeps at existing data).
 /// </summary>
 public class ConfigurationValidatorTests
 {
@@ -164,5 +166,136 @@ public class ConfigurationValidatorTests
         Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { SubtitleFontScalePercent = 10 }));
         Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { SubtitleFontScalePercent = 1000 }));
         ConfigurationValidator.Validate(new PluginConfiguration { SubtitleFontScalePercent = 0 }); // saved before styling existed
+    }
+
+    [Fact]
+    public void TranscodeWidth_OutOfRange_Throws()
+    {
+        // A zero width builds an ffmpeg scale filter that fails every stream at encode time; it must be
+        // rejected at save, where there is still a reason attached.
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { TranscodeWidth = 0 }));
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { TranscodeWidth = -1280 }));
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { TranscodeWidth = 10000 }));
+        ConfigurationValidator.Validate(new PluginConfiguration { TranscodeWidth = 3840 });
+    }
+
+    [Fact]
+    public void VideoBitrate_OutOfRange_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { TranscodeVideoBitrateKbps = 0 }));
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { TranscodeVideoBitrateKbps = 500000 }));
+    }
+
+    [Fact]
+    public void NegativeSessionLimits_Throw()
+    {
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { MaxConcurrentSessions = -1 }));
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { SessionTimeoutMinutes = -5 }));
+        ConfigurationValidator.Validate(new PluginConfiguration { MaxConcurrentSessions = 0, SessionTimeoutMinutes = 0 }); // both mean off
+    }
+
+    [Fact]
+    public void ChannelNumericLimits_OutOfRange_Throw()
+    {
+        var transition = Ch(1);
+        transition.TransitionWindowMinutes = -1;
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(WithChannels(transition)));
+
+        var block = Ch(1);
+        block.EpisodesPerBlock = 0;
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(WithChannels(block)));
+
+        var community = Ch(1);
+        community.MinCommunityRating = 11;
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(WithChannels(community)));
+
+        var critic = Ch(1);
+        critic.MinCriticRating = -1;
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(WithChannels(critic)));
+    }
+
+    [Fact]
+    public void PopularChannel_IsValidatedToo()
+    {
+        var badBlock = new PluginConfiguration();
+        badBlock.PopularChannel.RatingBlocks.Add(new RatingBlock { Period = RatingBlockPeriod.Custom, StartMinutes = 600, EndMinutes = 600 });
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(badBlock));
+
+        var badNumeric = new PluginConfiguration();
+        badNumeric.PopularChannel.EpisodesPerBlock = 0;
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(badNumeric));
+
+        // The defaults (and its fixed number 0) stay valid: the enabled-channel number rule must not apply to it.
+        ConfigurationValidator.Validate(new PluginConfiguration());
+    }
+
+    [Fact]
+    public void StreamDirectory_RelativePath_Throws()
+        => Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { StreamDirectory = "streams/live" }));
+
+    [Fact]
+    public void StreamDirectory_MissingEmptyOrMarked_IsAccepted()
+    {
+        // Missing: created (and marked) on first use.
+        var missing = Path.Combine(Path.GetTempPath(), "lc-test-" + Guid.NewGuid().ToString("N"));
+        ConfigurationValidator.Validate(new PluginConfiguration { StreamDirectory = missing });
+
+        // Empty: nothing to protect.
+        var empty = Directory.CreateTempSubdirectory("lc-test-").FullName;
+        try
+        {
+            ConfigurationValidator.Validate(new PluginConfiguration { StreamDirectory = empty });
+        }
+        finally
+        {
+            Directory.Delete(empty, recursive: true);
+        }
+
+        // Marked: already plugin-owned, whatever else it holds.
+        var marked = Directory.CreateTempSubdirectory("lc-test-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(marked, ChannelService.StreamRootMarkerName), "marker");
+            File.WriteAllText(Path.Combine(marked, "leftover.txt"), "x");
+            ConfigurationValidator.Validate(new PluginConfiguration { StreamDirectory = marked });
+        }
+        finally
+        {
+            Directory.Delete(marked, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void StreamDirectory_ExistingForeignContent_Throws()
+    {
+        var dir = Directory.CreateTempSubdirectory("lc-test-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "family-photos.db"), "precious");
+            Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(new PluginConfiguration { StreamDirectory = dir }));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void StreamDirectory_PreMarkerPluginRoot_IsAccepted()
+    {
+        // A stream root written by a version before the marker existed: session dirs, the schedule cache, and
+        // the legacy single-file schedule are all recognisably ours.
+        var dir = Directory.CreateTempSubdirectory("lc-test-").FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, ChannelService.ScheduleDirName));
+            Directory.CreateDirectory(Path.Combine(dir, "lc_" + new string('a', 32)));
+            File.WriteAllText(Path.Combine(dir, "schedule.json"), "[]");
+            ConfigurationValidator.Validate(new PluginConfiguration { StreamDirectory = dir });
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
     }
 }

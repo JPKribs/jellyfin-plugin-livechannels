@@ -56,6 +56,19 @@ public class LoopBuilderTests
         => Assert.Empty(ProgramLoopBuilder.Build(Array.Empty<ProgramEntry>(), Opts()));
 
     [Fact]
+    public void Chronological_InvalidProductionYear_DoesNotThrow_AndSortsLast()
+    {
+        // A scraper can write ProductionYear = 0, which DateTime cannot represent; one such item must sort as
+        // undated (last) rather than throw and take the whole channel build down.
+        var dated = new ProgramEntry(Guid.NewGuid(), "Dated", null, Hour, "/d.mkv") { IsMovie = true, Year = 1994 };
+        var broken = new ProgramEntry(Guid.NewGuid(), "Broken", null, Hour, "/b.mkv") { IsMovie = true, Year = 0 };
+
+        var loop = ProgramLoopBuilder.Build(new[] { broken, dated }, Opts(mode: LoopMode.Chronological));
+
+        Assert.Equal(new[] { "Dated", "Broken" }, loop.Select(e => e.Title).ToArray());
+    }
+
+    [Fact]
     public void Episodes_PlayInAirOrder()
     {
         var s = Guid.NewGuid();

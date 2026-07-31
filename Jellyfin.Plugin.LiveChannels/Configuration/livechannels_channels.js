@@ -21,6 +21,12 @@ export default function (view) {
     var config = null;
     var channels = [];
     var currentIndex = -1;
+    // The channel being edited: a deep COPY of channels[currentIndex]. Every editor control (fields, source
+    // cards, rating blocks) works on this copy, and only "Save channel" writes it back, so saving channel B
+    // can never persist half-made edits to channel A, and switching away discards consistently (with a
+    // confirm when something would be lost).
+    var editing = null;
+    var editorBaseline = '';   // the editor's just-loaded state, for the unsaved-changes check
     var currentEnabled = true;
     var logoData = '';
     var logoContentType = '';
@@ -114,6 +120,9 @@ export default function (view) {
             if (currentIndex < 0 || currentIndex >= channels.length) currentIndex = 0;
             select.value = String(currentIndex);
             loadEditor();
+        } else {
+            editing = null;
+            editorBaseline = '';
         }
     }
 
@@ -495,7 +504,7 @@ export default function (view) {
     function renderSources() {
         var host = el('librarySources');
         host.innerHTML = '';
-        var ch = channels[currentIndex];
+        var ch = editing;
         if (!ch) return;
         if (!ch.Sources.length) {
             host.innerHTML = '<div class="jpk-empty-section">No libraries yet. Add one below.</div>';
@@ -569,7 +578,7 @@ export default function (view) {
         libSelect.value = source.LibraryId || '';
 
         card.querySelector('.lc-remove').addEventListener('click', function () {
-            channels[currentIndex].Sources.splice(index, 1);
+            editing.Sources.splice(index, 1);
             renderSources();
         });
 
@@ -919,7 +928,7 @@ export default function (view) {
     function renderRatingBlocks() {
         var host = el('ratingBlocks');
         host.innerHTML = '';
-        var ch = channels[currentIndex];
+        var ch = editing;
         if (!ch) return;
         ch.RatingBlocks = ch.RatingBlocks || [];
         if (!ch.RatingBlocks.length) {
@@ -984,7 +993,7 @@ export default function (view) {
         end.addEventListener('change', function () { block.EndMinutes = timeToMinutes(end.value); });
 
         card.querySelector('.lc-remove').addEventListener('click', function () {
-            channels[currentIndex].RatingBlocks.splice(index, 1);
+            editing.RatingBlocks.splice(index, 1);
             renderRatingBlocks();
         });
 
@@ -1000,9 +1009,35 @@ export default function (view) {
 
     // MARK: Editor load / save
 
+    // Reads the editor back into a copy of the working channel and serialises it, so "what would be saved
+    // right now" can be compared against what was loaded (the unsaved-changes check).
+    function editorSnapshot() {
+        if (!editing) return '';
+        var probe = JSON.parse(JSON.stringify(editing));
+        readEditorInto(probe);
+        return JSON.stringify(probe);
+    }
+
+    function editorDirty() {
+        return editing !== null && editorSnapshot() !== editorBaseline;
+    }
+
+    // Confirms discarding unsaved editor changes before an action that would lose them. Returns true to proceed.
+    function confirmDiscard() {
+        if (!editorDirty()) return true;
+        var name = (el('channelName').value || '').trim() || 'this channel';
+        return window.confirm('Discard unsaved changes to "' + name + '"?');
+    }
+
     function loadEditor() {
-        var ch = channels[currentIndex];
-        if (!ch) return;
+        var stored = channels[currentIndex];
+        if (!stored) { editing = null; editorBaseline = ''; return; }
+
+        // Deep-copy the stored channel: the cards mutate their model live, and that must never leak into the
+        // saved working set until "Save channel".
+        editing = JSON.parse(JSON.stringify(stored));
+        editing.Sources = editing.Sources || [];
+        var ch = editing;
         ensureFilterPickers();
         el('channelName').value = ch.Name || '';
         el('channelNumber').value = ch.Number || '';
@@ -1041,6 +1076,10 @@ export default function (view) {
 
         currentEnabled = ch.Enabled !== false;
         setEnableVisual(currentEnabled);
+
+        // Everything above (including the pickers) is now in its just-loaded state; snapshot it as the
+        // baseline the unsaved-changes check compares against.
+        editorBaseline = editorSnapshot();
     }
 
     function readEditorInto(ch) {
@@ -1092,12 +1131,15 @@ export default function (view) {
     // MARK: Persistence
 
     function saveChannel() {
-        var ch = channels[currentIndex];
-        if (!ch) return;
+        if (currentIndex < 0 || !editing) return;
+        var ch = editing;
         readEditorInto(ch);
         if (!ch.Name) { Shared.setStatus('channelStatus', 'A name is required.', true); return; }
         if (!ch.Sources.length) { Shared.setStatus('channelStatus', 'Add at least one library source.', true); return; }
         if (ch.Sources.some(function (s) { return s.Kind === 'Collection' ? !s.CollectionId : !s.LibraryId; })) { Shared.setStatus('channelStatus', 'Pick a library or collection for each source.', true); return; }
+
+        // The copy is complete and valid: write it back over the stored channel and persist.
+        channels[currentIndex] = ch;
         persist('channelStatus', 'Saved.', 'Save failed.');
     }
 
@@ -1132,8 +1174,12 @@ export default function (view) {
             renderSelect();
             refreshLiveTv();
             Shared.setStatus(statusId, okMessage + ' Refreshing Live TV…', false);
-        }).catch(function () {
-            Shared.setStatus(statusId, errMessage, true);
+        }).catch(function (err) {
+            // Surface the server's validation message (like the settings page does) instead of a bare failure.
+            var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
+            read.then(function (t) {
+                Shared.setStatus(statusId, t ? t.replace(/^"|"$/g, '') : errMessage, true);
+            });
         });
     }
 
@@ -1179,6 +1225,7 @@ export default function (view) {
     }
 
     function importChannelsFromText(text) {
+        if (!confirmDiscard()) return;
         var parsed;
         try { parsed = JSON.parse(text); }
         catch (e) { Shared.setStatus('ioStatus', 'Import failed: the file is not valid JSON.', true); return; }
@@ -1237,6 +1284,7 @@ export default function (view) {
     }
 
     function addChannel() {
+        if (!confirmDiscard()) return;
         channels.push({
             Id: newId(), Name: '', Number: nextNumber(), LogoData: '', LogoContentType: '',
             LogoStyle: 'Number', LogoSymbol: '', LogoShowName: true,
@@ -1260,9 +1308,8 @@ export default function (view) {
     }
 
     function addLibrary() {
-        var ch = channels[currentIndex];
-        if (!ch) return;
-        ch.Sources.push(newSource(''));
+        if (!editing) return;
+        editing.Sources.push(newSource(''));
         renderSources();
     }
 
@@ -1295,7 +1342,13 @@ export default function (view) {
     // MARK: Wiring
 
     function bind() {
-        el('selectChannel').addEventListener('change', function () { currentIndex = parseInt(this.value, 10); loadEditor(); });
+        el('selectChannel').addEventListener('change', function () {
+            var next = parseInt(this.value, 10);
+            if (next === currentIndex) return;
+            if (!confirmDiscard()) { this.value = String(currentIndex); return; }
+            currentIndex = next;
+            loadEditor();
+        });
         el('btnUploadLogo').addEventListener('click', function () { el('logoFile').click(); });
         el('logoFile').addEventListener('change', onLogoFile);
         el('btnClearLogo').addEventListener('click', clearLogo);
@@ -1308,10 +1361,9 @@ export default function (view) {
         el('favorKind').addEventListener('change', updateFavorControls);
         el('loopMode').addEventListener('change', updateFavorControls);
         el('addRatingBlock').addEventListener('click', function () {
-            var ch = channels[currentIndex];
-            if (!ch) return;
-            ch.RatingBlocks = ch.RatingBlocks || [];
-            ch.RatingBlocks.push(newRatingBlock());
+            if (!editing) return;
+            editing.RatingBlocks = editing.RatingBlocks || [];
+            editing.RatingBlocks.push(newRatingBlock());
             renderRatingBlocks();
         });
         el('btnNewChannel').addEventListener('click', addChannel);

@@ -159,6 +159,35 @@ public sealed class StressTestService : IDisposable
     }
 
     /// <summary>
+    /// Cancels the test when one is running because a real viewer needs the encoder. The start path already
+    /// refuses to run while channels are streaming; this covers the reverse order, where a viewer tunes in
+    /// mid-test, which would both stutter their stream and skew the measurement.
+    /// </summary>
+    /// <returns>Whether a running test was cancelled.</returns>
+    public bool CancelForViewer()
+    {
+        lock (_lock)
+        {
+            if (!_running)
+            {
+                return false;
+            }
+
+            _error = "Cancelled: a viewer tuned in to a channel, so the encoder is no longer idle.";
+            try
+            {
+                _cts?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Already finished.
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
     /// The recommendation from a set of completed rounds: the highest stream count whose round fully passed
     /// (rounds run 1, 2, 3, … and stop at the first failure). Zero when even one stream could not keep up.
     /// </summary>

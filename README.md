@@ -53,7 +53,7 @@ Every filter is optional and they combine. Leave a filter empty or zero to ignor
 
 ### Output
 
-Resolution, codecs, and bitrate are set on the **Settings** tab and apply to every channel. Encoding and decoding follow Jellyfin's own hardware-acceleration settings (with a switch to force software), and HDR is tone-mapped to SDR using Jellyfin's VPP brightness gain where available. On Linux with Intel hardware (QSV or VA-API), the whole pipeline (decode, deinterlacing, scaling, tone mapping, subtitle burn-in, and encode) runs on the GPU, bound to the render node from Jellyfin's transcoding settings. Stream pacing is automatic: the encoder runs at realtime, builds a head start at tune-in, and bursts to recover time lost at item transitions, so there is nothing to tune.
+Resolution, codecs, and bitrate are set on the **Settings** tab and apply to every channel. Encoding follows Jellyfin's own hardware-acceleration settings (with a switch to force software). Hardware decoding is used with VideoToolbox, QSV, and VA-API; NVENC and AMF accelerate encoding only, so their sources decode in software. HDR is tone-mapped to SDR using Jellyfin's VPP brightness gain where available. On Linux with Intel hardware (QSV or VA-API), the whole pipeline (decode, deinterlacing, scaling, tone mapping, subtitle burn-in, and encode) runs on the GPU, bound to the render node from Jellyfin's transcoding settings. Stream pacing is automatic: the encoder runs at realtime, builds a head start at tune-in, and bursts to recover time lost at item transitions, so there is nothing to tune.
 
 A **Playback** section sets the **start-up buffer**: how much of a channel is encoded before playback begins, and how far ahead of you the encoder stays afterwards. The default of 12 seconds suits most servers; raise it if the first seconds of a tune-in stutter, at the cost of a slightly longer wait for the picture. **Subtitle appearance** styles burned-in subtitles (font, relative size, text and outline colour, an outline or solid box background, and bold), and leaving it untouched renders each subtitle exactly as its author wrote it.
 
@@ -80,7 +80,7 @@ JJ JJ F B
 * `F` is the plugin feature release.
 * `B` is the plugin bug or patch release within that feature.
 
-Targets **Jellyfin 10.11.x** (`net9.0`, ABI `10.11.9.0`). Requires ffmpeg, which Jellyfin already bundles and configures.
+Targets **Jellyfin 10.11.x** (`net9.0`, ABI `10.11.10.0`). Requires ffmpeg, which Jellyfin already bundles and configures.
 
 ## Installation
 

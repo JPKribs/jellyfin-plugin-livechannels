@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using System.Linq;
 using Jellyfin.Plugin.LiveChannels.Configuration;
 using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Utilities;
@@ -27,11 +29,21 @@ public static class ConfigurationValidator
 
         ValidatePlayback(config);
 
+        // The Popular channel takes the same per-channel checks as every configured channel (its number and
+        // sources are fixed by the plugin, so only its editable surface is validated).
+        if (config.PopularChannel is { } popular)
+        {
+            ValidateLogo(popular);
+            ValidateRatingBlocks(popular);
+            ValidateChannelLimits(popular);
+        }
+
         var numbers = new HashSet<int>();
         foreach (var channel in config.Channels)
         {
             ValidateLogo(channel);
             ValidateRatingBlocks(channel);
+            ValidateChannelLimits(channel);
 
             // Serving rules apply only to enabled channels; a disabled channel can be an incomplete draft.
             if (!channel.Enabled)
@@ -62,6 +74,31 @@ public static class ConfigurationValidator
     // than a save that says why.
     private static void ValidatePlayback(PluginConfiguration config)
     {
+        // The output shape. The dashboard only offers sane values, but an API client can send anything, and a
+        // zero or negative width reaches the ffmpeg scale filter and fails every subsequent stream at encode
+        // time with nothing in the save to explain why.
+        if (config.TranscodeWidth is < 320 or > 3840)
+        {
+            throw new ArgumentException("Resolution width must be between 320 and 3840 pixels.");
+        }
+
+        if (config.TranscodeVideoBitrateKbps is < 100 or > 200000)
+        {
+            throw new ArgumentException("Video bitrate must be between 100 and 200000 kbps.");
+        }
+
+        if (config.MaxConcurrentSessions < 0)
+        {
+            throw new ArgumentException("Maximum concurrent streams cannot be negative. Use 0 for no limit.");
+        }
+
+        if (config.SessionTimeoutMinutes < 0)
+        {
+            throw new ArgumentException("Stream time limit cannot be negative. Use 0 to turn it off.");
+        }
+
+        ValidateStreamDirectory(config.StreamDirectory);
+
         if (config.StartupBufferSeconds != 0
             && config.StartupBufferSeconds is < PluginConfiguration.MinStartupBufferSeconds or > PluginConfiguration.MaxStartupBufferSeconds)
         {
@@ -95,6 +132,88 @@ public static class ConfigurationValidator
         if (!string.IsNullOrWhiteSpace(value) && !SubtitleStyle.TryConvertColor(value, out _))
         {
             throw new ArgumentException(label + " must be a hex colour like #FFFFFF.");
+        }
+    }
+
+    // The stream directory is destructively managed: the plugin marks it as its own and sweeps its session
+    // directories out of it. A configured path must therefore never point into existing data, so only a new,
+    // empty, or already-plugin-owned directory is accepted, and the refusal happens here at save time, where
+    // the admin can still pick a different folder.
+    private static void ValidateStreamDirectory(string? configured)
+    {
+        if (string.IsNullOrWhiteSpace(configured))
+        {
+            return;
+        }
+
+        var path = configured.Trim();
+        if (!Path.IsPathRooted(path))
+        {
+            throw new ArgumentException("Stream file location must be an absolute path.");
+        }
+
+        bool foreign;
+        try
+        {
+            var full = Path.GetFullPath(path);
+            if (!Directory.Exists(full) || File.Exists(Path.Combine(full, ChannelService.StreamRootMarkerName)))
+            {
+                // A missing directory is created (and marked) on first use; a marked one is already ours.
+                return;
+            }
+
+            foreign = Directory.EnumerateFileSystemEntries(full).Any(entry => !IsPluginStreamEntry(entry));
+        }
+        catch (Exception)
+        {
+            // Unreadable or malformed paths are left to stream time, which reports its own clear failure.
+            return;
+        }
+
+        if (foreign)
+        {
+            throw new ArgumentException(
+                "Stream file location must be a new or empty directory. The plugin cleans up old stream files inside its folder, so it refuses a directory that already contains other content: " + path);
+        }
+    }
+
+    // Whether an entry inside a candidate stream root is plugin-shaped, which identifies a stream root written
+    // by a version before the marker file existed: session directories, the schedule cache, or the legacy
+    // single-file schedule.
+    private static bool IsPluginStreamEntry(string entry)
+    {
+        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(entry));
+        if (Directory.Exists(entry))
+        {
+            return string.Equals(name, ChannelService.ScheduleDirName, StringComparison.Ordinal)
+                || LiveChannelsTvService.IsSessionDir(entry);
+        }
+
+        return string.Equals(name, "schedule.json", StringComparison.Ordinal);
+    }
+
+    // Per-channel numeric limits the dashboard clamps in the browser; enforced here for every other client so
+    // an out-of-range value is rejected with a reason instead of silently misbehaving at schedule time.
+    private static void ValidateChannelLimits(Channel channel)
+    {
+        if (channel.TransitionWindowMinutes < 0)
+        {
+            throw new ArgumentException("Transition window cannot be negative: " + Describe(channel));
+        }
+
+        if (channel.EpisodesPerBlock < 1)
+        {
+            throw new ArgumentException("Episodes per block must be at least 1: " + Describe(channel));
+        }
+
+        if (channel.MinCommunityRating is < 0 or > 10)
+        {
+            throw new ArgumentException("Minimum community rating must be between 0 and 10: " + Describe(channel));
+        }
+
+        if (channel.MinCriticRating is < 0 or > 100)
+        {
+            throw new ArgumentException("Minimum critic rating must be between 0 and 100: " + Describe(channel));
         }
     }
 

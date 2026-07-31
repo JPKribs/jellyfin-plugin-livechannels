@@ -27,6 +27,13 @@ public partial class ChannelService
     /// <summary>The name of the directory, under the stream root, that holds the per-channel schedule files.</summary>
     public const string ScheduleDirName = "schedule";
 
+    /// <summary>
+    /// The marker file the plugin drops in its stream root. It is how the cleanup sweeps and the configuration
+    /// validator tell a directory the plugin owns from one that existed before: a configured stream directory
+    /// that already has other content and no marker is refused rather than swept.
+    /// </summary>
+    public const string StreamRootMarkerName = ".livechannels";
+
     private readonly string _scheduleDir;
 
     // Observed item durations (seconds by item id), recorded when a full item plays through and its real

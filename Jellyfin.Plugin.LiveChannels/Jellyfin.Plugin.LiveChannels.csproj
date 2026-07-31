@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <AnalysisMode>AllEnabledByDefault</AnalysisMode>
     <CodeAnalysisRuleSet>../jellyfin.ruleset</CodeAnalysisRuleSet>
-    <NoWarn>NU1605;CA1002;CA2227;CA1305</NoWarn>
+    <NoWarn>NU1605;CA1002;CA2227</NoWarn>
     <!-- For the LibraryImport source generator (the hardlink syscalls in RecordingService); no hand-written unsafe code. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>

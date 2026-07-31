@@ -107,4 +107,20 @@ public class SessionCapTests
 
         Assert.Empty(LiveChannelsTvService.SelectCapVictims(sessions, keep: "new", cap: 1));
     }
+
+    [Fact]
+    public void IsSessionDir_MatchesOnlyPluginSessionDirectories()
+    {
+        // The orphan and cleanup sweeps delete ONLY directories this matcher accepts, so it must match the
+        // exact NewLiveId shape (lc_ + 32 lowercase hex) and nothing a user could plausibly have in a
+        // configured stream root.
+        Assert.True(LiveChannelsTvService.IsSessionDir("/streams/lc_0123456789abcdef0123456789abcdef"));
+
+        Assert.False(LiveChannelsTvService.IsSessionDir("/streams/schedule"));
+        Assert.False(LiveChannelsTvService.IsSessionDir("/streams/Movies"));
+        Assert.False(LiveChannelsTvService.IsSessionDir("/streams/lc_short"));
+        Assert.False(LiveChannelsTvService.IsSessionDir("/streams/lc_0123456789ABCDEF0123456789ABCDEF")); // uppercase is not ours
+        Assert.False(LiveChannelsTvService.IsSessionDir("/streams/lc_0123456789abcdef0123456789abcdeff")); // 33 hex digits
+        Assert.False(LiveChannelsTvService.IsSessionDir("/streams/lc-0123456789abcdef0123456789abcdef")); // wrong separator
+    }
 }

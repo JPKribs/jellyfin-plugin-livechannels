@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Utilities;
+using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Logging;
 
@@ -35,17 +36,24 @@ public class DefaultLogoService
 
     private readonly IMediaEncoder _encoder;
     private readonly ILogger<DefaultLogoService> _logger;
+    private readonly string _assetsDir;
     private readonly ConcurrentDictionary<string, byte[]> _cache = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DefaultLogoService"/> class.
     /// </summary>
     /// <param name="encoder">The media encoder, used to locate ffmpeg.</param>
+    /// <param name="appPaths">The application paths; the extracted icon font lives under Jellyfin's cache.</param>
     /// <param name="logger">The logger.</param>
-    public DefaultLogoService(IMediaEncoder encoder, ILogger<DefaultLogoService> logger)
+    public DefaultLogoService(IMediaEncoder encoder, IApplicationPaths appPaths, ILogger<DefaultLogoService> logger)
     {
+        ArgumentNullException.ThrowIfNull(appPaths);
         _encoder = encoder;
         _logger = logger;
+
+        // The plugin's own cache directory, not the shared system temp: a fixed path in a world-writable temp
+        // dir can be pre-created or swapped by another local user before ffmpeg parses it as a font.
+        _assetsDir = Path.Combine(appPaths.CachePath, "livechannels-assets");
     }
 
     /// <summary>
@@ -167,6 +175,11 @@ public class DefaultLogoService
             return null;
         }
 
+        // Drain stderr concurrently with stdout from the moment the process starts: reading it only after
+        // stdout ends deadlocks if ffmpeg ever fills the stderr pipe while the image is still being written
+        // (it blocks on the stderr write, so stdout never reaches end of file).
+        var stderrTask = ReadQuietlyAsync(process.StandardError);
+
         using var buffer = new MemoryStream();
         try
         {
@@ -198,23 +211,32 @@ public class DefaultLogoService
 
         if (buffer.Length == 0)
         {
-            // The process has already exited/been killed; read its error without the request token so a late
-            // cancellation can't throw out of here (we are returning null regardless).
-            var stderr = string.Empty;
-            try
-            {
-                stderr = await process.StandardError.ReadToEndAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Could not read default-logo ffmpeg error output");
-            }
-
+            // The process has exited or been killed, which closed its stderr pipe, so the drain completes.
+            var stderr = await stderrTask.ConfigureAwait(false);
             _logger.LogWarning("ffmpeg produced no default logo for channel {Number}: {Error}", number, stderr.Trim());
             return null;
         }
 
+        // The drain always finishes once the process is gone; awaiting it keeps its failure (if any) observed.
+        await stderrTask.ConfigureAwait(false);
         return buffer.ToArray();
+    }
+
+    // Reads a pipe to end, quietly: the content is diagnostics, so a broken pipe on kill is not an error.
+    private static async Task<string> ReadQuietlyAsync(StreamReader reader)
+    {
+        try
+        {
+            return await reader.ReadToEndAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            return string.Empty;
+        }
+        catch (ObjectDisposedException)
+        {
+            return string.Empty;
+        }
     }
 
     // The font and text drawn in the centre: the Material Icons glyph for a known symbol name, otherwise the
@@ -224,7 +246,7 @@ public class DefaultLogoService
         if (style == LogoStyle.Symbol && !string.IsNullOrWhiteSpace(symbol)
             && GetIconCodepoints(_logger).TryGetValue(symbol.Trim(), out var codepoint))
         {
-            var iconFont = GetMaterialIconFontPath(_logger);
+            var iconFont = GetMaterialIconFontPath(_logger, _assetsDir);
             if (iconFont is not null)
             {
                 return (iconFont, char.ConvertFromUtf32(codepoint), true);
@@ -234,8 +256,10 @@ public class DefaultLogoService
         return (textFont, number.ToString(CultureInfo.InvariantCulture), false);
     }
 
-    // Extracts the embedded Material Icons font to a temp file (once) so ffmpeg's drawtext can read it by path.
-    private static string? GetMaterialIconFontPath(ILogger logger)
+    // Extracts the embedded Material Icons font (once) into the plugin's own cache directory so ffmpeg's
+    // drawtext can read it by path. Always rewritten rather than trusted when present, so a stale or
+    // tampered file from an earlier run is never handed to the font parser.
+    private static string? GetMaterialIconFontPath(ILogger logger, string assetsDir)
     {
         lock (IconLock)
         {
@@ -259,7 +283,8 @@ public class DefaultLogoService
                     return null;
                 }
 
-                var path = Path.Combine(Path.GetTempPath(), "livechannels-MaterialSymbolsOutlined.ttf");
+                Directory.CreateDirectory(assetsDir);
+                var path = Path.Combine(assetsDir, "MaterialSymbolsOutlined.ttf");
                 using (var file = new FileStream(path, FileMode.Create, FileAccess.Write))
                 {
                     stream.CopyTo(file);

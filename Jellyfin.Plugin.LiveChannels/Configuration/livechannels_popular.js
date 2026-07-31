@@ -193,8 +193,12 @@ export default function (view) {
         }).then(function () {
             refreshGuide();
             Shared.setStatus('popularStatus', 'Saved. Refreshing Live TV…', false);
-        }).catch(function () {
-            Shared.setStatus('popularStatus', 'Save failed.', true);
+        }).catch(function (err) {
+            // Surface the server's validation message (like the settings page does) instead of a bare failure.
+            var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
+            read.then(function (t) {
+                Shared.setStatus('popularStatus', t ? t.replace(/^"|"$/g, '') : 'Save failed.', true);
+            });
         });
     }
 

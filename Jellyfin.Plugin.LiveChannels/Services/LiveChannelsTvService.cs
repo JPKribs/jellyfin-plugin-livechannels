@@ -71,12 +71,13 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     private readonly ActivityLogger _activity;
     private readonly TimerService _timers;
     private readonly RecordingService _recordings;
+    private readonly StressTestService _stress;
     private readonly ISessionManager _sessionManager;
     private readonly ILogger<LiveChannelsTvService> _logger;
 
     private readonly IServerApplicationHost _appHost;
     private readonly string _streamRoot;
-    private readonly string _logoRoot = Path.Combine(Path.GetTempPath(), "livechannels-logos");
+    private readonly string _logoRoot;
 
     // One encoder per channel. A channel currently being encoded has exactly one session, tracked here by channel
     // id; every viewer of that channel is a CONSUMER of that single session (see LiveSession). Jellyfin opens a
@@ -108,11 +109,12 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <param name="activity">The activity logger, used to record channel start/stop in Jellyfin's activity log.</param>
     /// <param name="timers">The timer store, backing the DVR timer surface.</param>
     /// <param name="recordings">The recording service, which fulfils timers by materializing their recordings.</param>
+    /// <param name="stress">The stress test, cancelled when a real viewer tunes in.</param>
     /// <param name="sessionManager">The session manager, used by the watchdog to see which live streams clients are actually playing.</param>
     /// <param name="appHost">The application host, used to build the internal live stream endpoint URL each opened source points at.</param>
     /// <param name="appPaths">The application paths, used to default the stream directory under Jellyfin's cache.</param>
     /// <param name="logger">The logger.</param>
-    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, TimerService timers, RecordingService recordings, ISessionManager sessionManager, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
+    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, TimerService timers, RecordingService recordings, StressTestService stress, ISessionManager sessionManager, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
     {
         _channels = channels;
         _streams = streams;
@@ -120,8 +122,14 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         _activity = activity;
         _timers = timers;
         _recordings = recordings;
+        _stress = stress;
         _sessionManager = sessionManager;
         _logger = logger;
+
+        // Logos live in the plugin's own cache directory, not the shared system temp: a fixed path in a
+        // world-writable temp dir can be pre-created or swapped by another local user, and temp cleaners
+        // delete it out from under the guide.
+        _logoRoot = Path.Combine(appPaths.CachePath, "livechannels-assets", "logos");
 
         // Opened streams are served as a direct stream provider: each one points at Jellyfin's own
         // /LiveTv/LiveStreamFiles endpoint (a continuous MPEG-TS backed by DirectLiveStream.GetStream), which
@@ -141,6 +149,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         // producer has stopped, or that have run past the configured time limit, but that Jellyfin never closed,
         // so neither files nor encoders pile up. The same heartbeat drives the DVR: expiring timers get their
         // recordings materialized and series rules expand into upcoming child timers.
+        EnsureStreamRootMarker();
         ReapOrphanFiles();
         _reaper = new Timer(
             _ =>
@@ -317,6 +326,13 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             ?? throw new InvalidOperationException("No enabled channel matches id " + channelId);
 
         _logger.LogInformation("Live Channels: opening live stream for {Name}", channel.Name);
+
+        // A real viewer beats a synthetic benchmark: the stress test deliberately saturates the encoder, which
+        // would both stutter this stream and skew the test's own measurement, so tuning in cancels it.
+        if (_stress.CancelForViewer())
+        {
+            _logger.LogInformation("Live Channels: cancelled the running stress test; a viewer tuned in to {Name}", channel.Name);
+        }
 
         // A channel already being encoded is ADOPTED: this open joins the existing session as another consumer
         // instead of starting a second encoder. Its segments and live edge already exist on disk, so the new open
@@ -614,8 +630,31 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
     }
 
+    // Marks the stream root as plugin-owned. The marker is what lets the sweeps here, and the configuration
+    // validator, tell a directory of ours from one that existed before the plugin: without it a stream root
+    // pointed at a pre-existing directory would be indistinguishable from our own.
+    private void EnsureStreamRootMarker()
+    {
+        try
+        {
+            Directory.CreateDirectory(_streamRoot);
+            var marker = Path.Combine(_streamRoot, ChannelService.StreamRootMarkerName);
+            if (!File.Exists(marker))
+            {
+                File.WriteAllText(marker, "This directory is managed by the Live Channels plugin. Stream files inside it are deleted automatically.\n");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Live Channels: could not mark the stream root {Path}", _streamRoot);
+        }
+    }
+
     // Deletes stream files and concat lists left behind by a previous process that exited without closing its
     // streams. Only safe to call at construction, before this process has opened any of its own streams.
+    // Deletion is pattern-restricted: only the plugin's own session directories (lc_<id>) and its known legacy
+    // files are ever removed, so a stream root pointed at a directory holding anything else can never have
+    // that content swept.
     private void ReapOrphanFiles()
     {
         try
@@ -624,21 +663,18 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             {
                 foreach (var sessionDir in Directory.EnumerateDirectories(_streamRoot))
                 {
-                    // The schedule cache is a long-lived directory in this root, not an orphaned
-                    // session, so never reap it.
-                    if (IsReservedDir(sessionDir))
+                    if (IsSessionDir(sessionDir))
                     {
-                        continue;
+                        TryDeleteDirectory(sessionDir);
                     }
-
-                    TryDeleteDirectory(sessionDir);
                 }
 
-                // Tidy any stray loose files, including a leftover schedule.json from an older (single-file)
-                // version, which the per-channel cache replaces.
-                foreach (var file in Directory.EnumerateFiles(_streamRoot))
+                // The only loose file older versions left in the root: the single-file schedule cache the
+                // per-channel cache replaced. Anything else in the root is not ours to delete.
+                var legacySchedule = Path.Combine(_streamRoot, "schedule.json");
+                if (File.Exists(legacySchedule))
                 {
-                    TryDeleteFile(file);
+                    TryDeleteFile(legacySchedule);
                 }
             }
 
@@ -646,6 +682,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             {
                 TryDeleteFile(list);
             }
+
+            // Older versions kept the generated logos and the icon font in the shared system temp; both now
+            // live under Jellyfin's cache, so clear the legacy copies out once.
+            TryDeleteDirectory(Path.Combine(Path.GetTempPath(), "livechannels-logos"));
+            TryDeleteFile(Path.Combine(Path.GetTempPath(), "livechannels-MaterialSymbolsOutlined.ttf"));
 
             ReapSubtitleCache();
         }
@@ -989,8 +1030,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             {
                 foreach (var sessionDir in Directory.EnumerateDirectories(_streamRoot))
                 {
-                    // Never delete the schedule cache directory; it is not a session.
-                    if (active.Contains(sessionDir) || IsReservedDir(sessionDir))
+                    // Only the plugin's own session directories are candidates; the schedule cache and any
+                    // foreign directory in a user-configured root are never touched.
+                    if (active.Contains(sessionDir) || !IsSessionDir(sessionDir))
                     {
                         continue;
                     }
@@ -1202,10 +1244,32 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
     }
 
-    // Whether a directory under the stream root is a long-lived cache (the per-channel schedule files) rather
-    // than a session, which the orphan and cleanup sweeps must never delete.
-    private static bool IsReservedDir(string path)
-        => string.Equals(Path.GetFileName(path), ChannelService.ScheduleDirName, StringComparison.Ordinal);
+    /// <summary>
+    /// Whether a directory under the stream root is one of the plugin's own session directories: the
+    /// <c>lc_</c>-prefixed 32-hex-digit shape <see cref="NewLiveId"/> produces. The orphan and cleanup sweeps
+    /// delete ONLY these, so the schedule cache and anything foreign in a user-configured stream root can
+    /// never be swept.
+    /// </summary>
+    /// <param name="path">The directory path to judge.</param>
+    /// <returns>Whether the directory name is a plugin session id.</returns>
+    internal static bool IsSessionDir(string path)
+    {
+        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
+        if (name.Length != 35 || !name.StartsWith("lc_", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        for (var i = 3; i < name.Length; i++)
+        {
+            if (!char.IsAsciiHexDigitLower(name[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static string NewLiveId() => "lc_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
 

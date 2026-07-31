@@ -262,13 +262,14 @@ public static class ProgramLoopBuilder
     }
 
     // A block's chronological key: the earliest release/air date across its items (a production-only year counts as
-    // its 1 January), so undated content sorts last.
+    // its 1 January), so undated content sorts last. A year outside DateTime's range (0 is a real scraper
+    // artifact) is treated as undated rather than thrown, so one bad item cannot take down the channel build.
     private static DateTime BlockDate(Block block)
     {
         var earliest = DateTime.MaxValue;
         foreach (var item in block.Items)
         {
-            var date = item.PremiereDate ?? (item.Year is int year ? new DateTime(year, 1, 1) : (DateTime?)null);
+            var date = item.PremiereDate ?? (item.Year is >= 1 and <= 9999 ? new DateTime(item.Year.Value, 1, 1) : (DateTime?)null);
             if (date is { } value && value < earliest)
             {
                 earliest = value;
