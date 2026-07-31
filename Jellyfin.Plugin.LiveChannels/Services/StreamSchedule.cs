@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Jellyfin.Plugin.LiveChannels.Models;
+using Jellyfin.Plugin.LiveChannels.Utilities;
 
 namespace Jellyfin.Plugin.LiveChannels.Services;
 
@@ -73,6 +74,10 @@ internal sealed class DaypartStreamSchedule : IStreamSchedule
     private int _pos;
     private bool _first = true;
 
+    // Where the last refill's chain walk stopped, so the next refill resumes there instead of re-simulating
+    // from the anchor (each successive re-walk of a long-running session would otherwise get longer).
+    private DaypartChainState? _chain;
+
     public DaypartStreamSchedule(ChannelService channels, Channel channel, IReadOnlyList<ProgramEntry> pool)
     {
         _channels = channels;
@@ -123,7 +128,9 @@ internal sealed class DaypartStreamSchedule : IStreamSchedule
 
     private void Refill(DateTime fromUtc)
     {
-        _window = _channels.BuildTimeline(_channel, _pool, fromUtc, fromUtc + Horizon).ToList();
+        var (schedule, chain) = _channels.BuildTimelineResumable(_channel, _pool, fromUtc, fromUtc + Horizon, _chain);
+        _chain = chain;
+        _window = schedule.ToList();
         if (_window.Count == 0)
         {
             // Degenerate (a non-empty pool always yields at least one slot): fall back to the raw pool, untruncated.

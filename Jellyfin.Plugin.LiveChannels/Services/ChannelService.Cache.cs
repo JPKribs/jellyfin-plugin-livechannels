@@ -230,8 +230,12 @@ public partial class ChannelService
             }
 
             using var stream = File.OpenRead(file);
-            var programs = JsonSerializer.Deserialize<List<ProgramEntry>>(stream, ScheduleCacheJson);
-            return programs is { Count: > 0 } ? programs : null;
+
+            // An EMPTY cached schedule is a valid answer, not a miss: a channel whose filters legitimately
+            // match nothing would otherwise re-run the full library resolve on every tune-in, exactly the
+            // critical-path cost this cache exists to prevent. Only a null deserialization (a corrupt file)
+            // falls through to a rebuild.
+            return JsonSerializer.Deserialize<List<ProgramEntry>>(stream, ScheduleCacheJson);
         }
         catch (Exception ex)
         {

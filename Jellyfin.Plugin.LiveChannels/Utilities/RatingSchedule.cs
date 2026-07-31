@@ -131,6 +131,8 @@ public static class RatingSchedule
         // The effective window is piecewise-constant with breakpoints at each custom block's start and end.
         // Sampling just inside every segment the [start, start+span] span enters (i.e. at each breakpoint that
         // falls within it) captures every distinct window the span crosses, so the combine covers them all.
+        // Checked boundary by boundary (no per-block array) because the daypart chain calls this once per
+        // simulated item, which for a long chain of short items is on the order of 100k calls per build.
         foreach (var block in blocks)
         {
             if (block.AllDay)
@@ -138,17 +140,18 @@ public static class RatingSchedule
                 continue;
             }
 
-            foreach (var boundary in new[] { block.StartMinutes, block.EndMinutes })
-            {
-                var forward = Wrap(boundary - start);
-                if (forward > 0 && forward <= span)
-                {
-                    window = window.Combine(EffectiveWindow(blocks, boundary));
-                }
-            }
+            window = CombineAtBoundary(blocks, window, block.StartMinutes, start, span);
+            window = CombineAtBoundary(blocks, window, block.EndMinutes, start, span);
         }
 
         return window;
+    }
+
+    // Folds one breakpoint's effective window into the running combination when the span reaches it.
+    private static RatingWindow CombineAtBoundary(IReadOnlyList<ResolvedRatingBlock> blocks, RatingWindow window, int boundary, int start, int span)
+    {
+        var forward = Wrap(boundary - start);
+        return forward > 0 && forward <= span ? window.Combine(EffectiveWindow(blocks, boundary)) : window;
     }
 
     /// <summary>

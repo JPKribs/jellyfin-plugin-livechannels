@@ -20,6 +20,12 @@ public partial class ChannelService
     /// <param name="toUtc">The exclusive UTC end of the window.</param>
     /// <returns>The ordered programmes covering the window.</returns>
     public IReadOnlyList<ScheduledProgram> BuildTimeline(Channel channel, IReadOnlyList<ProgramEntry> programs, DateTime fromUtc, DateTime toUtc)
+        => BuildTimelineResumable(channel, programs, fromUtc, toUtc, resume: null).Schedule;
+
+    // The resumable form the live daypart stream uses: it hands back the chain state its walk stopped at, so the
+    // next refill continues from there instead of re-simulating the whole chain from the anchor (a walk that
+    // grows without bound over a long session). For a channel without time-of-day blocks the state is inert.
+    internal (IReadOnlyList<ScheduledProgram> Schedule, DaypartChainState Chain) BuildTimelineResumable(Channel channel, IReadOnlyList<ProgramEntry> programs, DateTime fromUtc, DateTime toUtc, DaypartChainState? resume)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(programs);
@@ -27,7 +33,7 @@ public partial class ChannelService
         var blocks = ResolveRatingBlocks(channel);
         if (!HasTimeOfDayRating(blocks))
         {
-            return ScheduleCalculator.BuildSchedule(programs, fromUtc, toUtc, ScheduleCalculator.Epoch);
+            return (ScheduleCalculator.BuildSchedule(programs, fromUtc, toUtc, ScheduleCalculator.Epoch), default);
         }
 
         // The chain anchors at the last configuration save (stamped by Plugin.UpdateConfiguration and backfilled
@@ -38,7 +44,8 @@ public partial class ChannelService
             anchorUtc = fromUtc;
         }
 
-        return DaypartSchedule.Build(programs, blocks, channel.TransitionWindowMinutes, TimeZoneInfo.Local, anchorUtc, fromUtc, toUtc, channel.Id);
+        var schedule = DaypartSchedule.BuildResumable(programs, blocks, channel.TransitionWindowMinutes, TimeZoneInfo.Local, anchorUtc, fromUtc, toUtc, channel.Id, resume, out var state);
+        return (schedule, state);
     }
 
     /// <summary>

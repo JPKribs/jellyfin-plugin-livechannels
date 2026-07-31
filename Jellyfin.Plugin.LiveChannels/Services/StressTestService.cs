@@ -311,9 +311,9 @@ public sealed class StressTestService : IDisposable
         var buffer = new byte[81920];
         try
         {
+            // Only the first byte's arrival time matters; the data itself is discarded.
             var stdout = process.StandardOutput.BaseStream;
-            int read;
-            while ((read = await stdout.ReadAsync(buffer, timeout.Token).ConfigureAwait(false)) > 0)
+            while (await stdout.ReadAsync(buffer, timeout.Token).ConfigureAwait(false) > 0)
             {
                 if (firstByteStamp == 0)
                 {
@@ -357,9 +357,12 @@ public sealed class StressTestService : IDisposable
         var buffer = new byte[4096];
         try
         {
-            while (await stream.ReadAsync(buffer, token).ConfigureAwait(false) > 0)
+            int read;
+            do
             {
+                read = await stream.ReadAsync(buffer, token).ConfigureAwait(false);
             }
+            while (read > 0);
         }
         catch (OperationCanceledException)
         {

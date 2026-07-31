@@ -6,6 +6,18 @@ using Jellyfin.Plugin.LiveChannels.Models;
 namespace Jellyfin.Plugin.LiveChannels.Utilities;
 
 /// <summary>
+/// The daypart chain's simulation state at a moment: the next pick happens at <paramref name="TimeUtc"/> with the
+/// loop cursor at <paramref name="Cursor"/>. Capturing it after one build and resuming the next from it skips
+/// re-walking the whole chain from the anchor (which grows without bound over a long session). Valid only for the
+/// same loop, blocks, and anchor; <paramref name="AnchorUtc"/> is carried so a resume against a different anchor
+/// (a configuration save) is detected and ignored.
+/// </summary>
+/// <param name="AnchorUtc">The anchor the chain was simulated from, keying the state's validity.</param>
+/// <param name="TimeUtc">Where the walk stopped: the UTC instant the next pick happens at.</param>
+/// <param name="Cursor">The loop cursor for that next pick.</param>
+internal readonly record struct DaypartChainState(DateTime AnchorUtc, DateTime TimeUtc, int Cursor);
+
+/// <summary>
 /// Builds a time-of-day-aware wall-clock schedule for a channel whose rating limits vary by daypart. Unlike the
 /// free-running <see cref="ScheduleCalculator"/> loop, the content that airs depends on the clock, so items are
 /// placed back to back in one continuous chain simulated from a fixed anchor: local midnight of the day the
@@ -46,6 +58,37 @@ public static class DaypartSchedule
         DateTime fromUtc,
         DateTime toUtc,
         string seed)
+        => BuildResumable(loop, blocks, transitionMinutes, timeZone, anchorUtc, fromUtc, toUtc, seed, resume: null, out _);
+
+    /// <summary>
+    /// The same simulation, resumable: when <paramref name="resume"/> is a state captured from a previous call
+    /// with the same loop, blocks, and anchor, and it does not lie past <paramref name="fromUtc"/>, the walk
+    /// continues from it instead of re-simulating the whole chain from the anchor. The state where this walk
+    /// stopped is returned in <paramref name="state"/> for the next call. The chain is deterministic, so a
+    /// resumed walk emits exactly what a fresh walk over the same window would.
+    /// </summary>
+    /// <param name="loop">The channel's resolved loop (loop-builder ordered), carrying each item's parental score.</param>
+    /// <param name="blocks">The resolved rating blocks.</param>
+    /// <param name="transitionMinutes">The channel's transition buffer, in minutes.</param>
+    /// <param name="timeZone">The time zone the block times are expressed in (server local).</param>
+    /// <param name="anchorUtc">The chain anchor (the last configuration save); the chain starts at local midnight of its day.</param>
+    /// <param name="fromUtc">The inclusive UTC start of the window.</param>
+    /// <param name="toUtc">The exclusive UTC end of the window.</param>
+    /// <param name="seed">A per-channel seed (the channel id) so different channels lead the chain differently.</param>
+    /// <param name="resume">A state from a previous call to continue from, or <c>null</c> to walk from the anchor. Ignored (with a fresh anchor walk) when it belongs to a different anchor, lies past the window start, or no longer fits the loop.</param>
+    /// <param name="state">The walk's exit state, valid to resume the next window from.</param>
+    /// <returns>The ordered, contiguous programmes covering the window (the first may start before <paramref name="fromUtc"/>; nothing precedes the anchor).</returns>
+    internal static IReadOnlyList<ScheduledProgram> BuildResumable(
+        IReadOnlyList<ProgramEntry> loop,
+        IReadOnlyList<ResolvedRatingBlock> blocks,
+        int transitionMinutes,
+        TimeZoneInfo timeZone,
+        DateTime anchorUtc,
+        DateTime fromUtc,
+        DateTime toUtc,
+        string seed,
+        DaypartChainState? resume,
+        out DaypartChainState state)
     {
         ArgumentNullException.ThrowIfNull(loop);
         ArgumentNullException.ThrowIfNull(blocks);
@@ -55,19 +98,33 @@ public static class DaypartSchedule
         var schedule = new List<ScheduledProgram>();
         if (loop.Count == 0 || toUtc <= fromUtc)
         {
+            // Nothing was walked; hand back whatever state the caller had (or an inert default).
+            state = resume ?? default;
             return schedule;
         }
 
-        // The chain starts at local midnight of the anchor's day, so the whole save day is covered.
-        var anchorLocal = TimeZoneInfo.ConvertTimeFromUtc(anchorUtc, timeZone);
-        var anchorDayLocal = DateTime.SpecifyKind(anchorLocal.Date, DateTimeKind.Unspecified);
-        if (timeZone.IsInvalidTime(anchorDayLocal))
+        DateTime t;
+        int cursor;
+        if (resume is { } prior && prior.AnchorUtc == anchorUtc && prior.TimeUtc != default
+            && prior.TimeUtc <= fromUtc && prior.Cursor >= 0 && prior.Cursor < loop.Count)
         {
-            anchorDayLocal = anchorDayLocal.AddHours(1); // A zone whose DST jump skips midnight.
+            // Continue the chain where the previous window's walk stopped, skipping the anchor re-walk.
+            t = prior.TimeUtc;
+            cursor = prior.Cursor;
         }
+        else
+        {
+            // The chain starts at local midnight of the anchor's day, so the whole save day is covered.
+            var anchorLocal = TimeZoneInfo.ConvertTimeFromUtc(anchorUtc, timeZone);
+            var anchorDayLocal = DateTime.SpecifyKind(anchorLocal.Date, DateTimeKind.Unspecified);
+            if (timeZone.IsInvalidTime(anchorDayLocal))
+            {
+                anchorDayLocal = anchorDayLocal.AddHours(1); // A zone whose DST jump skips midnight.
+            }
 
-        var t = TimeZoneInfo.ConvertTimeToUtc(anchorDayLocal, timeZone);
-        var cursor = SeededStart(seed, anchorDayLocal, loop.Count);
+            t = TimeZoneInfo.ConvertTimeToUtc(anchorDayLocal, timeZone);
+            cursor = SeededStart(seed, anchorDayLocal, loop.Count);
+        }
 
         for (var walked = 0; walked < MaxWalk && t < toUtc && schedule.Count < MaxPrograms; walked++)
         {
@@ -90,6 +147,7 @@ public static class DaypartSchedule
             t = stop;
         }
 
+        state = new DaypartChainState(anchorUtc, t, cursor);
         return schedule;
     }
 

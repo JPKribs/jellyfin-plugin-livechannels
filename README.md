@@ -6,6 +6,8 @@
 
 Most pseudo-TV programs run as a separate application that you then wire into Jellyfin as a tuner. Live Channels lives inside the server instead: define a channel, and it appears in Live TV with a full guide, ready to watch.
 
+**While all are welcome to use this plugin, my primary goal for this plugin is to test and develop on top of Jellyfin's Live TV. For this reason, this plugin is offered as is, with no guarantee of support, bug fixes, or troubleshooting.**
+
 ## How It Works
 
 You define **channels** in the plugin configuration. Each channel resolves to an ordered list of items that loops forever on a fixed schedule. The plugin registers directly with Jellyfin's **Live TV**, so the channels, their guide, and their streams are all served by Jellyfin itself. Saving a channel refreshes the guide, so edits show up right away.

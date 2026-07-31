@@ -121,6 +121,45 @@ public class DaypartScheduleTests
         Assert.Empty(schedule);
     }
 
+    [Fact]
+    public void BuildResumable_ResumedChain_MatchesAFreshWalk()
+    {
+        // The first window walks from the anchor and captures its exit state; the next window resumes from it.
+        // The chain is deterministic, so the resumed walk must emit exactly what a fresh anchor walk over the
+        // same window produces, without re-simulating everything before it.
+        var first = DaypartSchedule.BuildResumable(Loop, Blocks, 0, TimeZoneInfo.Utc, Midnight, Midnight, Midnight.AddHours(6), "chan", resume: null, out var state);
+        Assert.NotEmpty(first);
+
+        var from = first[^1].Stop;
+        var resumed = DaypartSchedule.BuildResumable(Loop, Blocks, 0, TimeZoneInfo.Utc, Midnight, from, from.AddHours(6), "chan", state, out _);
+        var fresh = DaypartSchedule.Build(Loop, Blocks, 0, TimeZoneInfo.Utc, Midnight, from, from.AddHours(6), "chan");
+
+        Assert.Equal(fresh.Count, resumed.Count);
+        for (var i = 0; i < fresh.Count; i++)
+        {
+            Assert.Equal(fresh[i].Program.ItemId, resumed[i].Program.ItemId);
+            Assert.Equal(fresh[i].Start, resumed[i].Start);
+            Assert.Equal(fresh[i].Stop, resumed[i].Stop);
+        }
+    }
+
+    [Fact]
+    public void BuildResumable_StateFromADifferentAnchor_IsIgnored()
+    {
+        // A configuration save re-anchors the chain; a state captured under the old anchor must not be resumed
+        // (it would continue a chain the guide no longer shows), so the walk falls back to the fresh anchor.
+        var stale = new DaypartChainState(Midnight.AddDays(-3), Midnight.AddHours(2), 1);
+        var resumed = DaypartSchedule.BuildResumable(Loop, Blocks, 0, TimeZoneInfo.Utc, Midnight, Midnight.AddHours(3), Midnight.AddHours(9), "chan", stale, out _);
+        var fresh = DaypartSchedule.Build(Loop, Blocks, 0, TimeZoneInfo.Utc, Midnight, Midnight.AddHours(3), Midnight.AddHours(9), "chan");
+
+        Assert.Equal(fresh.Count, resumed.Count);
+        for (var i = 0; i < fresh.Count; i++)
+        {
+            Assert.Equal(fresh[i].Program.ItemId, resumed[i].Program.ItemId);
+            Assert.Equal(fresh[i].Start, resumed[i].Start);
+        }
+    }
+
     private static ProgramEntry[] BuildLoop()
     {
         var ratings = new int?[] { 50, Pg, 200, R, 50, Pg, 200, R };

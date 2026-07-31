@@ -36,12 +36,14 @@ public partial class ChannelService
     private readonly ILogger<ChannelService> _logger;
 
     // Decoded schedules held in memory while a channel is being watched, keyed by channel number. Populated on
-    // tune-in (so repeat reads skip the disk read and JSON parse) and released the moment a channel's last session
-    // closes, so an idle channel holds nothing. The on-disk per-channel file is the source of truth; this is just
-    // a hot copy. The schedule already carries every item's probed media metadata (HDR, interlace, bit depth,
-    // audio, subtitles), so a tune-in served from here makes no media-stream queries at all. Static (the service is
-    // a singleton) so the static configuration-change handler can flush it alongside the on-disk cache, ensuring a
-    // filter or channel edit is never served from a stale hot copy of a channel that happens to be on screen.
+    // tune-in (and by a DVR pass resolving a program) so repeat reads skip the disk read and JSON parse, and
+    // released when the channel's last session closes. A guide refresh updates a hot copy IN PLACE but never
+    // pins a cold one, so a channel nobody tunes holds nothing here. The on-disk per-channel file is the source
+    // of truth; this is just a hot copy. The schedule already carries every item's probed media metadata (HDR,
+    // interlace, bit depth, audio, subtitles), so a tune-in served from here makes no media-stream queries at
+    // all. Static (the service is a singleton) so the static configuration-change handler can flush it alongside
+    // the on-disk cache, ensuring a filter or channel edit is never served from a stale hot copy of a channel
+    // that happens to be on screen.
     private static readonly ConcurrentDictionary<int, IReadOnlyList<ProgramEntry>> MemorySchedules = new();
 
     /// <summary>
@@ -164,12 +166,17 @@ public partial class ChannelService
         ArgumentNullException.ThrowIfNull(channel);
         var programs = BuildPrograms(channel);
         WriteScheduleCache(channel, programs);
-        // Keep the freshly built schedule HOT: this build already paid the full library resolve, and dropping it
-        // meant the next tune-in re-read (or, if the cache read failed, silently re-BUILT) it on the critical
-        // path — observed as a 13-second first-tune stall on a large channel. Guide refreshes run regularly, so
-        // in practice every enabled channel stays warm; ReleaseFromMemory still trims a channel after its last
-        // session closes, keeping long-idle memory bounded between refreshes.
-        MemorySchedules[channel.Number] = programs;
+
+        // Update the hot copy only for a channel that is already hot (someone is watching it, or it was tuned
+        // recently), so its live viewers see the fresh schedule without a disk round-trip. A channel that is
+        // NOT hot is deliberately left cold: pinning every enabled channel here kept several MB of decoded
+        // schedule per large channel in memory forever, refreshed daily, for channels nobody ever tuned. A cold
+        // channel's next tune-in reads the just-written disk cache (a fast parse, logged when slow), not a rebuild.
+        if (MemorySchedules.TryGetValue(channel.Number, out var previous))
+        {
+            MemorySchedules.TryUpdate(channel.Number, programs, previous);
+        }
+
         return programs;
     }
 

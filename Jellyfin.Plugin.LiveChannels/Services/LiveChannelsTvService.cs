@@ -1494,7 +1494,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
 
         // The deadline scales with the cushion: a deep buffer legitimately takes longer to fill, and a tune-in
         // must never be failed for waiting exactly as long as it was told to.
-        var deadline = DateTime.UtcNow.AddSeconds(20 + (minSegments * StreamArguments.SegmentSeconds));
+        var deadline = DateTime.UtcNow.AddSeconds(20 + (minSegments * (double)StreamArguments.SegmentSeconds));
         while (DateTime.UtcNow < deadline && !worker.IsCompleted)
         {
             if (File.Exists(playlist) && CountSegments(dir) >= minSegments)

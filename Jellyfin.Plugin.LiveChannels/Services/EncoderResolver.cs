@@ -52,6 +52,13 @@ public class EncoderResolver
         var family = codec == VideoCodec.Hevc ? "hevc" : "h264";
         var label = codec == VideoCodec.Hevc ? "HEVC" : "H.264";
 
+        // Detect never returns an accelerator without options, so past this guard options is non-null and the
+        // hardware branches can read it directly (a null-conditional there would be a provably constant check).
+        if (options is null)
+        {
+            return Software(codec);
+        }
+
         switch (accel)
         {
             // Hardware ENCODE follows the server's configured accelerator for every vendor. Hardware DECODE
@@ -77,7 +84,7 @@ public class EncoderResolver
                 // pipeline can run fully GPU-resident (VAAPI decode/filters, QSV encode via hwmap). Jellyfin's
                 // dashboard stores the node in QsvDevice when QSV is the selected accelerator, not VaapiDevice.
                 var qsvDevice = OperatingSystem.IsLinux()
-                    ? FirstDevice(options?.QsvDevice, options?.VaapiDevice)
+                    ? FirstDevice(options.QsvDevice, options.VaapiDevice)
                     : null;
                 // With a known render node, derive the QSV device from it explicitly; the bare "qsv=hw" form
                 // lets ffmpeg auto-pick the default node (renderD128), which is wrong on multi-GPU boxes.
@@ -89,7 +96,7 @@ public class EncoderResolver
                     DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12|p010le,",
                     GpuDevice: qsvDevice, VppBrightness: VppBrightness(options), VppContrast: VppContrast(options));
             case "vaapi":
-                var device = FirstDevice(options?.VaapiDevice, options?.QsvDevice);
+                var device = FirstDevice(options.VaapiDevice, options.QsvDevice);
                 return new VideoEncoderProfile(family + "_vaapi", label + " (VAAPI)", true,
                     new[] { "-init_hw_device", "vaapi=va:" + device, "-filter_hw_device", "va" }, Empty,
                     "format=nv12,hwupload", false,

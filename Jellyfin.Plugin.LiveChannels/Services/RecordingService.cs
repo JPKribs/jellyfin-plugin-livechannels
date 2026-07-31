@@ -321,15 +321,14 @@ public sealed partial class RecordingService
             var temp = target.File + ".copying.tmp";
             try
             {
+                // Plain using blocks: the copy itself is async, and a FileStream's synchronous Dispose after
+                // the awaited copy completes flushes the same way (the await-using ConfigureAwait form read as
+                // an undisposed stream to static analysis).
                 var openOptions = FileOptions.Asynchronous | FileOptions.SequentialScan;
-                var src = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, openOptions);
-                await using (src.ConfigureAwait(false))
+                using (var src = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, openOptions))
+                using (var dst = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 81920, openOptions))
                 {
-                    var dst = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 81920, openOptions);
-                    await using (dst.ConfigureAwait(false))
-                    {
-                        await src.CopyToAsync(dst).ConfigureAwait(false);
-                    }
+                    await src.CopyToAsync(dst).ConfigureAwait(false);
                 }
 
                 File.Move(temp, target.File, overwrite: true);
