@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "10.11.13.3",
+        "changelog": "## Developer\r\n- Bump base to 2026.07.31",
+        "targetAbi": "10.11.10.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v10.11.13.3/jellyfin-plugin-livechannels-10.11.13.3.zip",
+        "checksum": "3e475f7076cb05a93eadaffd2aa605ea",
+        "timestamp": "2026-08-01T01:53:48Z"
+      },
+      {
         "version": "10.11.13.2",
         "changelog": "## Developer\r\n- A channel whose filters legitimately match nothing now reuses its cached empty schedule instead of re running the full library resolve on every tune in\r\n- Guide refreshes no longer pin every enabled channel's decoded schedule in memory forever, only channels actually being watched keep a hot copy\r\n- Long running time of day channels now resume their schedule chain where the last window ended instead of re simulating it from the anchor at every refill, so the walk no longer grows with session length\r\n- Code scanning cleanup across the encoder resolver, stress test, recording copy, and tune in deadline, with no behaviour changes",
         "targetAbi": "10.11.10.0",
