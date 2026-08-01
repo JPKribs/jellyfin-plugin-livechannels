@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "10.11.13.3"
+version: "10.11.13.4"
 targetAbi: "10.11.10.0"
 framework: "net9.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -16,7 +16,4 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   developer:
-  - A channel whose filters legitimately match nothing now reuses its cached empty schedule instead of re running the full library resolve on every tune in
-  - Guide refreshes no longer pin every enabled channel's decoded schedule in memory forever, only channels actually being watched keep a hot copy
-  - Long running time of day channels now resume their schedule chain where the last window ended instead of re simulating it from the anchor at every refill, so the walk no longer grows with session length
-  - Code scanning cleanup across the encoder resolver, stress test, recording copy, and tune in deadline, with no behaviour changes
+  - Bump base to 2026.07.31
