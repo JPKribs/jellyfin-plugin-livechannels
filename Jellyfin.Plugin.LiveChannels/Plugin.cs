@@ -60,7 +60,7 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
 
     /// <summary>
     /// Validates incoming configuration before persisting it. The dashboard enforces the same rules in the
-    /// browser, but configuration can arrive from any API client.
+    /// browser, but configuration can come from any API client.
     /// </summary>
     /// <param name="configuration">The incoming configuration.</param>
     public override void UpdateConfiguration(BasePluginConfiguration configuration)
