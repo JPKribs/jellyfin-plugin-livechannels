@@ -200,8 +200,10 @@ public class StreamSessionService
             return;
         }
 
-        // The segmenter only copies; its speed is never the bottleneck, so it needs no stats sink.
+        // The segmenter only copies, so its speed is never the bottleneck and it needs no stats sink.
+#pragma warning disable CA2025 // The finally block below awaits stderrTask before the using scope disposes the segmenter.
         var stderrTask = ReadStandardErrorAsync(segmenter, null, cancellationToken);
+#pragma warning restore CA2025
         try
         {
             // The per-item/concat producer and the slate all write to this one stream, so the segmenter receives
@@ -654,7 +656,9 @@ public class StreamSessionService
             return (null, Task.FromResult(string.Empty));
         }
 
+#pragma warning disable CA2025 // The process and its reader task are handed to PumpProducerAsync, which awaits the task before it disposes the process.
         return (process, ReadStandardErrorAsync(process, stats, cancellationToken, tracker));
+#pragma warning restore CA2025
     }
 
     // Pumps a started producer's stdout into the output stream until it ends, then kills and disposes it.

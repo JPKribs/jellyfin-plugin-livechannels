@@ -33,7 +33,7 @@ Every option on the **Channels**, **Popular**, **Sessions**, and **Settings** ta
 Releases use a four part version, `JJ.JJ.F.B`, that matches the supported Jellyfin version with the plugin's own feature and bug count:
 
 ```
-10.11.1.0
+12.0.1.0
 JJ JJ F B
 ```
 
@@ -41,7 +41,7 @@ JJ JJ F B
 * `F` is the plugin feature release.
 * `B` is the plugin bug or patch release within that feature.
 
-Targets **Jellyfin 10.11.x** (`net9.0`, ABI `10.11.10.0`). Requires ffmpeg, which Jellyfin already bundles and configures.
+Targets **Jellyfin 12.0.x** (`net10.0`, ABI `12.0.0.0`). Requires ffmpeg, which Jellyfin already bundles and configures.
 
 ## Installation
 
