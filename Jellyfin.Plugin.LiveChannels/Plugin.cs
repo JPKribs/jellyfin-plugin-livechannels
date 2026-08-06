@@ -146,7 +146,6 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
             EmbeddedResourcePath = $"{ns}.Assets.MaterialSymbolsOutlined.ttf"
         };
 
-        // Shared base CSS and JS compiled in from the JPKribs.Jellyfin.Base package.
         foreach (var page in GetSharedPages("livechannels"))
         {
             yield return page;
