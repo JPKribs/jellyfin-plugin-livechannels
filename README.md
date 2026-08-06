@@ -1,6 +1,6 @@
 # ![Live Channels](Jellyfin.Plugin.LiveChannels/Assets/Logo.png)
 
-**Looping virtual TV channels built from your own library and served natively in Jellyfin's Live TV. No separate app, no tuner setup, no URLs to paste.**
+**Looping virtual TV channels built from your own library and served natively in Jellyfin's Live TV.**
 
 ## Why Does This Exist
 
