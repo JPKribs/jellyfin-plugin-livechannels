@@ -10,7 +10,7 @@ Most pseudo-TV programs run as a separate application that you then wire into Je
 
 **I do NOT recommend forking or building on top of this plugin!**
 
-**For a supported & maintained tool that will not brick your server, please use https://github.com/chrisbenincasa/tunarr**
+**For a supported & maintained tool that will not brick your server, please use [tunarr](https://github.com/chrisbenincasa/tunarr)**
 
 ## How It Works
 
