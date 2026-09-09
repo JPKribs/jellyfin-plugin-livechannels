@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "12.0.1.0",
+        "changelog": "## User\r\n- Tune-in is now immediate. A channel opens on a short animated card (its logo and a Starting Channel caption over flowing lines) the moment you tune in, while the content is seeked and encoded behind it, and the picture no longer waits ten seconds or more for a buffer to fill first\r\n- The Start-up buffer setting is gone. It turned out to be a literal pause Jellyfin applied before every tune-in rather than a buffer, and the cushion it was meant to provide is now built up while you are already watching\r\n\r\n## Developer\r\n- Removed StartupBufferSeconds and BufferMs (Jellyfin sleeps for BufferMs in TranscodeManager.AcquireResources before launching the delivery ffmpeg, on every tune-in including adoption)\r\n- The tune-in handover now waits for the playlist and one segment instead of the full cushion, and the endpoint reader's hold-back ramps in one segment per ten seconds of session age instead of applying from the first byte\r\n- Segments and the encoder GOP are now three seconds, matching Jellyfin's delivery remux so every stage cuts on the same keyframes",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v12.0.1.0/jellyfin-plugin-livechannels-12.0.1.0.zip",
+        "checksum": "24104adbdddf7f40507be7a3ed5211f0",
+        "timestamp": "2026-09-09T01:34:11Z"
+      },
+      {
         "version": "12.0.0.0",
         "changelog": "## Developer\r\n- Bump base to 2026.07.31\r\n- Rebuilt for Jellyfin 12.0 on .NET 10, with the target ABI raised to 12.0.0.0\r\n- The dashboard menu entry now shows a live_tv icon instead of the generic folder\r\n- CI builds, tests, and CodeQL now run on .NET 10, and label sync has the token scope it needs",
         "targetAbi": "12.0.0.0",
