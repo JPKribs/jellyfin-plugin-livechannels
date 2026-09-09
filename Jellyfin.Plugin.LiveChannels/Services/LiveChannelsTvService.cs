@@ -56,7 +56,20 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     // bytes to a reader has someone on the other end whatever the session list says. A client that force-quit,
     // crashed, or dropped off the network cannot keep pulling, so this cannot be faked -- it can only go quiet,
     // which is why it corroborates rather than decides.
+    //
+    // That second opinion applies to a session with a viewer attached. Once the LAST viewer has closed (the session
+    // is lingering), the bytes served up to that close are what the departed viewer watched, not evidence of
+    // anyone still there: Jellyfin's reader is fed right up to the moment it disconnects, so judging a lingering
+    // session by the same two-minute window vetoed every countdown and left each viewerless encoder running until
+    // the reaper's backstop caught it minutes later. A lingering session therefore only counts delivery that
+    // happened after the close (past a short drain, for a reader still emptying its socket) and within the grace.
     private static readonly TimeSpan RecentDeliveryWindow = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan LingerDrainSlack = TimeSpan.FromSeconds(3);
+
+    // A refused linger teardown (the session was still delivering to someone after its viewer closed) is retried
+    // this often until the reaper's over-linger sweep takes over, so a stream that goes quiet is collected within
+    // seconds of doing so rather than on the next minute boundary.
+    private static readonly TimeSpan LingerRetryInterval = TimeSpan.FromSeconds(5);
 
     // How long after a producer dies unexpectedly before the session may start a replacement, and how many
     // replacements one session may run. A producer that keeps dying is a broken pipeline, not a hiccup: the
@@ -163,6 +176,12 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             state: null,
             TimeSpan.FromMinutes(1),
             TimeSpan.FromMinutes(1));
+
+        // Render every enabled channel's tune-in card as soon as the server has settled. Every guide refresh
+        // sweeps them too (see GetChannelsAsync), but Jellyfin does not refresh the guide at start-up on its own,
+        // so without this a fresh install or update would open every channel without a card until the daily
+        // refresh or a save. Runs in the background, one channel at a time.
+        _ = WarmCardsAtStartupAsync();
     }
 
     /// <inheritdoc />
@@ -171,10 +190,51 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <inheritdoc />
     public string HomePageUrl => string.Empty;
 
+    // Resolves each enabled channel's logo and sweeps the cards once the server has settled. Never throws: a card
+    // is a nicety and start-up must not be disturbed by one failing to render.
+    private async Task WarmCardsAtStartupAsync()
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(20)).ConfigureAwait(false);
+            var channels = new List<(Channel Channel, string? Logo)>();
+            foreach (var channel in _channels.GetEnabledChannels())
+            {
+                channels.Add((channel, await EnsureLogoAsync(channel, CancellationToken.None).ConfigureAwait(false)));
+            }
+
+            await SweepCardsAsync(channels, "start-up").ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Live Channels: the start-up tune-in card sweep failed");
+        }
+    }
+
+    // Makes sure every listed channel has a tune-in card for its logo and the current output profile, rendering
+    // the missing or stale ones one at a time (a settings change that alters the output profile, or a new logo,
+    // makes a card stale). Cards already current cost nothing. Never throws.
+    private async Task SweepCardsAsync(List<(Channel Channel, string? Logo)> channels, string trigger)
+    {
+        _logger.LogInformation("Live Channels: checking tune-in cards for {Count} channel(s) at {Trigger}", channels.Count, trigger);
+        try
+        {
+            foreach (var (channel, logo) in channels)
+            {
+                await _intros.EnsureAsync(channel, logo).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Live Channels: the {Trigger} tune-in card sweep failed", trigger);
+        }
+    }
+
     /// <inheritdoc />
     public async Task<IEnumerable<ChannelInfo>> GetChannelsAsync(CancellationToken cancellationToken)
     {
         var result = new List<ChannelInfo>();
+        var cards = new List<(Channel Channel, string? Logo)>();
         foreach (var channel in _channels.GetEnabledChannels())
         {
             var info = new ChannelInfo
@@ -192,14 +252,16 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 info.HasImage = true;
             }
 
-            // Keep the channel's tune-in card current with its logo and the output profile. Renders run in the
-            // background, one at a time, so the guide refresh is not held up and live sessions are not starved.
-            _ = _intros.EnsureAsync(channel, logo);
-
+            cards.Add((channel, logo));
             result.Add(info);
         }
 
         _logger.LogInformation("Live Channels: provided {Count} channel(s) to Live TV", result.Count);
+
+        // Every guide refresh (the daily one, and the one a save from the configuration page triggers) generates
+        // the tune-in cards: missing ones, and ones made stale by a new logo or changed output settings. Renders
+        // run in the background, one at a time, so the refresh is not held up and live sessions are not starved.
+        _ = SweepCardsAsync(cards, "guide refresh");
         return result;
     }
 
@@ -552,27 +614,42 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     }
 
     // Tears a session down after the grace period, unless a viewer re-attached (adopted it) in the meantime.
+    // TeardownSession refuses while the session is still delivering bytes to someone after the close (a viewer
+    // whose consumer bookkeeping went wrong is still a viewer), so the attempt is repeated every few seconds until
+    // it succeeds, a viewer adopts the session, or the reaper's over-linger threshold arrives and its sweep takes
+    // over as the backstop. One refused attempt must never be the end of it: that left viewerless encoders
+    // running for minutes past their countdown.
     private async Task LingerTeardownAsync(LiveSession session)
     {
         await Task.Delay(LingerGrace).ConfigureAwait(false);
+        var handOff = DateTime.UtcNow + (LingerGrace * 2);
 
-        // A re-tune within the grace re-attached a consumer: leave the session running for them.
-        if (session.HasConsumers)
+        while (true)
         {
-            return;
-        }
+            // A re-tune within the grace re-attached a consumer: leave the session running for them.
+            if (session.HasConsumers || session.IsTornDown)
+            {
+                return;
+            }
 
-        // TeardownSession refuses while the session is still delivering bytes (a viewer whose consumer
-        // bookkeeping went wrong is still a viewer). The reaper's over-linger sweep retries every minute, so the
-        // session is collected as soon as delivery genuinely stops.
-        if (TeardownSession(session))
-        {
-            _activity.Log(
-                "Live Channel: " + session.ChannelName + " has stopped",
-                "LiveChannels.ChannelStopped",
-                overview: "This channel has no viewers so encoding has been stopped.");
+            if (TeardownSession(session))
+            {
+                _activity.Log(
+                    "Live Channel: " + session.ChannelName + " has stopped",
+                    "LiveChannels.ChannelStopped",
+                    overview: "This channel has no viewers so encoding has been stopped.");
 
-            _logger.LogInformation("Live Channels: closing session {Id} ({Name}) after the linger grace", session.Id, session.ChannelName);
+                _logger.LogInformation("Live Channels: closing session {Id} ({Name}) after the linger grace", session.Id, session.ChannelName);
+                return;
+            }
+
+            if (DateTime.UtcNow >= handOff)
+            {
+                _logger.LogDebug("Live Channels: session {Id} ({Name}) is still delivering after its linger grace; leaving it to the reaper", session.Id, session.ChannelName);
+                return;
+            }
+
+            await Task.Delay(LingerRetryInterval).ConfigureAwait(false);
         }
     }
 
@@ -986,7 +1063,32 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     // When the session manager cannot be read at all, delivery is all there is to go on.
     private static bool IsWatched(LiveSession session, IReadOnlyList<string>? reported)
         => (reported is not null && AnyConsumerReported(session.ConsumerIds, reported))
-            || session.IsDeliveringData(RecentDeliveryWindow);
+            || DeliveryCountsAsWatched(session.LastDataUtc, session.LingeringSinceUtc, DateTime.UtcNow);
+
+    /// <summary>
+    /// Whether byte delivery says someone is on the other end of a session. With a viewer attached, any delivery
+    /// within the last two minutes counts. For a lingering session (its last viewer already closed), only bytes
+    /// served after that close, past a short drain, and within the linger grace count: everything served before
+    /// the close went to the viewer who left. Pure and deterministic so it can be unit tested without a live host.
+    /// </summary>
+    /// <param name="lastDataUtc">When the session last served a reader, or <c>null</c> if it never has.</param>
+    /// <param name="lingeringSinceUtc">When the last viewer closed, or <c>null</c> while a viewer is attached.</param>
+    /// <param name="nowUtc">The current time.</param>
+    /// <returns>Whether delivery alone keeps the session alive.</returns>
+    public static bool DeliveryCountsAsWatched(DateTime? lastDataUtc, DateTime? lingeringSinceUtc, DateTime nowUtc)
+    {
+        if (lastDataUtc is not { } last)
+        {
+            return false;
+        }
+
+        if (lingeringSinceUtc is { } since)
+        {
+            return last > since + LingerDrainSlack && nowUtc - last < LingerGrace;
+        }
+
+        return nowUtc - last < RecentDeliveryWindow;
+    }
 
     // Takes its own snapshot, for the callers that check a single session.
     private bool IsWatched(LiveSession session) => IsWatched(session, ReportedStreamIds());
@@ -1726,6 +1828,16 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 {
                     return _consumers.ToList();
                 }
+            }
+        }
+
+        /// <summary>Gets when a reader was last served bytes, or <c>null</c> if none ever was.</summary>
+        public DateTime? LastDataUtc
+        {
+            get
+            {
+                var ticks = Interlocked.Read(ref _lastDataTicks);
+                return ticks > 0 ? new DateTime(ticks, DateTimeKind.Utc) : null;
             }
         }
 

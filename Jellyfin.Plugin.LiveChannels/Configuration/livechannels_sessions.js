@@ -104,8 +104,8 @@ export default function (view) {
         // instantly) is dimmed and labelled with its countdown. Kill still stops it right away.
         var winding = typeof s.StopsInSeconds === 'number';
         var windingNote = winding
-            ? '<div class="lc-session-stopping" style="color:#d29922;font-size:0.82em;margin-top:2px;" title="The viewer left; the encoder stays warm briefly so tuning back in is instant. Kill stops it now.">' +
-                'No viewers — stopping in ~' + s.StopsInSeconds + 's</div>'
+            ? '<div class="lc-session-stopping" style="color:#d29922;font-size:0.82em;margin-top:2px;" title="The viewer left. The encoder stays warm briefly so tuning back in is instant. Kill stops it now.">' +
+                'No viewers. Stopping in ~' + s.StopsInSeconds + 's</div>'
             : '';
         return '<div class="jpk-record-card lc-session" data-id="' + Shared.escapeHtml(s.Id) + '" data-name="' + Shared.escapeHtml(s.Name || '') + '"' +
             (winding ? ' style="opacity:0.6"' : '') + ' title="Show this session\'s ffmpeg logs">' +

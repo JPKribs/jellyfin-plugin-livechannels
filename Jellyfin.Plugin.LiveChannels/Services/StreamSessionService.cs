@@ -82,7 +82,13 @@ public class StreamSessionService
         // wall clock the guide shows. A restarted producer (non-zero timeline) is continuing under a viewer and
         // never replays the card.
         var lead = TimeSpan.Zero;
-        if (timelineBase == TimeSpan.Zero && _intros.TryGetCached(channel) is { } intro)
+        var card = timelineBase == TimeSpan.Zero ? _intros.TryGetCached(channel) : null;
+        if (timelineBase == TimeSpan.Zero && card is null)
+        {
+            _logger.LogInformation("Live Channels: {Name}: no tune-in card is rendered for the current output settings yet; opening straight on content", channel.Name);
+        }
+
+        if (card is { } intro)
         {
             try
             {
