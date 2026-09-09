@@ -32,6 +32,7 @@ public class StreamSessionService
     private readonly IMediaEncoder _encoder;
     private readonly ChannelService _channels;
     private readonly EncoderResolver _encoders;
+    private readonly IntroService _intros;
     private readonly ILogger<StreamSessionService> _logger;
 
     /// <summary>
@@ -40,12 +41,14 @@ public class StreamSessionService
     /// <param name="encoder">The media encoder, used to locate ffmpeg.</param>
     /// <param name="channels">The channel service, used to resolve and schedule the channel's items.</param>
     /// <param name="encoders">The encoder resolver, used to pick software/hardware encoders.</param>
+    /// <param name="intros">The tune-in card cache, played ahead of the first item of a fresh session.</param>
     /// <param name="logger">The logger.</param>
-    public StreamSessionService(IMediaEncoder encoder, ChannelService channels, EncoderResolver encoders, ILogger<StreamSessionService> logger)
+    public StreamSessionService(IMediaEncoder encoder, ChannelService channels, EncoderResolver encoders, IntroService intros, ILogger<StreamSessionService> logger)
     {
         _encoder = encoder;
         _channels = channels;
         _encoders = encoders;
+        _intros = intros;
         _logger = logger;
     }
 
@@ -69,6 +72,38 @@ public class StreamSessionService
         {
             _logger.LogError("No ffmpeg encoder is configured; cannot stream channel {Name}", channel.Name);
             return;
+        }
+
+        // A fresh session opens on the tune-in card: its bytes go into the segmenter right now, before the
+        // schedule is even resolved, so the first segment closes (and the tune-in completes) within a fraction of
+        // a second while the real content is seeked and encoded behind it. The first producer then chains its
+        // timeline from the card's true end exactly as every item chains from the previous one, and the
+        // schedule position it seeks to is advanced by the card's length so the content still lands on the
+        // wall clock the guide shows. A restarted producer (non-zero timeline) is continuing under a viewer and
+        // never replays the card.
+        var lead = TimeSpan.Zero;
+        if (timelineBase == TimeSpan.Zero && _intros.TryGetCached(channel) is { } intro)
+        {
+            try
+            {
+                var file = new FileStream(intro.Path, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, useAsync: true);
+                await using (file.ConfigureAwait(false))
+                {
+                    await file.CopyToAsync(output, BufferSize, cancellationToken).ConfigureAwait(false);
+                }
+
+                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                timelineBase = NextTimeline(TimeSpan.Zero, intro.Duration, intro.EndSeconds);
+                lead = intro.Duration;
+                _logger.LogInformation("Live Channels: {Name}: opened on the tune-in card ({Seconds:F1}s, content chains at {Timeline:F3}s)", channel.Name, intro.Duration.TotalSeconds, timelineBase.TotalSeconds);
+                stats?.AppendLog("Tune-in card: " + intro.Duration.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture) + "s from " + intro.Path + ", content chains at " + timelineBase.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture) + "s");
+            }
+            catch (IOException ex)
+            {
+                // The card could not be delivered (an unreadable cache file, or the segmenter has already gone):
+                // carry on without it; a dead segmenter fails the producer the same way a moment later.
+                _logger.LogWarning(ex, "Live Channels: {Name}: could not play the tune-in card; starting on content", channel.Name);
+            }
         }
 
         var programs = _channels.ResolvePrograms(channel);
@@ -109,9 +144,9 @@ public class StreamSessionService
 
         if (!perItem)
         {
-            var (concatIndex, _) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow, ScheduleCalculator.Epoch);
+            var (concatIndex, _) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow + lead, ScheduleCalculator.Epoch);
             LogEncodePlan(channel, programs.Count, concatIndex, perItem, uniform, hasHdr);
-            await StreamConcatAsync(ffmpeg, channel, programs, output, cancellationToken, stats, timelineBase).ConfigureAwait(false);
+            await StreamConcatAsync(ffmpeg, channel, programs, output, cancellationToken, stats, timelineBase, lead).ConfigureAwait(false);
             return;
         }
 
@@ -124,7 +159,7 @@ public class StreamSessionService
         }
         else
         {
-            var (index, offset) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow, ScheduleCalculator.Epoch);
+            var (index, offset) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow + lead, ScheduleCalculator.Epoch);
             schedule = new LoopStreamSchedule(programs, index, offset);
             planIndex = index;
         }
@@ -132,14 +167,6 @@ public class StreamSessionService
         LogEncodePlan(channel, programs.Count, planIndex, perItem, uniform, hasHdr);
         await StreamPerItemLoopAsync(ffmpeg, channel, schedule, output, cancellationToken, stats, timelineBase).ConfigureAwait(false);
     }
-
-    /// <summary>
-    /// The configured start-up buffer in seconds, clamped to a workable range. It is how much already-encoded
-    /// content a tune-in waits for before playback begins, and it sets how far ahead of realtime the producer runs.
-    /// </summary>
-    /// <returns>The buffer in seconds.</returns>
-    public static int BufferSeconds()
-        => Plugin.Instance?.ReadConfiguration(c => c.EffectiveStartupBufferSeconds()) ?? PluginConfiguration.DefaultStartupBufferSeconds;
 
     /// <summary>
     /// Streams the channel as a self-trimming HLS playlist in <paramref name="hlsDir"/>. A long-lived segmenter
@@ -235,7 +262,7 @@ public class StreamSessionService
     // Streams the channel as ONE continuous ffmpeg using the concat demuxer, so item boundaries are seamless
     // (no timestamp or continuity reset). Software decode (hardware decoders fail on the per-segment resolution
     // changes a playlist produces) with the hardware encoder.
-    private async Task StreamConcatAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan timelineBase = default)
+    private async Task StreamConcatAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan timelineBase = default, TimeSpan lead = default)
     {
         var playable = programs.Where(p => !string.IsNullOrEmpty(p.Path) && File.Exists(p.Path)).ToList();
         if (playable.Count == 0)
@@ -270,7 +297,7 @@ public class StreamSessionService
             // strikes drop hardware decode, and after a few more stop thrashing and show standby, rather than
             // relaunching an encoder every few seconds for as long as the bad item stays on the schedule.
             var shortRuns = 0;
-            var headStart = StreamArguments.HeadStartFor(BufferSeconds());
+            var headStart = StreamArguments.InitialBurstSeconds;
             var timeline = timelineBase;
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -281,7 +308,10 @@ public class StreamSessionService
                 // the exact play order while turning the seek into an index hop inside the first file. The list
                 // is rewritten every (re)start because the rotation point is the current wall-clock position.
                 // The concat demuxer reads "file '<path>'" lines; single quotes in a path escape as '\''.
-                var (index, intoItem) = ScheduleCalculator.CurrentProgram(playable, DateTime.UtcNow, ScheduleCalculator.Epoch);
+                // The first start is offset by the tune-in card it follows (so content lands on the wall clock once
+                // the card ends); a restart resumes at plain "now".
+                var (index, intoItem) = ScheduleCalculator.CurrentProgram(playable, DateTime.UtcNow + lead, ScheduleCalculator.Epoch);
+                lead = TimeSpan.Zero;
                 await File.WriteAllLinesAsync(
                     listFile,
                     Rotate(playable, index).Select(p => "file '" + p.Path!.Replace("'", "'\\''", StringComparison.Ordinal) + "'"),
@@ -387,7 +417,7 @@ public class StreamSessionService
         // realtime. Every producer therefore bursts the session's current deficit against this anchor: the first
         // item's deficit is exactly the full head start, later items' exactly the wall clock the boundaries lost.
         var sessionStart = DateTime.UtcNow;
-        var headStart = StreamArguments.HeadStartFor(BufferSeconds());
+        var headStart = StreamArguments.InitialBurstSeconds;
         double BurstNow() => StreamArguments.BurstForDeficit(DateTime.UtcNow - sessionStart, timeline - timelineBase, headStart);
 
         while (!cancellationToken.IsCancellationRequested)

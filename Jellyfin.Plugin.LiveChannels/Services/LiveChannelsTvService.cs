@@ -68,6 +68,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     private readonly ChannelService _channels;
     private readonly StreamSessionService _streams;
     private readonly DefaultLogoService _defaultLogo;
+    private readonly IntroService _intros;
     private readonly ActivityLogger _activity;
     private readonly TimerService _timers;
     private readonly RecordingService _recordings;
@@ -106,6 +107,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <param name="channels">The channel service, used to resolve channels and their schedule.</param>
     /// <param name="streams">The stream session service, used to produce each channel's ffmpeg feed.</param>
     /// <param name="defaultLogo">The generated fallback-logo service.</param>
+    /// <param name="intros">The tune-in card cache, kept current at guide refresh and tune-in.</param>
     /// <param name="activity">The activity logger, used to record channel start/stop in Jellyfin's activity log.</param>
     /// <param name="timers">The timer store, backing the DVR timer surface.</param>
     /// <param name="recordings">The recording service, which fulfils timers by materializing their recordings.</param>
@@ -114,11 +116,12 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <param name="appHost">The application host, used to build the internal live stream endpoint URL each opened source points at.</param>
     /// <param name="appPaths">The application paths, used to default the stream directory under Jellyfin's cache.</param>
     /// <param name="logger">The logger.</param>
-    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, ActivityLogger activity, TimerService timers, RecordingService recordings, StressTestService stress, ISessionManager sessionManager, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
+    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, IntroService intros, ActivityLogger activity, TimerService timers, RecordingService recordings, StressTestService stress, ISessionManager sessionManager, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
     {
         _channels = channels;
         _streams = streams;
         _defaultLogo = defaultLogo;
+        _intros = intros;
         _activity = activity;
         _timers = timers;
         _recordings = recordings;
@@ -188,6 +191,10 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 info.ImagePath = logo;
                 info.HasImage = true;
             }
+
+            // Keep the channel's tune-in card current with its logo and the output profile. Renders run in the
+            // background, one at a time, so the guide refresh is not held up and live sessions are not starved.
+            _ = _intros.EnsureAsync(channel, logo);
 
             result.Add(info);
         }
@@ -447,8 +454,12 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         // session was joined (its logo is already set).
         session.LogoPath ??= await EnsureLogoAsync(channel, CancellationToken.None).ConfigureAwait(false);
 
+        // A card missing or stale for this channel (first tune-in after a config change, before the next guide
+        // refresh got to it) is rendered now, in the background, for the next tune-in; this one never waits.
+        _ = _intros.EnsureAsync(channel, session.LogoPath);
+
         // Jellyfin probes the opened stream immediately, so wait until the segmenter has written the playlist and
-        // a couple of segments, and if the producer dies with nothing, drop this consumer (tearing the session
+        // its first segment, and if the producer dies with nothing, drop this consumer (tearing the session
         // down if it was the only one) and surface a clear failure rather than handing over an empty session.
         try
         {
@@ -1436,7 +1447,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             Protocol = MediaProtocol.File,
             Container = "mpegts",
             IsInfiniteStream = true,
-            BufferMs = StreamSessionService.BufferSeconds() * 1000,
+            BufferMs = 0,
             RequiresOpening = true,
             RequiresClosing = true,
             SupportsDirectPlay = false,
@@ -1468,11 +1479,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             // availability at the live edge. Adding -re on top caps it at 1x realtime even when it is behind, so
             // the client buffer could only ever fill at realtime (slow tune-in) and a reader that hiccuped could
             // never catch back up before falling off the back of the delete window.
-            // Pre-roll the configured start-up buffer on the client so playback starts on a full buffer instead
-            // of stuttering while it fills (the declarative form of pausing briefly then resuming on tune-in).
-            // The handover already waited for that much content to exist, so this fills at I/O speed off the disk
-            // rather than at realtime.
-            BufferMs = StreamSessionService.BufferSeconds() * 1000,
+            // BufferMs is NOT a client pre-roll hint. The only thing Jellyfin does with it is sleep for exactly that
+            // long before it launches the delivery ffmpeg (TranscodeManager.AcquireResources), on every tune-in,
+            // adoption included -- and left unset it defaults to 1.5s. Zero it: the cushion the viewer starts on
+            // is the backlog already on disk, which the delivery reads at I/O speed the moment it starts.
+            BufferMs = 0,
             RequiresOpening = false,
             RequiresClosing = true,
             SupportsDirectPlay = false,
@@ -1484,20 +1495,21 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
 
     private static async Task WaitForPlaylistAsync(string playlist, Task worker, CancellationToken cancellationToken)
     {
-        // Hand Jellyfin the playlist only once the segmenter has written it and buffered the configured start-up
-        // cushion, so playback starts on content that already exists instead of chasing the encoder (the per-item
-        // path spawns a fresh ffmpeg per item, and these buffered segments ride over the gap between items). The
-        // producer bursts well ahead of realtime, so filling the cushion costs a fraction of its length in real
-        // time, and it keeps filling past this gate while Jellyfin spins up its own repackager.
-        var minSegments = StreamArguments.SegmentsForBuffer(StreamSessionService.BufferSeconds());
+        // Hand the session to Jellyfin as soon as the segmenter has written the playlist and ONE finished segment:
+        // that is what the open-stream probe needs (a segment is longer than its analyze window), and everything
+        // after the handover -- Jellyfin's own wait for enough delivery segments, the player's start-up buffer --
+        // overlaps with the producer's burst instead of queueing behind it. Waiting here for a deeper cushion
+        // only added the cushion's encode time to every tune-in, while Jellyfin holds its global live-stream lock
+        // (so every other tune-in on the server queued behind it too); the reserve that rides over item
+        // boundaries is applied by the endpoint reader instead (see DirectLiveStream.HoldBehindFor), which
+        // ramps it in while the burst is running ahead rather than before playback can start.
+        const int MinSegments = 1;
         var dir = Path.GetDirectoryName(playlist) ?? string.Empty;
 
-        // The deadline scales with the cushion: a deep buffer legitimately takes longer to fill, and a tune-in
-        // must never be failed for waiting exactly as long as it was told to.
-        var deadline = DateTime.UtcNow.AddSeconds(20 + (minSegments * (double)StreamArguments.SegmentSeconds));
+        var deadline = DateTime.UtcNow.AddSeconds(20 + StreamArguments.SegmentSeconds);
         while (DateTime.UtcNow < deadline && !worker.IsCompleted)
         {
-            if (File.Exists(playlist) && CountSegments(dir) >= minSegments)
+            if (File.Exists(playlist) && CountSegments(dir) >= MinSegments)
             {
                 return;
             }

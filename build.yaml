@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "12.0.0.0"
+version: "12.0.1.0"
 targetAbi: "12.0.0.0"
 framework: "net10.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -15,8 +15,11 @@ owner: "JPKribs"
 artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
+  user:
+  - Tune-in is now immediate. A channel opens on a short animated card (its logo and a Starting Channel caption over flowing lines) the moment you tune in, while the content is seeked and encoded behind it, and the picture no longer waits ten seconds or more for a buffer to fill first
+  - The Start-up buffer setting is gone. It turned out to be a literal pause Jellyfin applied before every tune-in rather than a buffer, and the cushion it was meant to provide is now built up while you are already watching
   developer:
-  - Bump base to 2026.07.31
-  - Rebuilt for Jellyfin 12.0 on .NET 10, with the target ABI raised to 12.0.0.0
-  - The dashboard menu entry now shows a live_tv icon instead of the generic folder
-  - CI builds, tests, and CodeQL now run on .NET 10, and label sync has the token scope it needs
+  - Removed StartupBufferSeconds and BufferMs (Jellyfin sleeps for BufferMs in TranscodeManager.AcquireResources before launching the delivery ffmpeg, on every tune-in including adoption)
+  - The tune-in handover now waits for the playlist and one segment instead of the full cushion, and the endpoint reader's hold-back ramps in one segment per ten seconds of session age instead of applying from the first byte
+  - Segments and the encoder GOP are now three seconds, matching Jellyfin's delivery remux so every stage cuts on the same keyframes
+  - New IntroService renders each channel's card once per output profile and logo (two passes: visual, then the channel's own encoder) and feeds it through the segmenter as the first item; the first producer chains from the card's probed end and seeks the schedule ahead by the card's length so content still lands on the wall clock

@@ -163,7 +163,6 @@ The card shows which accelerator channel streams will use, read from Jellyfin's 
 | Setting | What it does | Default |
 | --- | --- | --- |
 | **Default language** | Your native language. A channel set to **Forced only** burns full subtitles when content's audio is in another language, so foreign content stays followable. | English |
-| **Start-up buffer (seconds)** | How much of a channel is encoded before playback starts, and how far ahead of you the encoder stays afterwards. Raise it if the first seconds of a tune in stutter, at the cost of a slightly longer wait for the picture. Accepts 4 to 60. | 12 |
 
 ### Subtitle appearance
 

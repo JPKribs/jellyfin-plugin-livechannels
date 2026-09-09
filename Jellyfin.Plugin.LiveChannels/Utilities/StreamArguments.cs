@@ -24,18 +24,27 @@ public static class StreamArguments
     // accumulated deficit (see BurstForDeficit), which restores the live edge to schedule without ever lurching it
     // past where a full-head-start session would be.
     private const string RealtimeReadRate = "1.0";
+    private static readonly string GopFrames = (OutputFps * SegmentSeconds).ToString(CultureInfo.InvariantCulture);
     private const double MinBurstSeconds = 0.05;
 
     /// <summary>
-    /// The default tune-in head start in seconds: how much content the first item (or the single concat ffmpeg)
-    /// bursts ahead of realtime before the player joins, and the cap on any later item's catch-up burst. A channel
-    /// whose configured start-up buffer is larger raises it (see <see cref="HeadStartFor"/>), so the producer is
-    /// always comfortably further ahead than the cushion the viewer waits for.
+    /// The tune-in head start in seconds: how much content the first item (or the single concat ffmpeg) bursts
+    /// ahead of realtime before the player joins, and the cap on any later item's catch-up burst. It is the
+    /// standing lead the producer keeps over the viewer for the life of the session.
     /// </summary>
     public const double InitialBurstSeconds = 30;
 
-    /// <summary>The length of one HLS segment in seconds; the granularity of every buffer measured in segments.</summary>
-    public const int SegmentSeconds = 4;
+    /// <summary>
+    /// The length of one HLS segment in seconds; the granularity of every buffer measured in segments. It matches
+    /// the 3-second segments Jellyfin's own delivery remux cuts (and is an exact divisor of the 6-second ones it
+    /// cuts for Apple players), and the encoder's GOP is one segment long, so every stage cuts on the same
+    /// keyframes: the first segment closes as early as it can, and no stage ever waits for a keyframe the stage
+    /// before it did not already cut on.
+    /// </summary>
+    public const int SegmentSeconds = 3;
+
+    /// <summary>The fixed output frame rate every item is conformed to.</summary>
+    public const int OutputFps = 30;
 
     // The HLS segmenter packages the producer's continuous TS into a rolling, self-trimming playlist of fixed
     // length segments. How many segments are retained (the window) is fixed by the caller (see
@@ -305,11 +314,11 @@ public static class StreamArguments
             args.Add(extra);
         }
 
-        // -g 60 is a 2-second GOP at the fixed 30 fps, an exact divisor of the 4-second HLS segments, so the
-        // segmenter cuts every segment at precisely 4.0s (with -g 50 the first keyframe past the 4s mark landed
-        // at 5.0s, stretching every segment and delaying the first one at tune-in).
+        // One GOP per HLS segment at the fixed frame rate, so the segmenter (and Jellyfin's delivery remux behind
+        // it) cuts every segment at precisely SegmentSeconds: the first segment closes as early as possible at
+        // tune-in and none is stretched waiting for a keyframe that lands past the mark.
         Add(args, "-b:v", br + "k", "-maxrate", br + "k",
-            "-bufsize", (bitrate * 2).ToString(CultureInfo.InvariantCulture) + "k", "-g", "60");
+            "-bufsize", (bitrate * 2).ToString(CultureInfo.InvariantCulture) + "k", "-g", GopFrames);
 
         // Re-sample audio to a constant 48 kHz stereo track and let aresample fill or drop samples to keep it
         // locked to the video, so audio never drifts out of sync within or across items.
@@ -446,9 +455,9 @@ public static class StreamArguments
             args.Add(extra);
         }
 
-        // 2-second GOP: an exact divisor of the 4-second HLS segments, so segment cuts land at precisely 4.0s.
+        // One GOP per HLS segment, so segment cuts land at precisely SegmentSeconds (see Build).
         Add(args, "-b:v", br + "k", "-maxrate", br + "k",
-            "-bufsize", (bitrate * 2).ToString(CultureInfo.InvariantCulture) + "k", "-g", "60");
+            "-bufsize", (bitrate * 2).ToString(CultureInfo.InvariantCulture) + "k", "-g", GopFrames);
 
         var abr = audioBitrate.ToString(CultureInfo.InvariantCulture);
         Add(args, "-c:a", audioEncoder, "-b:a", abr + "k", "-ac", "2", "-ar", "48000", "-af", "aresample=async=1:min_hard_comp=0.100");
@@ -520,7 +529,7 @@ public static class StreamArguments
             Add(args, "-vf", "format=yuv420p");
         }
 
-        Add(args, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-b:v", br + "k", "-g", "60");
+        Add(args, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-b:v", br + "k", "-g", GopFrames);
         Add(args, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000");
 
         if (timeline > TimeSpan.Zero)
@@ -541,28 +550,6 @@ public static class StreamArguments
     /// <returns>The segment count for the playlist window.</returns>
     public static int SegmentsForWindow(int windowMinutes) =>
         Math.Max(MinHlsSegments, Math.Max(1, windowMinutes) * 60 / HlsSegmentSeconds);
-
-    /// <summary>
-    /// How many finished segments cover the configured start-up buffer: the cushion of already-encoded content a
-    /// tune-in waits for before playback is handed to the player, so the first seconds (the probe, the player's
-    /// own start-up, and the first item boundary) play out of the buffer instead of off the encoder's heels.
-    /// Never fewer than two, so even a tiny buffer hands over something a player can work with.
-    /// </summary>
-    /// <param name="bufferSeconds">The configured start-up buffer in seconds.</param>
-    /// <returns>The number of segments to wait for.</returns>
-    public static int SegmentsForBuffer(int bufferSeconds)
-        => Math.Max(2, (Math.Max(0, bufferSeconds) + HlsSegmentSeconds - 1) / HlsSegmentSeconds);
-
-    /// <summary>
-    /// The tune-in head start for a given start-up buffer: how far ahead of realtime the producer runs before the
-    /// player joins. It must exceed the buffer itself (the buffer is filled OUT of the head start), with enough
-    /// margin left over for the probe, the handover, and the reserve the delivery reader holds back, so a viewer
-    /// who asked for a deep cushion still gets it without the tune-in wait running to its deadline.
-    /// </summary>
-    /// <param name="bufferSeconds">The configured start-up buffer in seconds.</param>
-    /// <returns>The head start in seconds.</returns>
-    public static double HeadStartFor(int bufferSeconds)
-        => Math.Max(InitialBurstSeconds, Math.Max(0, bufferSeconds) + (2 * HlsSegmentSeconds) + 10);
 
     /// <summary>
     /// Computes the catch-up burst for a per-item producer, anchored to the session's wall clock. The live edge

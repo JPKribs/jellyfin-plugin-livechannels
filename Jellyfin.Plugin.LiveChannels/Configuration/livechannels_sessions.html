@@ -4,23 +4,27 @@
      data-controller="__plugin/livechannels_sessions.js">
     <div data-role="content">
         <div class="content-primary">
-            <div class="verticalSection verticalSection-extrabottompadding">
+            <!-- The form has nothing to submit; it is here because Jellyfin's dashboard styles size a page's form to
+                 the standard content width, and every other tab is laid out inside one. -->
+            <form id="LiveChannelsSessionsForm" onsubmit="return false;">
+                <div class="verticalSection verticalSection-extrabottompadding">
 
-                <div class="sectionTitleContainer flex align-items-center">
-                    <h1 class="sectionTitle">Sessions</h1>
+                    <div class="sectionTitleContainer flex align-items-center">
+                        <h1 class="sectionTitle">Sessions</h1>
+                    </div>
+
+                    <div class="fieldDescription">
+                        Every channel currently encoding on the server, refreshed as you watch. Each one shows when it started, how long it has run, and how fast it is transcoding, where 1.0x keeps up with realtime. Select a session to review its ffmpeg logs, copy them for diagnostics, or kill the stream.
+                    </div>
+
+                    <div id="sessionsEmpty" class="jpk-empty-section hidden">No channels are streaming right now.</div>
+
+                    <div id="sessionList" class="jpk-source-list"></div>
+
+                    <span id="sessionsStatus" class="jpk-status-text"></span>
+
                 </div>
-
-                <div class="fieldDescription">
-                    Every channel currently encoding on the server, refreshed as you watch. Each one shows when it started, how long it has run, and how fast it is transcoding, where 1.0x keeps up with realtime. Select a session to review its ffmpeg logs, copy them for diagnostics, or kill the stream.
-                </div>
-
-                <div id="sessionsEmpty" class="jpk-empty-section hidden">No channels are streaming right now.</div>
-
-                <div id="sessionList" class="jpk-source-list"></div>
-
-                <span id="sessionsStatus" class="jpk-status-text"></span>
-
-            </div>
+            </form>
         </div>
     </div>
 

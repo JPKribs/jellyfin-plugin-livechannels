@@ -488,23 +488,15 @@ public class StreamArgumentsTests
         Assert.DoesNotContain("-output_ts_offset", first);
     }
 
-    [Theory]
-    [InlineData(4, 2)]     // the floor: never hand over on less than two segments
-    [InlineData(12, 3)]    // the default buffer
-    [InlineData(13, 4)]    // rounds up: a partial segment does not count as buffered
-    [InlineData(60, 15)]
-    public void SegmentsForBuffer_RoundsUpToWholeSegments(int bufferSeconds, int expected)
-        => Assert.Equal(expected, StreamArguments.SegmentsForBuffer(bufferSeconds));
-
-    [Theory]
-    [InlineData(12, 30)]   // the default buffer sits well inside the standard head start
-    [InlineData(4, 30)]
-    [InlineData(30, 48)]   // a deep buffer raises the head start so it can actually be filled
-    [InlineData(60, 78)]
-    public void HeadStart_AlwaysExceedsTheBufferItHasToFill(int bufferSeconds, double expected)
+    [Fact]
+    public void Gop_IsExactlyOneSegmentLong()
     {
-        Assert.Equal(expected, StreamArguments.HeadStartFor(bufferSeconds));
-        Assert.True(StreamArguments.HeadStartFor(bufferSeconds) > bufferSeconds);
+        // Every stage (producer, segmenter, Jellyfin's delivery remux) cuts on the same keyframes only if the GOP
+        // is exactly one segment at the fixed frame rate.
+        var args = StreamArguments.Build("/tmp/a.mkv", TimeSpan.Zero, TimeSpan.Zero, 1280, 4000, SoftwareH264, "aac", 192, null);
+        Assert.True(Pair(args, "-g", (StreamArguments.OutputFps * StreamArguments.SegmentSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        Assert.Contains("fps=" + StreamArguments.OutputFps, string.Join(" ", args), StringComparison.Ordinal);
+        Assert.Equal(StreamArguments.SegmentSeconds, 3);
     }
 
     [Fact]

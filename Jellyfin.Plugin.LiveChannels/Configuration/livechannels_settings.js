@@ -139,7 +139,6 @@ export default function (view) {
         el('sessionTimeout').value = config.SessionTimeoutMinutes == null ? 0 : config.SessionTimeoutMinutes;
         el('streamDirectory').value = config.StreamDirectory || '';
         el('disableHwa').checked = !!config.DisableHardwareAcceleration;
-        el('startupBuffer').value = config.StartupBufferSeconds ? config.StartupBufferSeconds : 12;
         el('subFont').value = config.SubtitleFont || '';
         el('subScale').value = config.SubtitleFontScalePercent ? config.SubtitleFontScalePercent : 100;
         el('subTextColor').value = config.SubtitleTextColor || '';
@@ -187,8 +186,6 @@ export default function (view) {
             fresh.StreamDirectory = (el('streamDirectory').value || '').trim();
             fresh.DisableHardwareAcceleration = el('disableHwa').checked;
             fresh.DefaultSubtitleLanguage = (langSelect ? langSelect.getValue() : '') || 'eng';
-            var buffer = parseInt(el('startupBuffer').value, 10);
-            fresh.StartupBufferSeconds = isNaN(buffer) ? 12 : Math.min(60, Math.max(4, buffer));
             fresh.SubtitleFont = (el('subFont').value || '').trim();
             var scale = parseInt(el('subScale').value, 10);
             fresh.SubtitleFontScalePercent = isNaN(scale) ? 100 : Math.min(300, Math.max(50, scale));

@@ -99,17 +99,6 @@ public static class ConfigurationValidator
 
         ValidateStreamDirectory(config.StreamDirectory);
 
-        if (config.StartupBufferSeconds != 0
-            && config.StartupBufferSeconds is < PluginConfiguration.MinStartupBufferSeconds or > PluginConfiguration.MaxStartupBufferSeconds)
-        {
-            throw new ArgumentException(
-                "Start-up buffer must be between "
-                + PluginConfiguration.MinStartupBufferSeconds.ToString(CultureInfo.InvariantCulture)
-                + " and "
-                + PluginConfiguration.MaxStartupBufferSeconds.ToString(CultureInfo.InvariantCulture)
-                + " seconds.");
-        }
-
         // Zero means "never set" (a configuration saved before subtitle styling existed), which renders at the
         // subtitle's own size.
         if (config.SubtitleFontScalePercent != 0

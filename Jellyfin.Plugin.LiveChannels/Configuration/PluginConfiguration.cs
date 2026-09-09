@@ -10,15 +10,6 @@ namespace Jellyfin.Plugin.LiveChannels.Configuration;
 /// </summary>
 public class PluginConfiguration : BasePluginConfiguration
 {
-    /// <summary>The start-up buffer used when none is configured.</summary>
-    public const int DefaultStartupBufferSeconds = 12;
-
-    /// <summary>The smallest start-up buffer accepted. Below this the player joins on the encoder's heels.</summary>
-    public const int MinStartupBufferSeconds = 4;
-
-    /// <summary>The largest start-up buffer accepted, bounded by the rolling segment window on disk.</summary>
-    public const int MaxStartupBufferSeconds = 60;
-
     /// <summary>Gets or sets the configured virtual channels.</summary>
     public List<Channel> Channels { get; set; } = new();
 
@@ -45,9 +36,6 @@ public class PluginConfiguration : BasePluginConfiguration
 
     /// <summary>Gets or sets the viewer's native language, as a three-letter ISO code (e.g. <c>eng</c>). With a channel's subtitle rule set to Forced only, content whose default audio track is not this language burns in subtitles so foreign-language content stays followable.</summary>
     public string DefaultSubtitleLanguage { get; set; } = "eng";
-
-    /// <summary>Gets or sets how many seconds of a channel are encoded and buffered before playback is handed to the player. A larger cushion rides out the first seconds of a tune-in (probe, player start-up, and the first item boundary) without stuttering, at the cost of waiting slightly longer before the picture appears. The producer always stays at least this far ahead of the viewer.</summary>
-    public int StartupBufferSeconds { get; set; } = 12;
 
     /// <summary>Gets or sets the font burned-in subtitles are rendered in, by family name (e.g. <c>Arial</c>). Empty uses the subtitle file's own font, falling back to the renderer's default.</summary>
     public string SubtitleFont { get; set; } = string.Empty;
@@ -90,15 +78,4 @@ public class PluginConfiguration : BasePluginConfiguration
         EpisodesPerBlock = 4,
         IncludeUnrated = true
     };
-
-    /// <summary>
-    /// The start-up buffer actually used, clamping a value stored by an older version (or by an API client) into
-    /// the workable range: too small and the player joins on the encoder's heels, too large and the wait before
-    /// the picture appears outgrows the rolling window on disk.
-    /// </summary>
-    /// <returns>The buffer in seconds.</returns>
-    public int EffectiveStartupBufferSeconds()
-        => StartupBufferSeconds <= 0
-            ? DefaultStartupBufferSeconds
-            : Math.Clamp(StartupBufferSeconds, MinStartupBufferSeconds, MaxStartupBufferSeconds);
 }

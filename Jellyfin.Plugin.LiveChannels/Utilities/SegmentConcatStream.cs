@@ -19,7 +19,7 @@ public sealed class SegmentConcatStream : Stream
 {
     private readonly string _directory;
     private readonly int _startBehind;
-    private readonly int _holdBehind;
+    private readonly Func<int> _holdBehind;
     private readonly Action<string>? _log;
     private readonly Action? _onData;
     private FileStream? _segment;
@@ -36,23 +36,23 @@ public sealed class SegmentConcatStream : Stream
     /// <param name="startBehind">How many segments behind the newest to start, clamped to what the window still
     /// holds. Everything between the start position and the held-back edge is served at I/O speed, giving the
     /// consumer an instant opening backlog.</param>
-    /// <param name="holdBehind">How many of the newest segments to withhold. Live HLS players sync a fixed few
-    /// segments behind whatever edge the delivery remux exposes, so serving right up to the producer's newest
-    /// segment puts every viewer one encoder hiccup from a stall; holding the edge back keeps that many segments
-    /// in reserve, and producer gaps shorter than the reserve are absorbed invisibly. Clamped so at least the
-    /// oldest available segment is always servable (a brand-new session must still feed the probe).</param>
+    /// <param name="holdBehind">Reports how many of the newest segments to withhold, consulted on every segment
+    /// step so the reserve can grow as the session matures. Live HLS players sync a fixed few segments behind
+    /// whatever edge the delivery remux exposes, so serving right up to the producer's newest segment puts every
+    /// viewer one encoder hiccup from a stall; holding the edge back keeps that many segments in reserve, and
+    /// producer gaps shorter than the reserve are absorbed invisibly. Clamped so at least the oldest available
+    /// segment is always servable (a brand-new session must still feed the probe). Null withholds nothing.</param>
     /// <param name="onData">Optional sink called whenever bytes are actually served. Delivering data is the one
     /// unambiguous sign that someone is watching (a client that vanished cannot keep pulling), so the session
     /// uses it to refuse to shut a stream down out from under a live viewer.</param>
-    public SegmentConcatStream(string directory, Action<string>? log = null, int startBehind = 2, int holdBehind = 0, Action? onData = null)
+    public SegmentConcatStream(string directory, Action<string>? log = null, int startBehind = 2, Func<int>? holdBehind = null, Action? onData = null)
     {
         ArgumentNullException.ThrowIfNull(directory);
         ArgumentOutOfRangeException.ThrowIfNegative(startBehind);
-        ArgumentOutOfRangeException.ThrowIfNegative(holdBehind);
         _directory = directory;
         _log = log;
         _startBehind = startBehind;
-        _holdBehind = holdBehind;
+        _holdBehind = holdBehind ?? (static () => 0);
         _onData = onData;
     }
 
@@ -192,7 +192,7 @@ public sealed class SegmentConcatStream : Stream
             // The newest segment this reader is allowed to serve: the true edge minus the hold-back, clamped so
             // the oldest segment is always servable (a session too young to satisfy the full hold-back must
             // still feed the probe and the delivery's first bytes).
-            var maxServable = numbers[^1] - Math.Min(_holdBehind, numbers[^1] - numbers[0]);
+            var maxServable = numbers[^1] - Math.Min(Math.Max(0, _holdBehind()), numbers[^1] - numbers[0]);
 
             if (_number < 0)
             {

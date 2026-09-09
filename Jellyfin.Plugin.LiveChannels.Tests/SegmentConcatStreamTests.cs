@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text;
+using Jellyfin.Plugin.LiveChannels.Services;
 using Jellyfin.Plugin.LiveChannels.Utilities;
 using Xunit;
 
@@ -93,7 +94,7 @@ public sealed class SegmentConcatStreamTests : IDisposable
             WriteSegment(i, "s" + i + "|");
         }
 
-        using var stream = new SegmentConcatStream(_dir, log: null, startBehind: 20, holdBehind: 3);
+        using var stream = new SegmentConcatStream(_dir, log: null, startBehind: 20, holdBehind: () => 3);
 
         // seg7, seg8, and seg9 are the producer's reserve; the reader stops at seg6.
         Assert.Equal("s0|s1|s2|s3|s4|s5|s6|", ReadAll(stream));
@@ -104,13 +105,55 @@ public sealed class SegmentConcatStreamTests : IDisposable
     }
 
     [Fact]
+    public void HoldBehindIsConsultedLiveSoTheReserveCanGrowMidStream()
+    {
+        for (var i = 0; i <= 5; i++)
+        {
+            WriteSegment(i, "s" + i + "|");
+        }
+
+        // Starts with no reserve (a brand-new session serves everything it has), then the reserve is raised.
+        var hold = 0;
+        using var stream = new SegmentConcatStream(_dir, log: null, startBehind: 20, holdBehind: () => hold);
+        Assert.Equal("s0|s1|s2|s3|s4|s5|", ReadAll(stream));
+
+        hold = 2;
+        WriteSegment(6, "s6|");
+        WriteSegment(7, "s7|");
+        WriteSegment(8, "s8|");
+
+        // seg7 and seg8 are now the reserve.
+        Assert.Equal("s6|", ReadAll(stream));
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(29, 0)]
+    [InlineData(30, 1)]
+    [InlineData(45, 2)]
+    [InlineData(60, 4)]
+    [InlineData(3600, 4)]
+    public void HoldBehindRampsInOneSegmentPerStepUpToTheFullReserve(int ageSeconds, int expected)
+        => Assert.Equal(expected, DirectLiveStream.HoldBehindFor(TimeSpan.FromSeconds(ageSeconds)));
+
+    [Fact]
+    public void FreshReadersStartOnTheWholeBurst()
+    {
+        // A reader joining a fresh session must start at least the full initial burst behind the edge, so the
+        // tune-in position (the oldest segment) is where playback begins, and an established reader must start
+        // ahead of the hold-back so it always has something servable.
+        Assert.True(DirectLiveStream.FreshStartBehind * StreamArguments.SegmentSeconds >= StreamArguments.InitialBurstSeconds + IntroService.IntroSeconds);
+        Assert.True(DirectLiveStream.FreshStartBehind > DirectLiveStream.HoldBehind);
+    }
+
+    [Fact]
     public void HoldBehindClampsOnYoungSessionsSoTheOldestSegmentIsServable()
     {
         // A brand-new session (probe time) has fewer segments than the hold-back; the oldest must still serve.
         WriteSegment(0, "AAA");
         WriteSegment(1, "BBB");
 
-        using var stream = new SegmentConcatStream(_dir, log: null, startBehind: 8, holdBehind: 3);
+        using var stream = new SegmentConcatStream(_dir, log: null, startBehind: 8, holdBehind: () => 3);
         Assert.Equal("AAA", ReadAll(stream));
     }
 
