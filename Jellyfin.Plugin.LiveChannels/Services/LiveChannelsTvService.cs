@@ -1565,10 +1565,12 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     // Jellyfin's live-TV provider force-flags every plugin-provided video stream as interlaced (a legacy "make
     // clients deinterlace" hack that made clients re-encode with "interlaced video is not supported"), and the
     // open-stream probe runs AFTER that hack, replacing the doctored streams with what the output really is
-    // (progressive), so playback direct-streams. The handover already waited for the first segments, so the
+    // (progressive), so playback direct plays. The handover already waited for the first segments, so the
     // probe has real content to read; probing a continuous TS is also immune to the 10.11.10+ probe container
     // normalisation that broke probing the HLS playlist directly (it rewrote the container to "ts" and delivery
     // then ran `-f mpegts` against a .m3u8 -- fatal on every tune-in).
+    // SupportsDirectPlay must be true: PlaybackInfo always disables direct stream (MediaInfoHelper), so a source
+    // that only allows direct stream can never be picked and every client falls back to a remux or transcode.
     private MediaSourceInfo BuildOpenedSource(string liveStreamId, string uniqueId)
     {
         return new MediaSourceInfo
@@ -1588,7 +1590,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             BufferMs = 0,
             RequiresOpening = false,
             RequiresClosing = true,
-            SupportsDirectPlay = false,
+            SupportsDirectPlay = true,
             SupportsDirectStream = true,
             SupportsProbing = true,
             MediaStreams = Array.Empty<MediaStream>()

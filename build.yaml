@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "12.0.1.1"
+version: "12.0.1.2"
 targetAbi: "12.0.0.0"
 framework: "net10.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -16,9 +16,6 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   user:
-  - A channel with no viewers now stops when its countdown reaches zero. It used to run on for two to three minutes after the last viewer left
-  - Tune-in cards are generated for every channel shortly after the server starts and at every guide refresh, including the refresh a save triggers, so a fresh install, an update, a new logo, or changed output settings never leave a channel opening without its card
+  - Channels now direct play on clients that support the stream instead of always being remuxed or transcoded by the server
   developer:
-  - The linger teardown was vetoed every time because the Jellyfin reader is served right up to the close, so the two-minute recent-delivery rule always saw a viewer at the 30s mark, and the one-shot task then gave up until the reaper backstop 90s plus a minute later. A lingering session now only counts delivery after the close (DeliveryCountsAsWatched, unit tested), and LingerTeardownAsync retries every 5s until the reaper threshold
-  - LiveChannelsTvService sweeps the tune-in cards 20s after construction and from every GetChannelsAsync (EnsureLogoAsync then IntroService.EnsureAsync per enabled channel, serialised, logged with its trigger); a tune-in without a card now logs it
-  - The Sessions tab countdown wording no longer uses an em dash or a semicolon
+  - The opened source now sets SupportsDirectPlay. PlaybackInfo always disables direct stream (MediaInfoHelper), so a source that only allowed direct stream could never be picked and every tune-in fell back to DirectPlayError and a remux
