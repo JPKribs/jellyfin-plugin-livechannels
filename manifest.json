@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "12.0.1.2",
+        "changelog": "## User\r\n- Channels now direct play on clients that support the stream instead of always being remuxed or transcoded by the server\r\n\r\n## Developer\r\n- The opened source now sets SupportsDirectPlay. PlaybackInfo always disables direct stream (MediaInfoHelper), so a source that only allowed direct stream could never be picked and every tune-in fell back to DirectPlayError and a remux",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v12.0.1.2/jellyfin-plugin-livechannels-12.0.1.2.zip",
+        "checksum": "23f4d170a8b050ddb7726c91ee1009c0",
+        "timestamp": "2026-09-11T20:26:06Z"
+      },
+      {
         "version": "12.0.1.1",
         "changelog": "## User\r\n- A channel with no viewers now stops when its countdown reaches zero. It used to run on for two to three minutes after the last viewer left\r\n- Tune-in cards are generated for every channel shortly after the server starts and at every guide refresh, including the refresh a save triggers, so a fresh install, an update, a new logo, or changed output settings never leave a channel opening without its card\r\n\r\n## Developer\r\n- The linger teardown was vetoed every time because the Jellyfin reader is served right up to the close, so the two-minute recent-delivery rule always saw a viewer at the 30s mark, and the one-shot task then gave up until the reaper backstop 90s plus a minute later. A lingering session now only counts delivery after the close (DeliveryCountsAsWatched, unit tested), and LingerTeardownAsync retries every 5s until the reaper threshold\r\n- LiveChannelsTvService sweeps the tune-in cards 20s after construction and from every GetChannelsAsync (EnsureLogoAsync then IntroService.EnsureAsync per enabled channel, serialised, logged with its trigger); a tune-in without a card now logs it\r\n- The Sessions tab countdown wording no longer uses an em dash or a semicolon",
         "targetAbi": "12.0.0.0",
