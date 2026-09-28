@@ -16,6 +16,4 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   user:
-  - Channels now direct play on clients that support the stream instead of always being remuxed or transcoded by the server
-  developer:
-  - The opened source now sets SupportsDirectPlay. PlaybackInfo always disables direct stream (MediaInfoHelper), so a source that only allowed direct stream could never be picked and every tune-in fell back to DirectPlayError and a remux
+  - The Refresh Guide progress is now more accurate
