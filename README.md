@@ -71,6 +71,4 @@ Targets **Jellyfin 12.0.x** (`net10.0`, ABI `12.0.0.0`). Requires ffmpeg, which 
 
 ## AI Disclaimer
 
-Claude Code was utilized in the initial structure of this project and first drafts of documentation. All code has been manually reviewed, tested, and revised after its generation. This disclaimer exists in the interest of transparency.
-
-**All code was written, or code reviewed and tested, by humans.**
+Anthropic's Claude Code is utilized in the development and maintenance of this project.
