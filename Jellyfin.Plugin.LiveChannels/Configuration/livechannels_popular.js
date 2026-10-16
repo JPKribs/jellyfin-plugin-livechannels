@@ -1,3 +1,5 @@
+import { createConfigPage } from './configurationpage?name=livechannels_jpkribs_shared.js';
+
 export default function (view) {
     'use strict';
 
@@ -9,14 +11,16 @@ export default function (view) {
         { href: 'configurationpage?name=livechannels_settings', name: 'Settings' }
     ];
 
-    var Shared = null;
-    var setTabs = null;
-    var _sharedPromise = import('/web/configurationpage?name=livechannels_jpkribs_shared.js').then(function (mod) {
-        Shared = mod.createShared(view, PLUGIN_ID);
-        setTabs = mod.setTabs;
+    var page = createConfigPage(view, {
+        pluginId: PLUGIN_ID,
+        tabsKey: 'livechannels',
+        tabIndex: 1,
+        tabs: TABS,
+        bind: bind,
+        load: load
     });
+    var Shared = page.shared;
 
-    var _bound = false;
     var ratings = [];          // [{ Name, Value }]
     var ratingOptions = '';    // cached <option> html for the per-block rating selects
     var popularConfig = null;  // the PopularChannel object being edited (holds RatingBlocks)
@@ -212,15 +216,11 @@ export default function (view) {
         });
     }
 
-    view.addEventListener('viewshow', function () {
-        _sharedPromise.then(function () {
-            setTabs('livechannels', 1, TABS);
-            if (!_bound) { bind(); _bound = true; }
-            Shared.initCollapsibles();
-            // Populate the rating options before applying the saved values to them.
-            loadRatings().then(function () {
-                Shared.getConfig().then(loadPopular);
-            });
+    function load() {
+        Shared.initCollapsibles();
+        // Populate the rating options before applying the saved values to them.
+        loadRatings().then(function () {
+            Shared.getConfig().then(loadPopular);
         });
-    });
+    }
 }

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
+using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Model.LiveTv;
@@ -23,10 +23,9 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// </summary>
 public sealed class TimerService
 {
-    private static readonly JsonSerializerOptions TimerJson = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
-
     private readonly ILogger<TimerService> _logger;
     private readonly string _file;
+    private readonly JsonFileStore<TimerFile> _store;
     private readonly object _gate = new();
 
     private List<TimerInfo> _timers = new();
@@ -42,6 +41,7 @@ public sealed class TimerService
     {
         _logger = logger;
         _file = Path.Combine(appPaths.DataPath, "livechannels", "timers.json");
+        _store = new JsonFileStore<TimerFile>(_file, logger);
     }
 
     /// <summary>
@@ -352,13 +352,10 @@ public sealed class TimerService
 
         try
         {
-            if (File.Exists(_file))
-            {
-                using var stream = File.OpenRead(_file);
-                var loaded = JsonSerializer.Deserialize<TimerFile>(stream, TimerJson);
-                _timers = loaded?.Timers ?? new List<TimerInfo>();
-                _seriesTimers = loaded?.SeriesTimers ?? new List<SeriesTimerInfo>();
-            }
+            // A missing or corrupt file loads as an empty store (the store logs the corrupt case).
+            var loaded = _store.Load();
+            _timers = loaded.Timers ?? new List<TimerInfo>();
+            _seriesTimers = loaded.SeriesTimers ?? new List<SeriesTimerInfo>();
         }
         catch (Exception ex)
         {
@@ -375,14 +372,7 @@ public sealed class TimerService
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(_file)!);
-            var temp = _file + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
-            using (var stream = File.Create(temp))
-            {
-                JsonSerializer.Serialize(stream, new TimerFile { Timers = _timers, SeriesTimers = _seriesTimers }, TimerJson);
-            }
-
-            File.Move(temp, _file, overwrite: true);
+            _store.Save(new TimerFile { Timers = _timers, SeriesTimers = _seriesTimers });
         }
         catch (Exception ex)
         {

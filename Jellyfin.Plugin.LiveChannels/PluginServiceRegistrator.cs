@@ -23,7 +23,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<StreamSessionService>();
         serviceCollection.AddSingleton<StressTestService>();
         serviceCollection.AddSingleton<DefaultLogoService>();
-        serviceCollection.AddSingleton<ActivityLogger>();
+        serviceCollection.AddActivityLogger();
         serviceCollection.AddSingleton<TimerService>();
         serviceCollection.AddSingleton<RecordingService>();
 

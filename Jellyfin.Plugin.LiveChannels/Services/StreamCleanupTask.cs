@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using JPKribs.Jellyfin.Base;
 using MediaBrowser.Model.Tasks;
 
 namespace Jellyfin.Plugin.LiveChannels.Services;
@@ -13,7 +14,7 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// released, and gives a manual "run now" button. It only ever deletes directories with no active session, so it
 /// cannot interrupt a channel that is playing.
 /// </summary>
-public sealed class StreamCleanupTask : IScheduledTask
+public sealed class StreamCleanupTask : PluginScheduledTask
 {
     private readonly LiveChannelsTvService _service;
 
@@ -27,19 +28,19 @@ public sealed class StreamCleanupTask : IScheduledTask
     }
 
     /// <inheritdoc />
-    public string Name => "Clean Channels Directory";
+    public override string Name => "Clean Channels Directory";
 
     /// <inheritdoc />
-    public string Key => "LiveChannelsStreamCleanup";
+    public override string Key => "LiveChannelsStreamCleanup";
 
     /// <inheritdoc />
-    public string Description => "Removes leftover Live Channels stream directories that are no longer tied to an active channel, in case one got stuck or was not cleared on close.";
+    public override string Description => "Removes leftover Live Channels stream directories that are no longer tied to an active channel, in case one got stuck or was not cleared on close.";
 
     /// <inheritdoc />
-    public string Category => "Live TV";
+    public override string Category => "Live TV";
 
     /// <inheritdoc />
-    public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
+    public override Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
         _service.CleanupOrphanStreams();
         progress.Report(100);
@@ -47,13 +48,6 @@ public sealed class StreamCleanupTask : IScheduledTask
     }
 
     /// <inheritdoc />
-    public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
-        => new[]
-        {
-            new TaskTriggerInfo
-            {
-                Type = TaskTriggerInfoType.IntervalTrigger,
-                IntervalTicks = TimeSpan.FromHours(12).Ticks
-            }
-        };
+    public override IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
+        => new[] { EveryInterval(TimeSpan.FromHours(12)) };
 }

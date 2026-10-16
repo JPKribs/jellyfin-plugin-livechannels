@@ -1,3 +1,5 @@
+import { createConfigPage, bindDialog } from './configurationpage?name=livechannels_jpkribs_shared.js';
+
 export default function (view) {
     'use strict';
 
@@ -9,15 +11,23 @@ export default function (view) {
         { href: 'configurationpage?name=livechannels_settings', name: 'Settings' }
     ];
 
-    var Shared = null;
-    var setTabs = null;
-    var _sharedPromise = import('/web/configurationpage?name=livechannels_jpkribs_shared.js').then(function (mod) {
-        Shared = mod.createShared(view, PLUGIN_ID);
-        setTabs = mod.setTabs;
+    var page = createConfigPage(view, {
+        pluginId: PLUGIN_ID,
+        tabsKey: 'livechannels',
+        tabIndex: 2,
+        tabs: TABS,
+        bind: bind,
+        load: function () {
+            // A fresh poller per show: the page stops it on viewhide.
+            page.createPoller(loadSessions, 5000).start();
+        },
+        onHide: function () {
+            // Close an open log so its Escape and focus handlers do not outlive the page.
+            if (logDialog) { logDialog.close(); }
+        }
     });
-
-    var _bound = false;
-    var _timer = null;
+    var Shared = page.shared;
+    var logDialog = null;
 
     function el(id) { return view.querySelector('#' + id); }
 
@@ -68,13 +78,8 @@ export default function (view) {
     function ensureLogo(id) {
         if (_logoCache[id]) { return; }
         _logoCache[id] = { pending: true };
-        fetch(ApiClient.getUrl('livechannels/sessions/' + encodeURIComponent(id) + '/logo'), {
-            headers: { 'X-Emby-Token': ApiClient.accessToken() }
-        }).then(function (r) {
-            if (!r.ok) { throw new Error('logo ' + r.status); }
-            return r.blob();
-        }).then(function (blob) {
-            _logoCache[id] = { url: URL.createObjectURL(blob) };
+        Shared.fetchObjectUrl('livechannels/sessions/' + encodeURIComponent(id) + '/logo').then(function (url) {
+            _logoCache[id] = { url: url };
             // The card may have re-rendered while the fetch ran; update whichever img is in the DOM now.
             var img = el('sessionList').querySelector('.lc-session-logo[data-session-id="' + id + '"]');
             if (img) { img.src = _logoCache[id].url; img.style.visibility = ''; }
@@ -175,41 +180,12 @@ export default function (view) {
         _logSessionId = id;
         el('lcLogTitle').textContent = name || 'Session';
         el('lcLogText').textContent = 'Loading…';
-        Shared.setVisible('lcLogDialog', true);
+        logDialog.open();
         loadLog();
     }
 
-    function closeLog() {
-        _logSessionId = null;
-        Shared.setVisible('lcLogDialog', false);
-    }
-
     function copyLog() {
-        var text = el('lcLogText').textContent || '';
-        var done = function () {
-            var label = el('lcLogCopy').querySelector('span:last-child') || el('lcLogCopy');
-            var original = label.textContent;
-            label.textContent = 'Copied!';
-            setTimeout(function () { label.textContent = original; }, 1500);
-        };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).then(done).catch(function () { legacyCopy(text); done(); });
-        } else {
-            legacyCopy(text);
-            done();
-        }
-    }
-
-    // Clipboard fallback for non-secure contexts (plain-HTTP dashboards), where navigator.clipboard is absent.
-    function legacyCopy(text) {
-        var area = document.createElement('textarea');
-        area.value = text;
-        area.style.position = 'fixed';
-        area.style.opacity = '0';
-        document.body.appendChild(area);
-        area.select();
-        try { document.execCommand('copy'); } catch (e) { /* best effort */ }
-        document.body.removeChild(area);
+        Shared.copyWithFeedback(el('lcLogCopy'), el('lcLogText').textContent || '');
     }
 
     function bind() {
@@ -219,40 +195,20 @@ export default function (view) {
             if (card) { openLog(card.getAttribute('data-id'), card.getAttribute('data-name')); }
         });
 
-        el('lcLogClose').addEventListener('click', closeLog);
+        // The close button, a backdrop click, and Escape all close the modal.
+        logDialog = bindDialog('lcLogDialog', {
+            root: view,
+            onClose: function () { _logSessionId = null; }
+        });
+
         el('lcLogRefresh').addEventListener('click', loadLog);
         el('lcLogCopy').addEventListener('click', copyLog);
         el('lcLogKill').addEventListener('click', function () {
             var id = _logSessionId;
-            closeLog();
+            logDialog.close();
             if (id) { killSession(id); }
         });
-
-        // A click on the dimmed backdrop (not the dialog content) also closes.
-        el('lcLogDialog').addEventListener('click', function (e) {
-            if (e.target === el('lcLogDialog')) { closeLog(); }
-        });
     }
-
-    function startPolling() {
-        stopPolling();
-        _timer = setInterval(loadSessions, 5000);
-    }
-
-    function stopPolling() {
-        if (_timer) { clearInterval(_timer); _timer = null; }
-    }
-
-    view.addEventListener('viewshow', function () {
-        _sharedPromise.then(function () {
-            setTabs('livechannels', 2, TABS);
-            if (!_bound) { bind(); _bound = true; }
-            loadSessions();
-            startPolling();
-        });
-    });
-
-    view.addEventListener('viewhide', stopPolling);
 
     // Release every blob object URL when the page is torn down; nothing else revokes the last set.
     view.addEventListener('viewdestroy', function () { pruneLogos([]); });

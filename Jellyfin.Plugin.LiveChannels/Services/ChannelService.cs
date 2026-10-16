@@ -2,9 +2,11 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.LiveChannels.Models;
+using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.IO;
 using MediaBrowser.Controller.Library;
@@ -68,6 +70,7 @@ public partial class ChannelService
         _userManager = userManager;
         _userDataManager = userDataManager;
         _scheduleDir = ScheduleDir(appPaths);
+        _durationsStore = new JsonFileStore<Dictionary<Guid, ObservedDuration>>(Path.Combine(_scheduleDir, DurationsFileName), logger);
         _logger = logger;
     }
 

@@ -1,3 +1,5 @@
+import { createConfigPage, confirmDialog, downloadJson, pickJsonFile } from './configurationpage?name=livechannels_jpkribs_shared.js';
+
 export default function (view) {
     'use strict';
 
@@ -9,12 +11,15 @@ export default function (view) {
         { href: 'configurationpage?name=livechannels_settings', name: 'Settings' }
     ];
 
-    var Shared = null;
-    var setTabs = null;
-    var _sharedPromise = import('/web/configurationpage?name=livechannels_jpkribs_shared.js').then(function (mod) {
-        Shared = mod.createShared(view, PLUGIN_ID);
-        setTabs = mod.setTabs;
+    var page = createConfigPage(view, {
+        pluginId: PLUGIN_ID,
+        tabsKey: 'livechannels',
+        tabIndex: 0,
+        tabs: TABS,
+        bind: bind,
+        load: load
     });
+    var Shared = page.shared;
 
     var MAX_LOGO_BYTES = 2 * 1024 * 1024;
 
@@ -26,7 +31,8 @@ export default function (view) {
     // can never persist half-made edits to channel A, and switching away discards consistently (with a
     // confirm when something would be lost).
     var editing = null;
-    var editorBaseline = '';   // the editor's just-loaded state, for the unsaved-changes check
+    // Compares the editor against its just-loaded state, for the unsaved-changes check.
+    var editorTracker = Shared.createChangeTracker({ serialize: editorSnapshot });
     var currentEnabled = true;
     var logoData = '';
     var logoContentType = '';
@@ -38,7 +44,6 @@ export default function (view) {
     var peoplePicker = null;   // channel-level person typeahead picker (created once)
     var audioLangPicker = null;// channel-level audio-language single-select typeahead (created once)
     var cultures = [];         // cached [{ key: ISO code, label: name }] for the language search
-    var _bound = false;
 
     function el(id) { return view.querySelector('#' + id); }
 
@@ -122,7 +127,7 @@ export default function (view) {
             loadEditor();
         } else {
             editing = null;
-            editorBaseline = '';
+            editorTracker.markClean();
         }
     }
 
@@ -136,7 +141,7 @@ export default function (view) {
 
     // MARK: Chip select (genres)
 
-    function createChipSelect(options) {
+    function createGenreSelect(options) {
         options = options || {};
         var available = [];
         var selected = [];
@@ -218,7 +223,7 @@ export default function (view) {
         var chips = document.createElement('div');
         chips.className = 'jpk-tags';
         var searchHost = document.createElement('div');
-        searchHost.innerHTML = '<input type="text" is="emby-input" class="emby-input" autocomplete="off" />';
+        searchHost.innerHTML = '<input type="text" class="emby-input" autocomplete="off" />';
         var search = searchHost.querySelector('input');
         search.placeholder = options.placeholder || 'Search…';
         var results = document.createElement('div');
@@ -589,10 +594,10 @@ export default function (view) {
         // Genres (shown for the genre selection): an include list and an exclude (blacklist) list, both fed the
         // same available genres for the library.
         var genresSection = card.querySelector('.lc-genres');
-        var chip = createChipSelect({ placeholder: 'Add a genre…', onChange: function (vals) { source.Genres = vals; } });
+        var chip = createGenreSelect({ placeholder: 'Add a genre…', onChange: function (vals) { source.Genres = vals; } });
         chip.setValue(source.Genres || []);
         card.querySelector('.lc-genre-mount').appendChild(chip.element);
-        var excludeChip = createChipSelect({ placeholder: 'Add a genre to exclude…', onChange: function (vals) { source.ExcludeGenres = vals; } });
+        var excludeChip = createGenreSelect({ placeholder: 'Add a genre to exclude…', onChange: function (vals) { source.ExcludeGenres = vals; } });
         excludeChip.setValue(source.ExcludeGenres || []);
         card.querySelector('.lc-exclude-mount').appendChild(excludeChip.element);
         function reloadGenres() { loadCardGenres(source.LibraryId).then(function (names) { chip.setAvailable(names); excludeChip.setAvailable(names); }); }
@@ -1019,19 +1024,19 @@ export default function (view) {
     }
 
     function editorDirty() {
-        return editing !== null && editorSnapshot() !== editorBaseline;
+        return editing !== null && editorTracker.isDirty();
     }
 
-    // Confirms discarding unsaved editor changes before an action that would lose them. Returns true to proceed.
+    // Confirms discarding unsaved editor changes before an action that would lose them. Resolves to true to proceed.
     function confirmDiscard() {
-        if (!editorDirty()) return true;
+        if (!editorDirty()) return Promise.resolve(true);
         var name = (el('channelName').value || '').trim() || 'this channel';
-        return window.confirm('Discard unsaved changes to "' + name + '"?');
+        return confirmDialog('Discard unsaved changes to "' + name + '"?', { confirmText: 'Discard', destructive: true });
     }
 
     function loadEditor() {
         var stored = channels[currentIndex];
-        if (!stored) { editing = null; editorBaseline = ''; return; }
+        if (!stored) { editing = null; editorTracker.markClean(); return; }
 
         // Deep-copy the stored channel: the cards mutate their model live, and that must never leak into the
         // saved working set until "Save channel".
@@ -1079,7 +1084,7 @@ export default function (view) {
 
         // Everything above (including the pickers) is now in its just-loaded state; snapshot it as the
         // baseline the unsaved-changes check compares against.
-        editorBaseline = editorSnapshot();
+        editorTracker.markClean();
     }
 
     function readEditorInto(ch) {
@@ -1206,15 +1211,7 @@ export default function (view) {
             channels: stripInternal(channels)
         };
         var name = 'live-channels-' + new Date().toISOString().slice(0, 10) + '.json';
-        var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-        var url = URL.createObjectURL(blob);
-        var a = document.createElement('a');
-        a.href = url;
-        a.download = name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+        downloadJson(name, payload);
         Shared.setStatus('ioStatus', 'Exported ' + channels.length + ' channel' + (channels.length === 1 ? '' : 's') + ' to ' + name + '.', false);
     }
 
@@ -1224,12 +1221,7 @@ export default function (view) {
         return -1;
     }
 
-    function importChannelsFromText(text) {
-        if (!confirmDiscard()) return;
-        var parsed;
-        try { parsed = JSON.parse(text); }
-        catch (e) { Shared.setStatus('ioStatus', 'Import failed: the file is not valid JSON.', true); return; }
-
+    function importChannels(parsed) {
         var incoming = Array.isArray(parsed) ? parsed
             : (parsed && Array.isArray(parsed.channels) ? parsed.channels : null);
         if (!incoming) { Shared.setStatus('ioStatus', 'Import failed: no channels found in the file.', true); return; }
@@ -1273,18 +1265,23 @@ export default function (view) {
         });
     }
 
-    function onImportFile(e) {
-        var file = e.target.files && e.target.files[0];
-        e.target.value = ''; // let the same file be chosen again
-        if (!file) return;
-        var reader = new FileReader();
-        reader.onload = function () { importChannelsFromText(String(reader.result || '')); };
-        reader.onerror = function () { Shared.setStatus('ioStatus', 'Import failed: could not read the file.', true); };
-        reader.readAsText(file);
+    function onImportClick() {
+        pickJsonFile().then(function (parsed) {
+            if (parsed === null) return; // picker cancelled
+            return confirmDiscard().then(function (ok) { if (ok) importChannels(parsed); });
+        }, function (err) {
+            var unreadable = err && err.message === 'The file could not be read.';
+            Shared.setStatus('ioStatus', unreadable ? 'Import failed: could not read the file.' : 'Import failed: the file is not valid JSON.', true);
+        });
     }
 
     function addChannel() {
-        if (!confirmDiscard()) return;
+        confirmDiscard().then(function (ok) {
+            if (ok) addBlankChannel();
+        });
+    }
+
+    function addBlankChannel() {
         channels.push({
             Id: newId(), Name: '', Number: nextNumber(), LogoData: '', LogoContentType: '',
             LogoStyle: 'Number', LogoSymbol: '', LogoShowName: true,
@@ -1301,10 +1298,14 @@ export default function (view) {
     function deleteChannel() {
         var ch = channels[currentIndex];
         if (!ch) return;
-        if (!window.confirm('Delete channel "' + (ch.Name || 'this channel') + '"? This cannot be undone.')) return;
-        channels.splice(currentIndex, 1);
-        currentIndex = -1;
-        persist('channelStatus', 'Deleted.', 'Delete failed.');
+        confirmDialog('Delete channel "' + (ch.Name || 'this channel') + '"? This cannot be undone.', { confirmText: 'Delete', destructive: true }).then(function (ok) {
+            // Delete the channel that was asked about, even if the list shifted while the dialog was open.
+            var index = channels.indexOf(ch);
+            if (!ok || index < 0) return;
+            channels.splice(index, 1);
+            currentIndex = -1;
+            persist('channelStatus', 'Deleted.', 'Delete failed.');
+        });
     }
 
     function addLibrary() {
@@ -1343,11 +1344,14 @@ export default function (view) {
 
     function bind() {
         el('selectChannel').addEventListener('change', function () {
-            var next = parseInt(this.value, 10);
+            var select = this;
+            var next = parseInt(select.value, 10);
             if (next === currentIndex) return;
-            if (!confirmDiscard()) { this.value = String(currentIndex); return; }
-            currentIndex = next;
-            loadEditor();
+            confirmDiscard().then(function (ok) {
+                if (!ok) { select.value = String(currentIndex); return; }
+                currentIndex = next;
+                loadEditor();
+            });
         });
         el('btnUploadLogo').addEventListener('click', function () { el('logoFile').click(); });
         el('logoFile').addEventListener('change', onLogoFile);
@@ -1369,8 +1373,7 @@ export default function (view) {
         el('btnNewChannel').addEventListener('click', addChannel);
         el('btnDeleteChannel').addEventListener('click', deleteChannel);
         el('btnExportChannels').addEventListener('click', exportChannels);
-        el('btnImportChannels').addEventListener('click', function () { el('importFile').click(); });
-        el('importFile').addEventListener('change', onImportFile);
+        el('btnImportChannels').addEventListener('click', onImportClick);
         el('btnSaveChannel').addEventListener('click', saveChannel);
         el('btnAddLibrary').addEventListener('click', addLibrary);
         el('btnEnable').addEventListener('click', function () { currentEnabled = !currentEnabled; setEnableVisual(currentEnabled); });
@@ -1383,6 +1386,7 @@ export default function (view) {
     }
 
     function load() {
+        Shared.initCollapsibles();
         Promise.all([loadLibraries(), loadCollections(), loadRatings(), loadLanguages()]).then(function () {
             return Shared.getConfig();
         }).then(function (cfg) {
@@ -1398,12 +1402,4 @@ export default function (view) {
         });
     }
 
-    view.addEventListener('viewshow', function () {
-        _sharedPromise.then(function () {
-            setTabs('livechannels', 0, TABS);
-            if (!_bound) { bind(); _bound = true; }
-            Shared.initCollapsibles();
-            load();
-        });
-    });
 }

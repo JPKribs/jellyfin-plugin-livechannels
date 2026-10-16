@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using Jellyfin.Plugin.LiveChannels.Models;
+using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -46,7 +47,7 @@ public partial class ChannelService
 
     private const string DurationsFileName = "durations.json";
 
-    private string DurationsFile => Path.Combine(_scheduleDir, DurationsFileName);
+    private readonly JsonFileStore<Dictionary<Guid, ObservedDuration>> _durationsStore;
 
     // One observation: the real playable length, plus the metadata runtime it was recorded against
     // (the staleness key -- see ObservedDurationTicks).
@@ -91,10 +92,7 @@ public partial class ChannelService
         {
             try
             {
-                Directory.CreateDirectory(_scheduleDir);
-                var temp = DurationsFile + ".tmp";
-                File.WriteAllText(temp, JsonSerializer.Serialize(_observedDurations.ToDictionary(kv => kv.Key, kv => kv.Value), ScheduleCacheJson));
-                File.Move(temp, DurationsFile, overwrite: true);
+                _durationsStore.Save(_observedDurations.ToDictionary(kv => kv.Key, kv => kv.Value));
             }
             catch (Exception ex)
             {
@@ -140,13 +138,10 @@ public partial class ChannelService
 
             try
             {
-                if (File.Exists(DurationsFile))
+                // A missing or corrupt file loads as empty (the store logs the corrupt case).
+                foreach (var (id, observed) in _durationsStore.Load())
                 {
-                    var loaded = JsonSerializer.Deserialize<Dictionary<Guid, ObservedDuration>>(File.ReadAllText(DurationsFile), ScheduleCacheJson);
-                    foreach (var (id, observed) in loaded ?? new Dictionary<Guid, ObservedDuration>())
-                    {
-                        _observedDurations[id] = observed;
-                    }
+                    _observedDurations[id] = observed;
                 }
             }
             catch (Exception ex)

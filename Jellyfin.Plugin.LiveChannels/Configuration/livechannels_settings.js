@@ -1,3 +1,5 @@
+import { createConfigPage } from './configurationpage?name=livechannels_jpkribs_shared.js';
+
 export default function (view) {
     'use strict';
 
@@ -9,14 +11,16 @@ export default function (view) {
         { href: 'configurationpage?name=livechannels_settings', name: 'Settings' }
     ];
 
-    var Shared = null;
-    var setTabs = null;
-    var _sharedPromise = import('/web/configurationpage?name=livechannels_jpkribs_shared.js').then(function (mod) {
-        Shared = mod.createShared(view, PLUGIN_ID);
-        setTabs = mod.setTabs;
+    var page = createConfigPage(view, {
+        pluginId: PLUGIN_ID,
+        tabsKey: 'livechannels',
+        tabIndex: 3,
+        tabs: TABS,
+        bind: bind,
+        load: load
     });
+    var Shared = page.shared;
 
-    var _bound = false;
     var cultures = [];         // cached [{ key: ISO code, label: name }] for the language search
     var langSelect = null;     // searchable single-select for the default subtitle language
 
@@ -38,7 +42,7 @@ export default function (view) {
         var chips = document.createElement('div');
         chips.className = 'jpk-tags';
         var searchHost = document.createElement('div');
-        searchHost.innerHTML = '<input type="text" is="emby-input" class="emby-input" placeholder="Search language…" autocomplete="off" />';
+        searchHost.innerHTML = '<input type="text" class="emby-input" placeholder="Search language…" autocomplete="off" />';
         var search = searchHost.querySelector('input');
         var results = document.createElement('div');
         results.className = 'jpk-table';
@@ -225,7 +229,7 @@ export default function (view) {
 
     // --- Stress test: measures how many concurrent streams the encoder sustains, using the production pipeline.
 
-    var _stressTimer = null;
+    var _stressPoller = null;
 
     // The stress-test item picker: the same single-select typeahead chip the channel editor uses for its
     // pickers (search as you type, click a row, the choice becomes a removable chip), so choosing a test item
@@ -241,7 +245,7 @@ export default function (view) {
         var chips = document.createElement('div');
         chips.className = 'jpk-tags';
         var searchHost = document.createElement('div');
-        searchHost.innerHTML = '<input type="text" is="emby-input" class="emby-input" autocomplete="off" />';
+        searchHost.innerHTML = '<input type="text" class="emby-input" autocomplete="off" />';
         var search = searchHost.querySelector('input');
         search.placeholder = 'Search movies and episodes…';
         var results = document.createElement('div');
@@ -344,14 +348,15 @@ export default function (view) {
         }).catch(function () { /* transient; keep polling */ });
     }
 
+    // The page stops the poller on viewhide.
     function startStressPolling() {
         stopStressPolling();
-        _stressTimer = setInterval(pollStress, 3000);
-        pollStress();
+        _stressPoller = page.createPoller(pollStress, 3000);
+        _stressPoller.start();
     }
 
     function stopStressPolling() {
-        if (_stressTimer) { clearInterval(_stressTimer); _stressTimer = null; }
+        if (_stressPoller) { _stressPoller.stop(); _stressPoller = null; }
     }
 
     function stressRun() {
@@ -381,21 +386,15 @@ export default function (view) {
         el('stressCancel').addEventListener('click', stressCancel);
     }
 
-    view.addEventListener('viewshow', function () {
-        _sharedPromise.then(function () {
-            setTabs('livechannels', 3, TABS);
-            if (!_bound) { bind(); _bound = true; }
-            Shared.initCollapsibles();
-            // Populate the language options before applying the saved value to the dropdown.
-            loadLanguages().then(function () {
-                Shared.getConfig().then(loadSettings);
-            });
-            // A stress test may already be running (started earlier, page revisited): resume its display. The
-            // poll stops itself on the first response when no test is running.
-            ensureStressPicker();
-            startStressPolling();
+    function load() {
+        Shared.initCollapsibles();
+        // Populate the language options before applying the saved value to the dropdown.
+        loadLanguages().then(function () {
+            Shared.getConfig().then(loadSettings);
         });
-    });
-
-    view.addEventListener('viewhide', stopStressPolling);
+        // A stress test may already be running (started earlier, page revisited): resume its display. The
+        // poll stops itself on the first response when no test is running.
+        ensureStressPicker();
+        startStressPolling();
+    }
 }
