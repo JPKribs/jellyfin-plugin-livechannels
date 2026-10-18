@@ -1,0 +1,50 @@
+site_name: Live Channels
+site_description: Looping virtual TV channels built from your own library and served natively in Jellyfin's Live TV.
+site_url: https://jpkribs.github.io/jellyfin-plugin-livechannels/
+repo_url: https://github.com/JPKribs/jellyfin-plugin-livechannels
+repo_name: JPKribs/jellyfin-plugin-livechannels
+edit_uri: edit/master/docs/
+docs_dir: docs
+
+theme:
+  name: material
+  logo: assets/icon.png
+  favicon: assets/icon.png
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: light blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: light blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Overview: index.md
+  - Getting Started:
+      - Installation: Installation.md
+      - How It Works: HowItWorks.md
+  - Reference:
+      - Settings: Settings.md
+      - Versioning: Versioning.md
