@@ -10,12 +10,20 @@ The dropdown at the top selects the channel being edited. **New channel** create
 
 The editor works on a copy. Nothing changes on the server until **Save channel**, and switching to another channel with unsaved edits asks before discarding them. Saving triggers a guide refresh, so edits show up in Live TV right away.
 
+The channel list with its enabled and disabled counts and the editor sections below.
+
+![Channels](screenshots/Channels.png)
+
 ### Channel identity
 
 | Setting | What it does | Default |
 | --- | --- | --- |
 | **Name** | The channel's display name in the guide. Required. | empty |
 | **Channel number** | The guide position. Required for an enabled channel and must be unique. 0 is reserved for the Popular Channel. | next free number |
+
+The Channel section holds the name, number, and logo.
+
+![Channel Identity](screenshots/Channel%20Identity.png)
 
 ### Logo
 
@@ -39,9 +47,17 @@ A channel plays the union of one or more **sources**. Each source is one of two 
   * **Blacklist** takes everything except the picked items.
 * **Collection** takes every item in a Jellyfin collection, expanding a series to its episodes.
 
+A library source using a genre selection.
+
+![Channel Content](screenshots/Channel%20Content.png)
+
 All channel level filters below still apply on top of every source. Only items with a real media file and a known runtime can be scheduled.
 
 ### Filters
+
+The Filters section with two time of day rating blocks.
+
+![Channel Filters](screenshots/Channel%20Filters.png)
 
 #### Rating limits
 
@@ -71,6 +87,10 @@ Where two blocks overlap, the lowest minimum and the lowest maximum win. A chann
 
 ### Channel settings
 
+The Channel Settings section covers playback, guide tags, episode grouping, content types, and loop order.
+
+![Channel Settings](screenshots/Channel%20Settings.png)
+
 | Setting | What it does | Default |
 | --- | --- | --- |
 | **Subtitle burn in** | Bakes a subtitle track into the picture for every viewer. **Never** burns nothing. **Forced only** burns the forced track, switching to the full track when the audio is not your [Default language](#playback). **Always** burns the full track on everything. Subtitles come from the same extracted file Jellyfin's own transcodes use, so the track's bold, italic, and colour markup carries into the picture and attached fonts are honoured. Appearance is styled once on the [Settings tab](#subtitle-appearance). | Never |
@@ -81,7 +101,7 @@ Where two blocks overlap, the lowest minimum and the lowest maximum win. A chann
 | **Loop order** | **Shuffle** is deterministic and repeatable, so the guide and the stream always agree, and each series contributes one block per loop pass so nothing dominates. **Alphabetical** plays by name. **Chronological** plays oldest to newest by release date. | Shuffle |
 | **Episode order** | Within a series, **Air order** or **Random**. | Air order |
 | **Favor content type** | On a shuffled channel, weights **Movies**, **Shows**, or **Music videos** more heavily by repeating them toward a target share. | No preference |
-| **Favor strength** | How strong that weighting is: **Slight**, **Moderate**, or **Heavy**. | Moderate |
+| **Favor strength** | How strong that weighting is: **Slight**, **Moderate**, or **Heavy**. Shown once a content type is favored. | Moderate |
 
 ### Import and export
 
@@ -92,6 +112,10 @@ Where two blocks overlap, the lowest minimum and the lowest maximum win. A chann
 ## Popular tab
 
 Channel 0 is a built-in channel that programs itself: a de-duplicated mix of the server's recently played, recently added, and highest rated movies and shows, measured across every user, with rotating seeded picks so it stays fresh. Its number and its content sources are fixed. Everything else is configurable and behaves exactly like the matching setting on the Channels tab:
+
+The Popular tab with its Channel section open.
+
+![Popular](screenshots/Popular.png)
 
 | Setting | Notes | Default |
 | --- | --- | --- |
@@ -120,7 +144,15 @@ Lists every channel currently encoding, one row per encoder (not per viewer): lo
 
 Output and playback options that apply to every channel, including the Popular one.
 
+The Settings tab with every section collapsed.
+
+![Settings](screenshots/Settings.png)
+
 ### Encoding
+
+The Encoding section.
+
+![Encoding](screenshots/Encoding.png)
 
 | Setting | What it does | Default |
 | --- | --- | --- |
@@ -133,11 +165,19 @@ Output and playback options that apply to every channel, including the Popular o
 
 The card shows which accelerator channel streams will use, read from Jellyfin's own Playback settings. Encoding follows it for every vendor. Hardware decoding is used with VideoToolbox, QSV, and VA-API (NVENC and AMF accelerate encoding only). On Linux with Intel hardware the whole pipeline runs on the GPU, including HDR tone mapping and subtitle burn in.
 
+The Hardware Acceleration section on a server with no accelerator configured.
+
+![Hardware Acceleration](screenshots/Hardware%20Acceleration.png)
+
 | Setting | What it does | Default |
 | --- | --- | --- |
 | **Disable hardware acceleration** | Forces software encoding and decoding, the one path guaranteed to work on any system, codec, and media type. Turn it on if channels fail to play with hardware acceleration. | off |
 
 ### Playback
+
+The Playback section.
+
+![Playback](screenshots/Playback.png)
 
 | Setting | What it does | Default |
 | --- | --- | --- |
@@ -146,6 +186,10 @@ The card shows which accelerator channel streams will use, read from Jellyfin's 
 ### Subtitle appearance
 
 How burned-in subtitles look, wherever a channel burns them. Leave everything untouched to render each subtitle exactly as it was authored, including its own bold, italic, and colour tags.
+
+The Subtitle Appearance section with its defaults.
+
+![Subtitle Appearance](screenshots/Subtitle%20Appearance.png)
 
 | Setting | What it does | Default |
 | --- | --- | --- |
@@ -158,6 +202,10 @@ How burned-in subtitles look, wherever a channel burns them. Leave everything un
 
 ### Sessions
 
+The Sessions section caps how many streams encode and where their files go.
+
+![Session Limits](screenshots/Session%20Limits.png)
+
 | Setting | What it does | Default |
 | --- | --- | --- |
 | **Maximum concurrent streams** | The most channels that may encode at once. Over the cap, the oldest stream nobody is watching is closed to make room. Streams being watched are never closed for it, so the count can run over while everything is in use. 0 means no limit. The [stress test](#troubleshooting) measures the right value for your server. | 3 |
@@ -165,6 +213,10 @@ How burned-in subtitles look, wherever a channel burns them. Leave everything un
 | **Stream file location** | Where each channel's playlist and rolling stream segments are written while playing, taking effect on restart. Blank uses Jellyfin's cache. Pick a new or empty folder: the plugin cleans up old stream files inside its folder automatically, so it refuses a directory that already contains other content. Only a short rolling window of segments is kept per channel, so disk use stays small regardless of watch time. | blank |
 
 ### Troubleshooting
+
+The Stress Test section picks a test item and runs the measurement.
+
+![Stress Test](screenshots/Stress%20Test.png)
 
 **Stress test.** Measures how many concurrent streams the server can sustain, using the real channel pipeline. Pick one demanding movie or episode (4K or HDR gives the most honest number), then each round encodes a minute of it with one more simultaneous stream than the last, until a stream drops below realtime. The last fully passing round is the recommendation, with an **Apply** link that fills in Maximum concurrent streams for you. The test refuses to start while channel streams are active, and a viewer tuning in cancels it, since a real viewer always wins the encoder. Nothing about the test is saved.
 
