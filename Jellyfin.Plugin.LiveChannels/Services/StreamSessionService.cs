@@ -270,14 +270,10 @@ public class StreamSessionService
     // changes a playlist produces) with the hardware encoder.
     private async Task StreamConcatAsync(string ffmpeg, Channel channel, IReadOnlyList<ProgramEntry> programs, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan timelineBase = default, TimeSpan lead = default)
     {
-        var playable = programs.Where(p => !string.IsNullOrEmpty(p.Path) && File.Exists(p.Path)).ToList();
-        if (playable.Count == 0)
-        {
-            _logger.LogWarning("Every item on channel {Name} is unreachable; showing standby", channel.Name);
-            await StreamSlateAsync(ffmpeg, timelineBase, output, cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
+        // The position is computed against the FULL program cycle, exactly as the guide computes it, so the stream
+        // airs what the guide says is on. Missing files are not filtered out up front (that would both shift every
+        // position after a missing item away from the guide and stat every file on every tune-in); a missing item
+        // is skipped only when playback reaches it (see FirstPlayable).
         var listFile = Path.Combine(
             Path.GetTempPath(),
             "livechannels-" + channel.Number.ToString(CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N") + ".txt");
@@ -292,7 +288,7 @@ public class StreamSessionService
             // Hardware-decode the playlist only when every item is the same resolution: the concat demuxer feeds
             // one shared decoder, and a mid-stream resolution change fails a hardware decoder (software handles
             // it fine). On any quick failure, drop to software decode for the rest of the session.
-            var uniform = playable[0].SourceHeight > 0 && playable.All(p => p.SourceHeight == playable[0].SourceHeight);
+            var uniform = programs[0].SourceHeight > 0 && programs.All(p => p.SourceHeight == programs[0].SourceHeight);
             var decodeHwaccel = uniform ? video.DecodeHwaccel : null;
 
             // One continuous ffmpeg. If it dies after producing output (a bad file mid-playlist, an encoder
@@ -316,11 +312,30 @@ public class StreamSessionService
                 // The concat demuxer reads "file '<path>'" lines; single quotes in a path escape as '\''.
                 // The first start is offset by the tune-in card it follows (so content lands on the wall clock once
                 // the card ends); a restart resumes at plain "now".
-                var (index, intoItem) = ScheduleCalculator.CurrentProgram(playable, DateTime.UtcNow + lead, ScheduleCalculator.Epoch);
+                var (airing, airingOffset) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow + lead, ScheduleCalculator.Epoch);
                 lead = TimeSpan.Zero;
+
+                // The item airing now may be missing (deleted or on unmounted storage): start at the next one that
+                // exists instead, and leave missing items out of the list (the concat demuxer cannot open one, and
+                // under -stream_loop that sends it back to the top of the list). Only the stretch of the list a
+                // viewer can realistically reach is checked (see ConcatList), so a tune-in of a channel with
+                // thousands of items stats a handful of files, not all of them.
+                var (index, intoItem, skipped) = FirstPlayable(programs, airing, airingOffset, File.Exists);
+                if (index < 0)
+                {
+                    _logger.LogWarning("Every item on channel {Name} is unreachable; showing standby", channel.Name);
+                    await StreamSlateAsync(ffmpeg, timeline, output, cancellationToken).ConfigureAwait(false);
+                    break;
+                }
+
+                if (skipped > 0)
+                {
+                    _logger.LogWarning("Channel {Name}: skipped {Count} missing item(s) at the current position", channel.Name, skipped);
+                }
+
                 await File.WriteAllLinesAsync(
                     listFile,
-                    Rotate(playable, index).Select(p => "file '" + p.Path!.Replace("'", "'\\''", StringComparison.Ordinal) + "'"),
+                    ConcatList(programs, index, File.Exists, ConcatCheckHorizon).Select(p => "file '" + p.Path!.Replace("'", "'\\''", StringComparison.Ordinal) + "'"),
                     cancellationToken).ConfigureAwait(false);
 
                 var args = StreamArguments.BuildConcat(listFile, intoItem, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel, headStart, timeline);
@@ -400,8 +415,63 @@ public class StreamSessionService
         }
     }
 
-    // The seek offset into the concatenated playlist for the current wall-clock position. Recomputed on each
-    // (re)start so a resumed stream lands at "now", not the original tune-in point.
+    /// <summary>
+    /// Finds where playback starts: the airing item at its offset when its file exists, otherwise the start of the
+    /// next item whose file does. Files are checked one at a time from the airing item onward, stopping at the
+    /// first that exists, so a healthy channel stats exactly one file per (re)start rather than every item.
+    /// </summary>
+    /// <param name="programs">The full program cycle.</param>
+    /// <param name="index">The airing item's index in the cycle.</param>
+    /// <param name="offset">How far into the airing item the clock is.</param>
+    /// <param name="exists">Whether a media file exists.</param>
+    /// <returns>The item and offset to start at, and how many missing items were stepped over; the index is <c>-1</c> when no item exists.</returns>
+    internal static (int Index, TimeSpan Offset, int Skipped) FirstPlayable(IReadOnlyList<ProgramEntry> programs, int index, TimeSpan offset, Func<string, bool> exists)
+    {
+        for (var skipped = 0; skipped < programs.Count; skipped++)
+        {
+            var candidate = (index + skipped) % programs.Count;
+            var path = programs[candidate].Path;
+            if (!string.IsNullOrEmpty(path) && exists(path))
+            {
+                return (candidate, skipped == 0 ? offset : TimeSpan.Zero, skipped);
+            }
+        }
+
+        return (-1, TimeSpan.Zero, programs.Count);
+    }
+
+    /// <summary>
+    /// The concat playlist for one run: the cycle rotated to start at the given item, skipping items with no path.
+    /// Items whose file is missing are left out too, but files are only checked until the listed items cover
+    /// <paramref name="horizon"/> of airtime; the rest are listed unchecked. Every restart rebuilds the list from
+    /// the current position, so the checked stretch always lies just ahead of the viewer.
+    /// </summary>
+    /// <param name="programs">The full program cycle.</param>
+    /// <param name="startIndex">The item to start at.</param>
+    /// <param name="exists">Whether a media file exists.</param>
+    /// <param name="horizon">How much airtime ahead to check.</param>
+    /// <returns>The items to list, in play order.</returns>
+    internal static List<ProgramEntry> ConcatList(IReadOnlyList<ProgramEntry> programs, int startIndex, Func<string, bool> exists, TimeSpan horizon)
+    {
+        var list = new List<ProgramEntry>(programs.Count);
+        long covered = 0;
+        foreach (var program in Rotate(programs, startIndex))
+        {
+            if (string.IsNullOrEmpty(program.Path) || (covered < horizon.Ticks && !exists(program.Path)))
+            {
+                continue;
+            }
+
+            list.Add(program);
+            covered += program.DurationTicks;
+        }
+
+        return list;
+    }
+
+    // How much airtime ahead of the current position a concat run's playlist is checked for missing files.
+    internal static readonly TimeSpan ConcatCheckHorizon = TimeSpan.FromHours(24);
+
     // Rotates the playlist to start at the given item. The loop is a cycle, so the cyclic play order is
     // untouched; only the entry point moves.
     internal static IEnumerable<ProgramEntry> Rotate(IReadOnlyList<ProgramEntry> items, int startIndex)

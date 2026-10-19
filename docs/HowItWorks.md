@@ -7,7 +7,7 @@ The Channels tab picks a channel to edit and groups its options into collapsible
 ![Channels](screenshots/Channels.png)
 
 * **Content from your library.** A channel pulls from libraries, collections, genres, or hand-picked items, then narrows by ratings, years, studios, people, audio language, and content type. Time of day rating blocks change what may air by the clock, so daytime stays family friendly on its own.
-* **A built-in Popular channel.** Channel 0 programs itself from the server's recently played, recently added, and highest rated movies and shows, measured across every user, and stays fresh with rotating picks.
+* **A built-in Popular channel.** Channel 0 programs itself from the server's recently played, recently added, and highest rated movies and shows, measured across every user, and stays fresh with rotating picks. Its guide is shared by every user and has no per user parental filtering; see [Popular tab](Settings.md#popular-tab).
 * **A full guide.** Every program carries its description, genres, ratings, air dates, and episode numbers, plus every artwork shape the content has, with recently added items flagged as new.
 * **Native streaming.** Channels are encoded on demand with Jellyfin's own hardware acceleration (fully GPU-resident on Intel), HDR is tone-mapped to SDR, pacing is automatic, and an encoder that dies mid-watch is replaced in place. Optional subtitle burn-in bakes a track into the picture, styled once for every channel.
 * **Recording.** A program or a whole series can be recorded from the guide. Recordings are materialized from the library files into Jellyfin's Live TV recording folders, just like the built-in DVR.

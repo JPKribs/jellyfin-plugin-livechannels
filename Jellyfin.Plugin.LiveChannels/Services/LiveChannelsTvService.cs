@@ -170,8 +170,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         _reaper = new Timer(
             _ =>
             {
-                ReapSessions();
-                _recordings.Kick();
+                // A timer callback runs on the thread pool, where an unhandled exception terminates the whole
+                // server process; one bad sweep is only logged (the next tick tries again), and a failed session
+                // sweep still lets the DVR heartbeat run.
+                RunGuarded(ReapSessions, _logger, "the session reaper sweep");
+                RunGuarded(_recordings.Kick, _logger, "the recording heartbeat");
             },
             state: null,
             TimeSpan.FromMinutes(1),
@@ -414,11 +417,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         string liveStreamId;
         lock (_openGate)
         {
-            if (_byChannel.TryGetValue(channelId, out var existing) && !existing.Worker.IsCompleted)
+            liveStreamId = NewLiveId();
+            if (_byChannel.TryGetValue(channelId, out var existing) && TryJoin(existing, liveStreamId))
             {
-                liveStreamId = NewLiveId();
-                existing.AddConsumer(liveStreamId);
-                _live[liveStreamId] = existing;
                 adopted = existing;
             }
             else
@@ -462,18 +463,14 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         {
             // Between releasing the lock above and re-acquiring it, another open for this channel may have won the
             // race and created the session; join it rather than starting a second encoder.
-            if (_byChannel.TryGetValue(channelId, out var raced) && !raced.Worker.IsCompleted)
+            liveStreamId = NewLiveId();
+            if (_byChannel.TryGetValue(channelId, out var raced) && TryJoin(raced, liveStreamId))
             {
-                liveStreamId = NewLiveId();
-                raced.AddConsumer(liveStreamId);
-                _live[liveStreamId] = raced;
                 session = raced;
                 playlist = Path.Combine(raced.Path, "stream.m3u8");
             }
             else
             {
-                liveStreamId = NewLiveId();
-
                 // Each session gets its own directory holding the live playlist and its rolling segments; the whole
                 // directory is removed on teardown.
                 var dir = Path.Combine(_streamRoot, liveStreamId);
@@ -511,14 +508,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
 
         // Resolve the channel logo (uploaded or generated, cached on disk, usually already written at guide time)
-        // so the Sessions tab can show it without re-resolving on every poll. Not tied to the request token: a
-        // client cancelling the tune must not leave the session with no logo for its whole life. A no-op when the
-        // session was joined (its logo is already set).
-        session.LogoPath ??= await EnsureLogoAsync(channel, CancellationToken.None).ConfigureAwait(false);
-
-        // A card missing or stale for this channel (first tune-in after a config change, before the next guide
-        // refresh got to it) is rendered now, in the background, for the next tune-in; this one never waits.
-        _ = _intros.EnsureAsync(channel, session.LogoPath);
+        // so the Sessions tab can show it without re-resolving on every poll, then make sure the channel's card is
+        // current. Both run in the background: the logo's first-ever generation is an ffmpeg run, and the viewer
+        // must not wait on it (nor on a hung one) before the playlist is handed over. Not tied to the request
+        // token: a client cancelling the tune must not leave the session with no logo for its whole life.
+        _ = AttachLogoAndCardAsync(session, channel);
 
         // Jellyfin probes the opened stream immediately, so wait until the segmenter has written the playlist and
         // its first segment, and if the producer dies with nothing, drop this consumer (tearing the session
@@ -537,7 +531,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
 
             if (ReleaseConsumer(liveStreamId))
             {
-                TeardownSession(session);
+                TeardownSession(session, onlyIfIdle: true);
             }
 
             throw;
@@ -549,6 +543,22 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             overview: "This channel is now being encoded.");
 
         return (session, liveStreamId);
+    }
+
+    // Resolves a session's logo (a no-op when it was joined and already has one) and kicks the channel's tune-in
+    // card: one missing or stale (first tune-in after a config change, before the next guide refresh got to it) is
+    // rendered for the next tune-in. Never throws; both are niceties.
+    private async Task AttachLogoAndCardAsync(LiveSession session, Channel channel)
+    {
+        try
+        {
+            session.LogoPath ??= await EnsureLogoAsync(channel, CancellationToken.None).ConfigureAwait(false);
+            _ = _intros.EnsureAsync(channel, session.LogoPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Live Channels: could not prepare the logo or card for {Name}", channel.Name);
+        }
     }
 
     // Starts the producer for a session: the stream session runs the HLS segmenter and feeds it, writing the live
@@ -632,7 +642,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 return;
             }
 
-            if (TeardownSession(session))
+            if (TeardownSession(session, onlyIfIdle: true))
             {
                 _activity.Log(
                     "Live Channel: " + session.ChannelName + " has stopped",
@@ -820,7 +830,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         foreach (var session in DistinctSessions())
         {
             if (session.LingeringSinceUtc is { } since && DateTime.UtcNow - since > LingerGrace * 3
-                && !session.HasConsumers && TeardownSession(session, force: false, reported))
+                && !session.HasConsumers && TeardownSession(session, force: false, reported, onlyIfIdle: true))
             {
                 _logger.LogWarning("Live Channels: reaping over-lingered session {Id} ({Name})", session.Id, session.ChannelName);
             }
@@ -1274,11 +1284,15 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     // concurrency cap, or the time limit): those rules exist to reclaim streams nobody is watching, and each one
     // has at some point been able to cut off a viewer who was. Only an explicit administrator kill and server
     // shutdown pass force, because those are deliberate.
-    private bool TeardownSession(LiveSession session, bool force = false)
-        => TeardownSession(session, force, force ? null : ReportedStreamIds());
+    //
+    // onlyIfIdle is for the rules that collect a session BECAUSE its last viewer left (the linger, the over-linger
+    // sweep, a failed first tune-in): their "no viewers" check is repeated atomically with the teardown claim, so
+    // a re-tune adopting the session in between wins and the session stays up.
+    private bool TeardownSession(LiveSession session, bool force = false, bool onlyIfIdle = false)
+        => TeardownSession(session, force, force ? null : ReportedStreamIds(), onlyIfIdle);
 
     // The overload the sweeps use, so one pass over every session shares a single snapshot of who is playing.
-    private bool TeardownSession(LiveSession session, bool force, IReadOnlyList<string>? reported)
+    private bool TeardownSession(LiveSession session, bool force, IReadOnlyList<string>? reported, bool onlyIfIdle = false)
     {
         if (!force && IsWatched(session, reported))
         {
@@ -1289,7 +1303,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             return false;
         }
 
-        if (!session.MarkTornDown())
+        if (!session.MarkTornDown(onlyIfIdle))
         {
             return false;
         }
@@ -1384,6 +1398,42 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         return true;
     }
 
+    /// <summary>
+    /// Runs one step of a background heartbeat, logging instead of propagating any failure: the step runs from a
+    /// timer callback, where an escaping exception would take the whole server process down.
+    /// </summary>
+    /// <param name="step">The step to run.</param>
+    /// <param name="logger">Where a failure is logged.</param>
+    /// <param name="what">What the step is, for the log line.</param>
+    /// <returns>Whether the step completed without throwing.</returns>
+    internal static bool RunGuarded(Action step, ILogger logger, string what)
+    {
+        try
+        {
+            step();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Live Channels: {What} failed; it will run again on the next tick", what);
+            return false;
+        }
+    }
+
+    // Attaches a new viewer to a running session, refusing one whose producer has finished or that a teardown has
+    // already claimed (it is still in the channel map until ForgetSession runs). The torn-down check and the attach
+    // are atomic inside AddConsumer, so a teardown racing this either sees the viewer or is seen by it.
+    private bool TryJoin(LiveSession session, string liveStreamId)
+    {
+        if (session.Worker.IsCompleted || !session.AddConsumer(liveStreamId))
+        {
+            return false;
+        }
+
+        _live[liveStreamId] = session;
+        return true;
+    }
+
     private static string NewLiveId() => "lc_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
 
     private void TryDeleteFile(string path)
@@ -1440,6 +1490,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <inheritdoc />
     public Task CreateTimerAsync(TimerInfo info, CancellationToken cancellationToken)
     {
+        _recordings.StampScheduledItem(info);
         _timers.SaveTimer(info);
         return Task.CompletedTask;
     }
@@ -1457,7 +1508,10 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
 
     /// <inheritdoc />
     Task<string> ISupportsNewTimerIds.CreateTimer(TimerInfo info, CancellationToken cancellationToken)
-        => Task.FromResult(_timers.SaveTimer(info));
+    {
+        _recordings.StampScheduledItem(info);
+        return Task.FromResult(_timers.SaveTimer(info));
+    }
 
     /// <inheritdoc />
     Task<string> ISupportsNewTimerIds.CreateSeriesTimer(SeriesTimerInfo info, CancellationToken cancellationToken)
@@ -1697,7 +1751,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 var file = Path.Combine(_logoRoot, number + "-" + Hash(channel.LogoData) + "." + ExtensionFor(channel.LogoContentType));
                 if (!File.Exists(file))
                 {
-                    await File.WriteAllBytesAsync(file, Convert.FromBase64String(channel.LogoData), cancellationToken).ConfigureAwait(false);
+                    await WriteFileAtomicAsync(file, Convert.FromBase64String(channel.LogoData), cancellationToken).ConfigureAwait(false);
                 }
 
                 return file;
@@ -1713,7 +1767,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                     return null;
                 }
 
-                await File.WriteAllBytesAsync(generated, bytes, cancellationToken).ConfigureAwait(false);
+                await WriteFileAtomicAsync(generated, bytes, cancellationToken).ConfigureAwait(false);
             }
 
             return generated;
@@ -1722,6 +1776,43 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         {
             _logger.LogDebug(ex, "Could not prepare a logo for channel {Name}", channel.Name);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Writes a file so no reader ever sees it half-written and concurrent writers of the same path cannot collide:
+    /// each writes its own uniquely named temp file beside the target, then moves it into place. The guide refresh,
+    /// the start-up warm and a tune-in can all resolve the same channel's logo at once; written in place, the
+    /// losers threw a sharing violation (swallowed, so the channel showed no image) and a reader could catch a
+    /// truncated file. The bytes for one path are identical whoever wins, so the last move simply replaces it.
+    /// </summary>
+    /// <param name="path">The target file.</param>
+    /// <param name="bytes">The content.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>A task that completes when the file is in place.</returns>
+    internal static async Task WriteFileAtomicAsync(string path, byte[] bytes, CancellationToken cancellationToken)
+    {
+        var temp = path + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
+        try
+        {
+            await File.WriteAllBytesAsync(temp, bytes, cancellationToken).ConfigureAwait(false);
+            File.Move(temp, path, overwrite: true);
+        }
+        catch (Exception ex) when ((ex is IOException or UnauthorizedAccessException) && File.Exists(path))
+        {
+            // Another writer's move won the race, or holds the target open (Windows reports that as a sharing
+            // violation or an access denial): its identical copy stands.
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temp);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Best effort; a stray temp file is harmless and never read.
+            }
         }
     }
 
@@ -1754,7 +1845,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     // channel and shared by every later tune-in of the same channel (each is a consumer); it lives until its last
     // consumer leaves (then a linger grace), so no viewer can tear it down while another is still watching. The
     // consumer set and linger state are guarded by a lock so opens and closes on different threads stay consistent.
-    private sealed class LiveSession
+    internal sealed class LiveSession
     {
         private readonly object _gate = new();
         private readonly List<string> _consumers = new();
@@ -1884,16 +1975,24 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
 
         // Attaches a viewer and clears any pending linger (a re-tune within the grace keeps the session alive).
-        public void AddConsumer(string id)
+        // Refuses once the session has been torn down: the check and the attach share the lock MarkTornDown takes
+        // when it insists on an idle session, so an adoption and a linger teardown can never both win.
+        public bool AddConsumer(string id)
         {
             lock (_gate)
             {
+                if (IsTornDown)
+                {
+                    return false;
+                }
+
                 if (!_consumers.Contains(id))
                 {
                     _consumers.Add(id);
                 }
 
                 LingeringSinceUtc = null;
+                return true;
             }
         }
 
@@ -1914,7 +2013,20 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
 
         // Claims the teardown exactly once, so several triggers (last-viewer linger, the reaper, the cap, dispose)
-        // cannot dispose the same session twice.
-        public bool MarkTornDown() => Interlocked.Exchange(ref _tornDown, 1) == 0;
+        // cannot dispose the same session twice. With onlyIfIdle, the claim is refused while a viewer is attached,
+        // judged under the same lock AddConsumer takes: a re-tune that adopted the session a moment after the
+        // linger saw it empty keeps it, instead of being handed a session that is then torn down under it.
+        public bool MarkTornDown(bool onlyIfIdle = false)
+        {
+            lock (_gate)
+            {
+                if (onlyIfIdle && _consumers.Count > 0)
+                {
+                    return false;
+                }
+
+                return Interlocked.Exchange(ref _tornDown, 1) == 0;
+            }
+        }
     }
 }

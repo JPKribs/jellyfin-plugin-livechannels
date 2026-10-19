@@ -200,7 +200,9 @@ public sealed partial class RecordingService
                     continue;
                 }
 
-                _timers.SaveTimer(BuildChildTimer(rule, anchor.ChannelId, programId, slot));
+                var child = BuildChildTimer(rule, anchor.ChannelId, programId, slot);
+                SetScheduledItem(child, program.ItemId);
+                _timers.SaveTimer(child);
                 if (++created >= MaxChildrenPerRulePass)
                 {
                     break;
@@ -290,7 +292,7 @@ public sealed partial class RecordingService
 
     private async Task MaterializeAsync(TimerInfo timer, LiveTvOptions? options, string defaultRoot)
     {
-        var resolved = Resolve(timer.ProgramId)
+        var resolved = Resolve(timer.ProgramId, ScheduledItem(timer))
             ?? throw new InvalidOperationException("The program no longer resolves to a scheduled library item.");
         var program = resolved.Slot.Program;
         var source = program.Path;
@@ -351,11 +353,59 @@ public sealed partial class RecordingService
         TriggerRefresh(target.File);
     }
 
+    /// <summary>
+    /// The <see cref="TimerInfo.ProviderIds"/> key a timer carries the library item it was scheduled for under, so
+    /// a later reschedule (durations healed, channel edited) cannot make it record whatever now airs in its slot.
+    /// </summary>
+    internal const string ScheduledItemKey = "LiveChannelsItem";
+
+    /// <summary>
+    /// Stamps a timer with the library item its program airs right now, unless it already carries one. Called when
+    /// a timer is created, which is the moment the guide entry the user pressed record on is still current.
+    /// </summary>
+    /// <param name="timer">The timer to stamp.</param>
+    public void StampScheduledItem(TimerInfo timer)
+    {
+        ArgumentNullException.ThrowIfNull(timer);
+        if (ScheduledItem(timer) is not null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (Resolve(timer.ProgramId) is { } resolved)
+            {
+                SetScheduledItem(timer, resolved.Slot.Program.ItemId);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Unstamped, the timer still resolves by its slot the way older timers do.
+            _logger.LogDebug(ex, "Live Channels: could not resolve the scheduled item for timer \"{Name}\"", timer.Name);
+        }
+    }
+
+    /// <summary>Gets the library item a timer was scheduled for, or <c>null</c> for a timer that predates the stamp.</summary>
+    /// <param name="timer">The timer.</param>
+    /// <returns>The item id, or <c>null</c>.</returns>
+    internal static Guid? ScheduledItem(TimerInfo timer)
+        => timer.ProviderIds is { } ids && ids.TryGetValue(ScheduledItemKey, out var raw) && Guid.TryParse(raw, out var id) ? id : null;
+
+    /// <summary>Records the library item a timer was scheduled for.</summary>
+    /// <param name="timer">The timer.</param>
+    /// <param name="itemId">The item id.</param>
+    internal static void SetScheduledItem(TimerInfo timer, Guid itemId)
+    {
+        timer.ProviderIds ??= new Dictionary<string, string>(StringComparer.Ordinal);
+        timer.ProviderIds[ScheduledItemKey] = itemId.ToString("N", CultureInfo.InvariantCulture);
+    }
+
     // Resolves a guide program id ("<channelId>_<startTicks>") back to its channel and scheduled slot. The
-    // schedule is deterministic (epoch-anchored), so past and future windows both resolve; if the schedule has
-    // drifted since the timer was created (durations healed, channel edited), the slot now covering the
-    // original start stands in.
-    private ResolvedProgram? Resolve(string? programId)
+    // schedule is deterministic (epoch-anchored), so past and future windows both resolve. When the timer
+    // carries the item it was scheduled for, that item is what resolves, even if a reschedule since (durations
+    // healed, channel edited) moved something else into the slot; see PickSlot.
+    private ResolvedProgram? Resolve(string? programId, Guid? scheduledItem = null)
     {
         var parsed = ParseProgramId(programId);
         if (parsed is null)
@@ -377,9 +427,50 @@ public sealed partial class RecordingService
 
         var start = new DateTime(parsed.Value.StartTicks, DateTimeKind.Utc);
         var timeline = _channels.BuildTimeline(channel, programs, start, start.AddMinutes(1));
-        var slot = timeline.FirstOrDefault(s => s.Start.Ticks == parsed.Value.StartTicks)
-            ?? timeline.FirstOrDefault(s => s.Start <= start && start < s.Stop);
+        var slot = PickSlot(timeline, programs, start, scheduledItem, out var fellBack);
+        if (fellBack && slot is not null)
+        {
+            _logger.LogWarning(
+                "Live Channels: program {ProgramId} was scheduled for item {Expected}, which is no longer on the channel; recording \"{Title}\" now in that slot instead",
+                programId,
+                scheduledItem,
+                slot.Program.Title);
+        }
+
         return slot is null ? null : new ResolvedProgram(channel, parsed.Value.ChannelId, slot);
+    }
+
+    /// <summary>
+    /// Picks the slot a timer records. Without a scheduled item (a timer from before the stamp existed) it is the
+    /// slot starting exactly at the program's start, else the one covering it. With one, the slot is used only
+    /// when it still airs that item; otherwise the item itself is placed at the original start (a recording is
+    /// the item's file, so where it airs now does not matter). Only when the item has left the channel entirely
+    /// does it fall back to the slot, reporting that through <paramref name="fellBack"/>.
+    /// </summary>
+    /// <param name="timeline">The channel's timeline around the start.</param>
+    /// <param name="programs">The channel's current program list.</param>
+    /// <param name="start">The program's original start.</param>
+    /// <param name="scheduledItem">The item the timer was scheduled for, or <c>null</c>.</param>
+    /// <param name="fellBack">Whether the scheduled item could not be found and the slot's item stood in.</param>
+    /// <returns>The slot to record, or <c>null</c> when nothing resolves.</returns>
+    internal static ScheduledProgram? PickSlot(IReadOnlyList<ScheduledProgram> timeline, IReadOnlyList<ProgramEntry> programs, DateTime start, Guid? scheduledItem, out bool fellBack)
+    {
+        fellBack = false;
+        var slot = timeline.FirstOrDefault(s => s.Start.Ticks == start.Ticks)
+            ?? timeline.FirstOrDefault(s => s.Start <= start && start < s.Stop);
+        if (scheduledItem is not { } expected || slot?.Program.ItemId == expected)
+        {
+            return slot;
+        }
+
+        var item = programs.FirstOrDefault(p => p.ItemId == expected);
+        if (item is not null)
+        {
+            return new ScheduledProgram(item, start, start + TimeSpan.FromTicks(item.DurationTicks));
+        }
+
+        fellBack = slot is not null;
+        return slot;
     }
 
     /// <summary>

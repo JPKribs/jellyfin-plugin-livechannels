@@ -515,13 +515,13 @@ public static class StreamArguments
 
         if (hasFont)
         {
-            // Forward slashes work on every OS in ffmpeg paths and avoid backslash-escaping headaches.
-            var font = fontPath!.Replace("\\", "/", StringComparison.Ordinal);
+            // Escaped for the filtergraph like every other path, so a drive colon or an apostrophe cannot break it.
+            var font = QuoteFilterValue(fontPath!);
             var title = (height / 10).ToString(CultureInfo.InvariantCulture);
             var sub = (height / 24).ToString(CultureInfo.InvariantCulture);
             Add(args, "-vf",
-                "drawtext=fontfile='" + font + "':text='Standby':fontcolor=white:fontsize=" + title + ":x=(w-tw)/2:y=(h/2)-" + title + ","
-                + "drawtext=fontfile='" + font + "':text='Channel content is unavailable':fontcolor=0xaaaaaa:fontsize=" + sub + ":x=(w-tw)/2:y=(h/2)+10,"
+                "drawtext=fontfile=" + font + ":text='Standby':fontcolor=white:fontsize=" + title + ":x=(w-tw)/2:y=(h/2)-" + title + ","
+                + "drawtext=fontfile=" + font + ":text='Channel content is unavailable':fontcolor=0xaaaaaa:fontsize=" + sub + ":x=(w-tw)/2:y=(h/2)+10,"
                 + "format=yuv420p");
         }
         else
@@ -640,12 +640,12 @@ public static class StreamArguments
         {
             // Jellyfin's own extracted subtitle file (the same one its transcodes burn): a tiny file libass reads
             // instantly, instead of scanning the whole media file to reach the seek point.
-            filter = "[0:v]subtitles=filename='" + EscapeSubtitlePath(externalSubtitlePath) + "'" + options + "," + scale + "[v]";
+            filter = "[0:v]subtitles=filename=" + QuoteFilterValue(externalSubtitlePath) + options + "," + scale + "[v]";
         }
         else
         {
             // Text subtitle read straight from the media file (the fallback while Jellyfin's extraction warms).
-            filter = "[0:v]subtitles=filename='" + EscapeSubtitlePath(path) + "':si=" + index + options + "," + scale + "[v]";
+            filter = "[0:v]subtitles=filename=" + QuoteFilterValue(path) + ":si=" + index + options + "," + scale + "[v]";
         }
 
         args.Add("-filter_complex");
@@ -675,10 +675,10 @@ public static class StreamArguments
         {
             // Text subtitle: libass draws onto a transparent canvas; `start=` aligns the canvas timestamps with
             // the -copyts seek so the overlay stays in sync on a deep tune-in.
-            var source = !string.IsNullOrEmpty(externalSubtitlePath) ? EscapeSubtitlePath(externalSubtitlePath) : EscapeSubtitlePath(path);
+            var source = QuoteFilterValue(!string.IsNullOrEmpty(externalSubtitlePath) ? externalSubtitlePath : path);
             var si = string.IsNullOrEmpty(externalSubtitlePath) ? ":si=" + index : string.Empty;
             subChain = "alphasrc=s=" + w + "x" + h + ":r=10:start=" + startSeconds + "[bg];"
-                + "[bg]subtitles=filename='" + source + "'" + si + options + ":alpha=1[subsw];[subsw]hwupload[sub]";
+                + "[bg]subtitles=filename=" + source + si + options + ":alpha=1[subsw];[subsw]hwupload[sub]";
         }
 
         // eof_action=pass keeps the video flowing after the subtitle track runs dry (it usually ends early).
@@ -724,7 +724,7 @@ public static class StreamArguments
         var options = string.Empty;
         if (!string.IsNullOrEmpty(fontsDir))
         {
-            options += ":fontsdir='" + EscapeSubtitlePath(fontsDir) + "'";
+            options += ":fontsdir=" + QuoteFilterValue(fontsDir);
         }
 
         if (!string.IsNullOrEmpty(style))
@@ -735,11 +735,22 @@ public static class StreamArguments
         return options;
     }
 
-    // libavfilter parses the subtitles filename: backslash, single quote, and colon must be escaped so the
-    // path is not split on the option separator or treated as a quote boundary.
-    private static string EscapeSubtitlePath(string path)
-        => path
+    /// <summary>
+    /// Quotes a value (a file path) for use as a filter option inside a <c>-filter_complex</c> graph. ffmpeg
+    /// unescapes it twice: the filtergraph parser first strips one level of quoting (where <c>, ; [ ]</c> would
+    /// otherwise end the filter or start a pad label), then the filter's own option parser strips a second
+    /// (where <c>:</c> would start the next option). So the value is escaped for the option parser (backslash
+    /// before <c>\ ' :</c>) and the result single-quoted for the graph parser. A quote cannot appear inside a
+    /// quoted span, so each one closes the span, adds an escaped quote, and reopens it: <c>'\''</c>.
+    /// </summary>
+    /// <param name="value">The raw value.</param>
+    /// <returns>The value, escaped and quoted, ready to follow <c>option=</c>.</returns>
+    internal static string QuoteFilterValue(string value)
+    {
+        var option = value
             .Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("'", "\\'", StringComparison.Ordinal)
             .Replace(":", "\\:", StringComparison.Ordinal);
+        return "'" + option.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+    }
 }

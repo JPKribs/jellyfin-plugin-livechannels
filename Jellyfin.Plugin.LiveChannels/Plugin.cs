@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using Jellyfin.Plugin.LiveChannels.Configuration;
 using Jellyfin.Plugin.LiveChannels.Services;
 using JPKribs.Jellyfin.Base;
@@ -68,15 +69,35 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
     {
         ConfigurationValidator.Validate(incoming);
 
-        // Every save re-anchors the time-of-day schedule chain (the cache below is dropped anyway, so the
-        // reshuffle this causes coincides with the rebuild the user already expects from saving).
-        incoming.ScheduleAnchorUtc = DateTime.UtcNow;
+        // A save that changes the channels re-anchors the time-of-day schedule chain (the cache below is dropped
+        // anyway, so the reshuffle this causes coincides with the rebuild the user already expects from saving).
+        // A save that only touches plugin-wide settings (bitrate, codec, subtitle look) keeps the anchor, so the
+        // guide does not reshuffle every time-of-day channel for a change that has nothing to do with them.
+        incoming.ScheduleAnchorUtc = AffectsSchedule(incoming, stored) || stored.ScheduleAnchorUtc == default
+            ? DateTime.UtcNow
+            : stored.ScheduleAnchorUtc;
 
         // A channel edit must not be served from a stale schedule, so drop every cached schedule; the next guide
         // refresh or tune-in rebuilds it from the new configuration. This runs before the save on purpose: the
         // cache lives under the stream directory, so the one cleared is the directory the old schedules were
         // written to.
         ChannelService.ClearScheduleCache(_applicationPaths);
+    }
+
+    /// <summary>
+    /// Whether a save changes what the channels schedule: any channel's definition (its sources, filters, order,
+    /// rating blocks, enabled state) or the Popular channel's. Compared by value, so a save that sends the same
+    /// channels back unchanged does not count.
+    /// </summary>
+    /// <param name="incoming">The configuration about to be saved.</param>
+    /// <param name="stored">The configuration currently in effect.</param>
+    /// <returns>Whether the schedule-defining settings differ.</returns>
+    internal static bool AffectsSchedule(PluginConfiguration incoming, PluginConfiguration stored)
+    {
+        ArgumentNullException.ThrowIfNull(incoming);
+        ArgumentNullException.ThrowIfNull(stored);
+        return !string.Equals(JsonSerializer.Serialize(incoming.Channels), JsonSerializer.Serialize(stored.Channels), StringComparison.Ordinal)
+            || !string.Equals(JsonSerializer.Serialize(incoming.PopularChannel), JsonSerializer.Serialize(stored.PopularChannel), StringComparison.Ordinal);
     }
 
     /// <inheritdoc />

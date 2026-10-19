@@ -162,6 +162,14 @@ public sealed class TimerService
                 info.Id = NewTimerId();
             }
 
+            // A client's edit arrives rebuilt from its DTO, which has no provider ids, so the item the timer was
+            // scheduled for would be lost on every update. Carry it over from the timer being replaced.
+            var previous = _timers.FirstOrDefault(t => string.Equals(t.Id, info.Id, StringComparison.Ordinal));
+            if (previous is not null && RecordingService.ScheduledItem(info) is null && RecordingService.ScheduledItem(previous) is { } item)
+            {
+                RecordingService.SetScheduledItem(info, item);
+            }
+
             _timers.RemoveAll(t => string.Equals(t.Id, info.Id, StringComparison.Ordinal)
                 || (!string.IsNullOrEmpty(info.ProgramId) && string.Equals(t.ProgramId, info.ProgramId, StringComparison.Ordinal)));
             _timers.Add(info);

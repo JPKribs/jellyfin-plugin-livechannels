@@ -29,6 +29,9 @@ public class DefaultLogoService
 
     private static readonly char[] TitleSeparators = { ' ', '\t', '-', '_', '.', ':', '/' };
 
+    // How long the one-frame logo render may run before it is treated as hung and killed.
+    private static readonly TimeSpan GenerateTimeout = TimeSpan.FromSeconds(30);
+
     // The embedded Material Icons font and its name-to-codepoint map are loaded once, process-wide.
     private static readonly object IconLock = new();
     private static string? _iconFontPath;
@@ -112,16 +115,13 @@ public class DefaultLogoService
         var (centreFont, centreText, isSymbol) = ResolveCentre(number, style, symbol, textFont);
         if (centreFont is not null && centreText.Length > 0)
         {
-            var safeCentreFont = centreFont.Replace("\\", "/", StringComparison.Ordinal);
             var centreSize = (isSymbol ? Size * 11 / 25 : Size * 2 / 5).ToString(CultureInfo.InvariantCulture);
-            filters.Add("drawtext=fontfile='" + safeCentreFont + "':text='" + SanitizeForDrawtext(centreText)
-                + "':fontcolor=" + fc + ":fontsize=" + centreSize + ":x=(w-tw)/2:y=(h-th)/2");
+            filters.Add(DrawText(centreFont, centreText) + ":fontcolor=" + fc + ":fontsize=" + centreSize + ":x=(w-tw)/2:y=(h-th)/2");
         }
 
         // Name along the bottom, on one or two lines (or dropped) so it never overflows.
         if (showName && textFont is not null)
         {
-            var safeFont = textFont.Replace("\\", "/", StringComparison.Ordinal);
             var lines = FitTitleLines(name);
             var titleSize = (Size / 13).ToString(CultureInfo.InvariantCulture);
             var bottom = Size / 11;
@@ -130,8 +130,7 @@ public class DefaultLogoService
             {
                 // Stack upward from the bottom line so two rows sit just above the lower edge.
                 var offset = bottom + ((lines.Length - 1 - i) * lineHeight);
-                filters.Add("drawtext=fontfile='" + safeFont + "':text='" + SanitizeForDrawtext(lines[i])
-                    + "':fontcolor=" + fc + ":fontsize=" + titleSize + ":x=(w-tw)/2:y=h-th-"
+                filters.Add(DrawText(textFont, lines[i]) + ":fontcolor=" + fc + ":fontsize=" + titleSize + ":x=(w-tw)/2:y=h-th-"
                     + offset.ToString(CultureInfo.InvariantCulture));
             }
         }
@@ -180,14 +179,23 @@ public class DefaultLogoService
         // (it blocks on the stderr write, so stdout never reaches end of file).
         var stderrTask = ReadQuietlyAsync(process.StandardError);
 
+        // A single synthesised frame takes well under a second; an ffmpeg still running after the deadline is hung,
+        // and is killed below like a cancelled one, so a caller (the guide refresh) is never held by it.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(GenerateTimeout);
         using var buffer = new MemoryStream();
         try
         {
-            await process.StandardOutput.BaseStream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            await process.StandardOutput.BaseStream.CopyToAsync(buffer, deadline.Token).ConfigureAwait(false);
+            await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning("ffmpeg did not finish the default logo for channel {Number} within {Seconds}s; killed it", number, GenerateTimeout.TotalSeconds);
+            }
+
             return null;
         }
         finally
@@ -412,6 +420,16 @@ public class DefaultLogoService
     }
 
     // Removes or neutralises the characters that would break ffmpeg's drawtext text argument.
+    /// <summary>
+    /// The start of a drawtext filter: the font file (escaped for the filtergraph, so a Windows drive colon or an
+    /// apostrophe in the path cannot break the graph) and the sanitised text. Options follow from the caller.
+    /// </summary>
+    /// <param name="fontPath">The font file.</param>
+    /// <param name="text">The text to draw.</param>
+    /// <returns>The <c>drawtext=fontfile=...:text='...'</c> prefix.</returns>
+    internal static string DrawText(string fontPath, string text)
+        => "drawtext=fontfile=" + StreamArguments.QuoteFilterValue(fontPath) + ":text='" + SanitizeForDrawtext(text) + "'";
+
     private static string SanitizeForDrawtext(string s)
         => s.Replace("\\", string.Empty, StringComparison.Ordinal)
             .Replace("'", string.Empty, StringComparison.Ordinal)

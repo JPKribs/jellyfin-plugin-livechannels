@@ -130,6 +130,9 @@ The Popular tab with its Channel section open.
 | **Content types** | Episodes, movies, and specials toggles. | episodes and movies on |
 | **Loop order** | Shuffle, Alphabetical, or Chronological. | Shuffle |
 
+!!! warning "Privacy and parental controls"
+    The Popular channel is built from the watch history of **every user on the server**, and its guide is shared: anyone who can see Live TV sees the same channel 0 lineup, so its recently played picks reveal what other users have been watching. It also has **no per user parental filtering**: the lineup is picked once for everyone, not per viewer, so a title one user's parental controls would hide in the library can still be on air, and the only content limit the channel applies is its own **Rating limits** setting. On a server shared with children or with users who should not see each other's viewing, set a rating limit here or turn the channel off.
+
 ---
 
 ## Sessions tab
@@ -221,6 +224,8 @@ The Stress Test section picks a test item and runs the measurement.
 **Stress test.** Measures how many concurrent streams the server can sustain, using the real channel pipeline. Pick one demanding movie or episode (4K or HDR gives the most honest number), then each round encodes a minute of it with one more simultaneous stream than the last, until a stream drops below realtime. The last fully passing round is the recommendation, with an **Apply** link that fills in Maximum concurrent streams for you. The test refuses to start while channel streams are active, and a viewer tuning in cancels it, since a real viewer always wins the encoder. Nothing about the test is saved.
 
 **Reset schedule.** Rebuilds every channel schedule and guide from the current settings by running Jellyfin's own Refresh Guide task. Use it to clear a stale schedule, like after changing a channel's filters.
+
+**Missing media files.** The guide still lists an item whose file was deleted or sits on storage that is offline. When a channel is tuned (or its encoder restarts), it starts on the program the guide shows, steps past a missing item to the next one, and leaves missing files out of the next 24 hours of its playlist. Skipping an item starts the next one early, so the picture can run ahead of the guide by up to the skipped item's length. A file that goes missing more than 24 hours ahead of a viewer who keeps watching can also put the stream out of step until the encoder restarts. A **Reset schedule** after removing or restoring media puts everything back in line.
 
 ---
 

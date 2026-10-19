@@ -79,6 +79,13 @@ public sealed class IntroService : IDisposable
         new(0.78, 0.06, 1.4, 1.1, 2.1, 1),
         new(0.55, 0.05, 0.6, 0.5, 0.7, -1),
     ];
+    // Bounds on each child process of a render: a pass renders a few seconds of video, so even a slow software
+    // encoder finishes well inside these; anything longer is hung, not slow.
+    private static readonly TimeSpan RenderPassTimeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(30);
+
+    // How long to wait for a killed process to actually exit before giving up on it.
+    internal static readonly TimeSpan ReapTimeout = TimeSpan.FromSeconds(5);
     private const string BackdropColors = "c0=#0b1020:c1=#1a0f33:c2=#0a1c2e:c3=#12082a:nb_colors=4:speed=0.012";
 
     private readonly IMediaEncoder _encoder;
@@ -384,7 +391,7 @@ public sealed class IntroService : IDisposable
                 var gap = height * 3 / 100;
                 var fontSize = logoHeight * 38 / 100;
                 caption = "pad=iw+" + budget.ToString(CultureInfo.InvariantCulture) + ":ih:0:0:color=#00000000,"
-                    + "drawtext=fontfile='" + EscapeFilterPath(fontPath) + "':text='" + CaptionText + "':fontcolor=white@0.9:fontsize=" + fontSize.ToString(CultureInfo.InvariantCulture)
+                    + "drawtext=fontfile=" + StreamArguments.QuoteFilterValue(fontPath) + ":text='" + CaptionText + "':fontcolor=white@0.9:fontsize=" + fontSize.ToString(CultureInfo.InvariantCulture)
                     + ":x=w-" + budget.ToString(CultureInfo.InvariantCulture) + "+" + gap.ToString(CultureInfo.InvariantCulture) + ":y=(h-th)/2-(descent/2),";
             }
 
@@ -421,13 +428,6 @@ public sealed class IntroService : IDisposable
 
     private static string F(double value) => value.ToString("0.####", CultureInfo.InvariantCulture);
 
-    // A path inside a filter option: backslashes, quotes and colons all need escaping (Windows drive letters).
-    private static string EscapeFilterPath(string path)
-        => path
-            .Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("'", "\\'", StringComparison.Ordinal)
-            .Replace(":", "\\:", StringComparison.Ordinal);
-
     private async Task<double?> ProbeEndSecondsAsync(string file)
     {
         var ffprobe = _encoder.ProbePath;
@@ -436,25 +436,10 @@ public sealed class IntroService : IDisposable
             return null;
         }
 
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = ffprobe,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        foreach (var arg in new[] { "-v", "error", "-show_entries", "packet=pts_time,duration_time", "-of", "csv=p=0", file })
-        {
-            startInfo.ArgumentList.Add(arg);
-        }
-
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
-        var stderr = process.StandardError.ReadToEndAsync();
-        var stdout = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
-        await process.WaitForExitAsync().ConfigureAwait(false);
-        await stderr.ConfigureAwait(false);
+        // The exit code is not consulted: ffprobe can exit non-zero over a trailing packet it could not read while
+        // still printing every packet before it, and those are exactly what is needed. A timed-out probe returns
+        // no output, so it falls back to the nominal length.
+        var (_, stdout, _) = await RunProcessAsync(ffprobe, ["-v", "error", "-show_entries", "packet=pts_time,duration_time", "-of", "csv=p=0", file], captureOutput: true, ProbeTimeout).ConfigureAwait(false);
 
         double max = -1;
         foreach (var line in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
@@ -473,10 +458,27 @@ public sealed class IntroService : IDisposable
 
     private static async Task<(int Exit, string Error)> RunAsync(string ffmpeg, IReadOnlyList<string> args)
     {
+        var (exit, _, error) = await RunProcessAsync(ffmpeg, args, captureOutput: false, RenderPassTimeout).ConfigureAwait(false);
+        return (exit, error);
+    }
+
+    /// <summary>
+    /// Runs a child process to completion, bounded by a timeout. A render runs under the one-at-a-time render
+    /// gate, so an ffmpeg or ffprobe that hangs (a wedged hardware encoder, a stalled filesystem) would otherwise
+    /// hold the gate forever and no card would ever render again until a restart. On timeout the whole process
+    /// tree is killed and the run reports failure.
+    /// </summary>
+    /// <param name="fileName">The executable.</param>
+    /// <param name="args">Its arguments.</param>
+    /// <param name="captureOutput">Whether to capture standard output (otherwise it is left to the parent).</param>
+    /// <param name="timeout">How long the process may run.</param>
+    /// <returns>The exit code (<c>-1</c> when it timed out), the captured output, and standard error.</returns>
+    internal static async Task<(int Exit, string Output, string Error)> RunProcessAsync(string fileName, IReadOnlyList<string> args, bool captureOutput, TimeSpan timeout)
+    {
         var startInfo = new ProcessStartInfo
         {
-            FileName = ffmpeg,
-            RedirectStandardOutput = false,
+            FileName = fileName,
+            RedirectStandardOutput = captureOutput,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
@@ -488,9 +490,37 @@ public sealed class IntroService : IDisposable
 
         using var process = new Process { StartInfo = startInfo };
         process.Start();
+
+        // Both pipes drain from the start so a chatty process can never block on a full pipe.
         var stderr = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync().ConfigureAwait(false);
-        return (process.ExitCode, await stderr.ConfigureAwait(false));
+        var stdout = captureOutput ? process.StandardOutput.ReadToEndAsync() : Task.FromResult(string.Empty);
+        using var deadline = new CancellationTokenSource(timeout);
+        try
+        {
+            await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // It exited between the timeout and the kill.
+            }
+
+            // Reap it (killing closes its pipes, so the drains finish too), but only briefly: a process stuck in
+            // uninterruptible IO cannot die until the IO returns, and waiting on it unbounded would hold the render
+            // gate exactly as the hang did. The pipes are then left to close on their own.
+            var drained = Task.WhenAll(process.WaitForExitAsync(CancellationToken.None), stderr, stdout);
+            var finished = await Task.WhenAny(drained, Task.Delay(ReapTimeout)).ConfigureAwait(false) == drained;
+            var partial = stderr.IsCompletedSuccessfully ? await stderr.ConfigureAwait(false) : string.Empty;
+            var note = finished ? "killed" : "killed, but had not exited " + ReapTimeout.TotalSeconds.ToString("0", CultureInfo.InvariantCulture) + "s later";
+            return (-1, string.Empty, "timed out after " + timeout.TotalSeconds.ToString("0", CultureInfo.InvariantCulture) + "s and was " + note + ". " + partial);
+        }
+
+        return (process.ExitCode, await stdout.ConfigureAwait(false), await stderr.ConfigureAwait(false));
     }
 
     // The channel output profile the card must match, keyed so any change (size, bitrate, codec, the concrete
