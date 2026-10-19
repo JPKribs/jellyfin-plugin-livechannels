@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "12.2.1.1",
+        "changelog": "\n## Fixed\n- Subtitle burn-in now works for media whose folder or file name contains an apostrophe or other special characters\n- Tuning back in to a channel just as its idle stream was shutting down no longer lands on a dead stream\n- Channels with missing media files now start on the program the guide shows when tuning in, and tuning in no longer checks every file first\n- A hung ffmpeg or ffprobe while rendering a tune-in card or logo is now stopped after a time limit instead of blocking later renders\n- Tuning in no longer waits for the channel logo to be generated\n- A recording now captures the item that was scheduled when the timer was set, even if the channel's schedule changed since\n- An unexpected error in the background session cleanup is now logged instead of stopping the server\n- Saving plugin-wide settings such as bitrate no longer reshuffles time-of-day channel schedules\n- Channel logos written by several requests at once no longer go missing\n- The documentation now notes that the Popular channel's shared guide reflects every user's watch history and is not filtered per user\n\n## Developer\n- Updated JPKribs.Jellyfin.Base to 2026.10.19.",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v12.2.1.1/jellyfin-plugin-livechannels-12.2.1.1.zip",
+        "checksum": "7e09da8faa755cb924b49e324282ada0",
+        "timestamp": "2026-10-19T20:30:29Z"
+      },
+      {
         "version": "12.2.1.0",
         "changelog": "\n## Developer\n- Updated JPKribs.Jellyfin.Base to 2026.10.16.",
         "targetAbi": "12.0.0.0",
