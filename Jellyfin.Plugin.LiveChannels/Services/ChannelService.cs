@@ -136,7 +136,7 @@ public partial class ChannelService
 
         var stopwatch = Stopwatch.StartNew();
         var cached = TryReadScheduleCache(channel);
-        var programs = cached ?? RefreshPrograms(channel);
+        var programs = (IReadOnlyList<ProgramEntry>?)cached ?? RefreshPrograms(channel);
         stopwatch.Stop();
 
         // This sits directly on the tune-in critical path (observed: a silent 13-second full rebuild of an
@@ -161,13 +161,18 @@ public partial class ChannelService
     /// Builds a channel's program loop and overwrites its on-disk cache. Called on guide refresh so the schedule
     /// is built once (probing each item's media metadata off the tune-in path) and every tune-in until the next
     /// refresh reuses it. Drops any in-memory copy so the next tune-in reloads the freshly written schedule.
+    /// The new loop is spliced onto the previous one (see <see cref="Splice"/>), so the rebuild keeps whatever is
+    /// airing now instead of rewriting the timeline under it.
     /// </summary>
     /// <param name="channel">The channel to resolve.</param>
     /// <returns>The freshly built, ordered program loop.</returns>
     public IReadOnlyList<ProgramEntry> RefreshPrograms(Channel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        var programs = BuildPrograms(channel);
+        IReadOnlyList<ProgramEntry>? previous = MemorySchedules.TryGetValue(channel.Number, out var hotPrevious)
+            ? hotPrevious
+            : TryReadScheduleCache(channel);
+        var programs = Splice(channel, previous, BuildPrograms(channel), DateTime.UtcNow);
         WriteScheduleCache(channel, programs);
 
         // Update the hot copy only for a channel that is already hot (someone is watching it, or it was tuned
@@ -175,12 +180,68 @@ public partial class ChannelService
         // NOT hot is deliberately left cold: pinning every enabled channel here kept several MB of decoded
         // schedule per large channel in memory forever, refreshed daily, for channels nobody ever tuned. A cold
         // channel's next tune-in reads the just-written disk cache (a fast parse, logged when slow), not a rebuild.
-        if (MemorySchedules.TryGetValue(channel.Number, out var previous))
+        if (MemorySchedules.TryGetValue(channel.Number, out var hot))
         {
-            MemorySchedules.TryUpdate(channel.Number, programs, previous);
+            MemorySchedules.TryUpdate(channel.Number, programs, hot);
         }
 
         return programs;
+    }
+
+    /// <summary>
+    /// Splices a rebuilt loop onto the previous one. Every build changes the loop (the daily series rotation, newly
+    /// added or removed items, learned durations), and every schedule is measured from a fixed anchor, so an
+    /// unspliced rebuild rewrites the whole timeline -- including the program on now -- the moment it lands: the
+    /// stream jumps mid-show, and the guide ends up holding the old timeline and the new one side by side
+    /// (Jellyfin keeps the previous refresh's programs whenever any channel errors). The splice finds the item the
+    /// previous loop has on air at <paramref name="nowUtc"/>, rotates the new loop to begin with it (the loop is a
+    /// cycle, so its order is untouched), and anchors it at that item's original start, so the airing program
+    /// keeps its slot and the new loop carries on from its end.
+    /// </summary>
+    /// <param name="channel">The channel.</param>
+    /// <param name="previous">The loop in use before this rebuild, or <c>null</c> when there is none (a first build,
+    /// or one after a configuration save cleared the cache).</param>
+    /// <param name="built">The freshly built loop.</param>
+    /// <param name="nowUtc">The rebuild instant.</param>
+    /// <returns>The loop to cache and serve.</returns>
+    internal ProgramLoop Splice(Channel channel, IReadOnlyList<ProgramEntry>? previous, IReadOnlyList<ProgramEntry> built, DateTime nowUtc)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        ArgumentNullException.ThrowIfNull(built);
+        if (previous is null || previous.Count == 0 || built.Count == 0)
+        {
+            return new ProgramLoop(built, null);
+        }
+
+        ScheduledProgram? airing = null;
+        foreach (var slot in BuildTimeline(channel, previous, nowUtc, nowUtc.AddTicks(1)))
+        {
+            if (slot.Start <= nowUtc && nowUtc < slot.Stop)
+            {
+                airing = slot;
+                break;
+            }
+        }
+
+        if (airing is null)
+        {
+            return new ProgramLoop(built, null);
+        }
+
+        // An item the rebuild dropped (deleted, or filtered out) cannot continue; the new loop then simply starts
+        // at the old program's slot, which still keeps every later program on the new loop's own boundaries.
+        var index = 0;
+        for (var i = 0; i < built.Count; i++)
+        {
+            if (built[i].ItemId == airing.Program.ItemId)
+            {
+                index = i;
+                break;
+            }
+        }
+
+        var rotated = index == 0 ? built : built.Skip(index).Concat(built.Take(index)).ToList();
+        return new ProgramLoop(rotated, airing.Start);
     }
 
     /// <summary>

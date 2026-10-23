@@ -14,6 +14,14 @@ public static class ScheduleCalculator
     /// <summary>The fixed anchor every channel's loop is measured from, so schedules are stable across restarts.</summary>
     public static readonly DateTime Epoch = DateTime.UnixEpoch;
 
+    /// <summary>
+    /// The instant a loop is measured from: its splice anchor when it was spliced onto a previous build (see
+    /// <see cref="ProgramLoop"/>), otherwise the fixed <see cref="Epoch"/>.
+    /// </summary>
+    /// <param name="programs">The loop.</param>
+    /// <returns>The loop's anchor.</returns>
+    public static DateTime AnchorFor(IReadOnlyList<ProgramEntry> programs) => ProgramLoop.AnchorOf(programs) ?? Epoch;
+
     /// <summary>A hard cap on projected programmes so a channel of very short items can't produce an unbounded guide.</summary>
     private const int MaxProgrammes = 10000;
 

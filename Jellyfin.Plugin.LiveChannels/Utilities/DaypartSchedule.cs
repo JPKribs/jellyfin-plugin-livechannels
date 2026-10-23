@@ -15,7 +15,9 @@ namespace Jellyfin.Plugin.LiveChannels.Utilities;
 /// <param name="AnchorUtc">The anchor the chain was simulated from, keying the state's validity.</param>
 /// <param name="TimeUtc">Where the walk stopped: the UTC instant the next pick happens at.</param>
 /// <param name="Cursor">The loop cursor for that next pick.</param>
-internal readonly record struct DaypartChainState(DateTime AnchorUtc, DateTime TimeUtc, int Cursor);
+/// <param name="Pending">How many items of an already-accepted block are still to air from the cursor, so a resumed
+/// walk finishes the block exactly as a fresh walk would instead of re-checking its tail as a new block.</param>
+internal readonly record struct DaypartChainState(DateTime AnchorUtc, DateTime TimeUtc, int Cursor, int Pending = 0);
 
 /// <summary>
 /// Builds a time-of-day-aware wall-clock schedule for a channel whose rating limits vary by daypart. Unlike the
@@ -24,6 +26,8 @@ internal readonly record struct DaypartChainState(DateTime AnchorUtc, DateTime T
 /// plugin configuration was last saved. The chain is a deterministic function of the loop, the blocks, and the
 /// anchor, so the guide and the live stream independently agree. Each item is placed under the effective rating
 /// window for its start time (widened by the channel's transition buffer) and skipped when it does not comply.
+/// A series block (the loop's consecutive episodes of one series) is placed whole or not at all: it is checked
+/// against the window covering its entire airtime, so a daypart border never cuts a batch down to one episode.
 /// Nothing is ever truncated: an item that starts before midnight simply runs across it, and the next pick
 /// happens under whatever window is active when it ends.
 /// </summary>
@@ -48,6 +52,9 @@ public static class DaypartSchedule
     /// <param name="fromUtc">The inclusive UTC start of the window.</param>
     /// <param name="toUtc">The exclusive UTC end of the window.</param>
     /// <param name="seed">A per-channel seed (the channel id) so different channels lead the chain differently.</param>
+    /// <param name="maxBlock">The longest run of one series' consecutive episodes treated as a single block (the
+    /// channel's episodes per block for an ordered loop, whose series run straight through; unbounded for a shuffled
+    /// loop, where each run already is one block).</param>
     /// <returns>The ordered, contiguous programmes covering the window (the first may start before <paramref name="fromUtc"/>; nothing precedes the anchor).</returns>
     public static IReadOnlyList<ScheduledProgram> Build(
         IReadOnlyList<ProgramEntry> loop,
@@ -57,8 +64,9 @@ public static class DaypartSchedule
         DateTime anchorUtc,
         DateTime fromUtc,
         DateTime toUtc,
-        string seed)
-        => BuildResumable(loop, blocks, transitionMinutes, timeZone, anchorUtc, fromUtc, toUtc, seed, resume: null, out _);
+        string seed,
+        int maxBlock = int.MaxValue)
+        => BuildResumable(loop, blocks, transitionMinutes, timeZone, anchorUtc, fromUtc, toUtc, seed, resume: null, out _, maxBlock);
 
     /// <summary>
     /// The same simulation, resumable: when <paramref name="resume"/> is a state captured from a previous call
@@ -77,6 +85,10 @@ public static class DaypartSchedule
     /// <param name="seed">A per-channel seed (the channel id) so different channels lead the chain differently.</param>
     /// <param name="resume">A state from a previous call to continue from, or <c>null</c> to walk from the anchor. Ignored (with a fresh anchor walk) when it belongs to a different anchor, lies past the window start, or no longer fits the loop.</param>
     /// <param name="state">The walk's exit state, valid to resume the next window from.</param>
+    /// <param name="maxBlock">The longest run of one series' consecutive episodes treated as a single block.</param>
+    /// <param name="exactStart">When <c>true</c> the chain starts exactly at <paramref name="anchorUtc"/> with the
+    /// loop's first item (a spliced loop, rotated so the item airing when it was rebuilt comes first), instead of at
+    /// local midnight of the anchor's day with a seeded lead item.</param>
     /// <returns>The ordered, contiguous programmes covering the window (the first may start before <paramref name="fromUtc"/>; nothing precedes the anchor).</returns>
     internal static IReadOnlyList<ScheduledProgram> BuildResumable(
         IReadOnlyList<ProgramEntry> loop,
@@ -88,7 +100,9 @@ public static class DaypartSchedule
         DateTime toUtc,
         string seed,
         DaypartChainState? resume,
-        out DaypartChainState state)
+        out DaypartChainState state,
+        int maxBlock = int.MaxValue,
+        bool exactStart = false)
     {
         ArgumentNullException.ThrowIfNull(loop);
         ArgumentNullException.ThrowIfNull(blocks);
@@ -105,12 +119,19 @@ public static class DaypartSchedule
 
         DateTime t;
         int cursor;
+        var pending = 0;
         if (resume is { } prior && prior.AnchorUtc == anchorUtc && prior.TimeUtc != default
             && prior.TimeUtc <= fromUtc && prior.Cursor >= 0 && prior.Cursor < loop.Count)
         {
             // Continue the chain where the previous window's walk stopped, skipping the anchor re-walk.
             t = prior.TimeUtc;
             cursor = prior.Cursor;
+            pending = Math.Max(0, prior.Pending);
+        }
+        else if (exactStart)
+        {
+            t = anchorUtc;
+            cursor = 0;
         }
         else
         {
@@ -128,11 +149,32 @@ public static class DaypartSchedule
 
         for (var walked = 0; walked < MaxWalk && t < toUtc && schedule.Count < MaxPrograms; walked++)
         {
-            var localT = TimeZoneInfo.ConvertTimeFromUtc(t, timeZone);
-            var minute = (localT.Hour * 60) + localT.Minute;
-            var window = RatingSchedule.WindowForStart(blocks, minute, transitionMinutes);
+            ProgramEntry item;
+            if (pending > 0)
+            {
+                // The rest of a block that was checked whole when it started.
+                item = loop[cursor];
+                cursor = (cursor + 1) % loop.Count;
+                pending--;
+            }
+            else
+            {
+                var localT = TimeZoneInfo.ConvertTimeFromUtc(t, timeZone);
+                var minute = (localT.Hour * 60) + localT.Minute;
+                if (PickBlock(loop, cursor, blocks, minute, transitionMinutes, maxBlock, out var start, out var length))
+                {
+                    item = loop[start];
+                    cursor = (start + 1) % loop.Count;
+                    pending = length - 1;
+                }
+                else
+                {
+                    // No whole block fits anywhere in the loop: fall back to the single item that does (or the
+                    // lowest-rated one), so the channel is never dead air.
+                    cursor = PickNext(loop, cursor, RatingSchedule.WindowForStart(blocks, minute, transitionMinutes), out item);
+                }
+            }
 
-            cursor = PickNext(loop, cursor, window, out var item);
             var stop = t + TimeSpan.FromTicks(item.DurationTicks);
             if (stop <= t)
             {
@@ -147,8 +189,66 @@ public static class DaypartSchedule
             t = stop;
         }
 
-        state = new DaypartChainState(anchorUtc, t, cursor);
+        state = new DaypartChainState(anchorUtc, t, cursor, pending);
         return schedule;
+    }
+
+    // The first block at or after the cursor (wrapping once) that airs whole under the rating window covering its
+    // entire airtime: from its start until its last item's start plus the transition buffer, the same span each of
+    // its items would be checked against on its own, so placing the block whole is never less strict than placing
+    // it item by item. A block is a run of one series' consecutive episodes (at most maxBlock long); a movie or
+    // other standalone item is a block of one. A block that does not fit is skipped whole.
+    private static bool PickBlock(IReadOnlyList<ProgramEntry> loop, int cursor, IReadOnlyList<ResolvedRatingBlock> blocks, int minute, int transitionMinutes, int maxBlock, out int start, out int length)
+    {
+        var scanned = 0;
+        while (scanned < loop.Count)
+        {
+            start = (cursor + scanned) % loop.Count;
+            length = BlockLength(loop, start, Math.Min(Math.Max(1, maxBlock), loop.Count - scanned));
+
+            long leadTicks = 0;
+            for (var k = 0; k < length - 1; k++)
+            {
+                leadTicks += loop[(start + k) % loop.Count].DurationTicks;
+            }
+
+            var span = transitionMinutes + (int)Math.Min(RatingSchedule.MinutesPerDay, Math.Ceiling(TimeSpan.FromTicks(leadTicks).TotalMinutes));
+            var window = RatingSchedule.WindowForStart(blocks, minute, span);
+            var fits = true;
+            for (var k = 0; k < length && fits; k++)
+            {
+                fits = window.Allows(loop[(start + k) % loop.Count].ParentalRatingValue);
+            }
+
+            if (fits)
+            {
+                return true;
+            }
+
+            scanned += length;
+        }
+
+        start = cursor;
+        length = 0;
+        return false;
+    }
+
+    // How many consecutive items from start belong to the same series (capped), or 1 for a standalone item.
+    private static int BlockLength(IReadOnlyList<ProgramEntry> loop, int start, int cap)
+    {
+        var series = loop[start].SeriesId;
+        if (series is null)
+        {
+            return 1;
+        }
+
+        var length = 1;
+        while (length < cap && loop[(start + length) % loop.Count].SeriesId == series)
+        {
+            length++;
+        }
+
+        return length;
     }
 
     // The next item at or after the cursor that the window allows, wrapping once, and the cursor just past it. When

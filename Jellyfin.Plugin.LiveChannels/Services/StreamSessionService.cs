@@ -150,7 +150,7 @@ public class StreamSessionService
 
         if (!perItem)
         {
-            var (concatIndex, _) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow + lead, ScheduleCalculator.Epoch);
+            var (concatIndex, _) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow + lead, ScheduleCalculator.AnchorFor(programs));
             LogEncodePlan(channel, programs.Count, concatIndex, perItem, uniform, hasHdr);
             await StreamConcatAsync(ffmpeg, channel, programs, output, cancellationToken, stats, timelineBase, lead).ConfigureAwait(false);
             return;
@@ -165,7 +165,7 @@ public class StreamSessionService
         }
         else
         {
-            var (index, offset) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow + lead, ScheduleCalculator.Epoch);
+            var (index, offset) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow + lead, ScheduleCalculator.AnchorFor(programs));
             schedule = new LoopStreamSchedule(programs, index, offset);
             planIndex = index;
         }
@@ -312,7 +312,7 @@ public class StreamSessionService
                 // The concat demuxer reads "file '<path>'" lines; single quotes in a path escape as '\''.
                 // The first start is offset by the tune-in card it follows (so content lands on the wall clock once
                 // the card ends); a restart resumes at plain "now".
-                var (airing, airingOffset) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow + lead, ScheduleCalculator.Epoch);
+                var (airing, airingOffset) = ScheduleCalculator.CurrentProgram(programs, DateTime.UtcNow + lead, ScheduleCalculator.AnchorFor(programs));
                 lead = TimeSpan.Zero;
 
                 // The item airing now may be missing (deleted or on unmounted storage): start at the next one that

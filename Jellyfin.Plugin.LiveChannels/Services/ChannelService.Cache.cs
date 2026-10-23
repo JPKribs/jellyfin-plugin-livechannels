@@ -214,7 +214,7 @@ public partial class ChannelService
     private string ScheduleFileFor(Channel channel)
         => Path.Combine(_scheduleDir, channel.Number.ToString(CultureInfo.InvariantCulture) + ".json");
 
-    private List<ProgramEntry>? TryReadScheduleCache(Channel channel)
+    private ProgramLoop? TryReadScheduleCache(Channel channel)
     {
         try
         {
@@ -224,13 +224,20 @@ public partial class ChannelService
                 return null;
             }
 
-            using var stream = File.OpenRead(file);
+            var bytes = File.ReadAllBytes(file);
 
             // An EMPTY cached schedule is a valid answer, not a miss: a channel whose filters legitimately
             // match nothing would otherwise re-run the full library resolve on every tune-in, exactly the
             // critical-path cost this cache exists to prevent. Only a null deserialization (a corrupt file)
-            // falls through to a rebuild.
-            return JsonSerializer.Deserialize<List<ProgramEntry>>(stream, ScheduleCacheJson);
+            // falls through to a rebuild. A bare array is the pre-splice format: the loop with no anchor.
+            if (FirstToken(bytes) == '[')
+            {
+                var legacy = JsonSerializer.Deserialize<List<ProgramEntry>>(bytes, ScheduleCacheJson);
+                return legacy is null ? null : new ProgramLoop(legacy, null);
+            }
+
+            var cached = JsonSerializer.Deserialize<CachedLoop>(bytes, ScheduleCacheJson);
+            return cached?.Programs is null ? null : new ProgramLoop(cached.Programs, cached.AnchorUtc);
         }
         catch (Exception ex)
         {
@@ -241,7 +248,24 @@ public partial class ChannelService
         }
     }
 
-    private void WriteScheduleCache(Channel channel, IReadOnlyList<ProgramEntry> programs)
+    // The first non-whitespace byte of a JSON document, telling the legacy bare-array cache from the envelope.
+    private static char FirstToken(byte[] bytes)
+    {
+        foreach (var b in bytes)
+        {
+            if (b is not ((byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n' or 0xEF or 0xBB or 0xBF))
+            {
+                return (char)b;
+            }
+        }
+
+        return '\0';
+    }
+
+    // The on-disk schedule: the loop and its splice anchor (null when it was not spliced onto a previous build).
+    private sealed record CachedLoop(DateTime? AnchorUtc, List<ProgramEntry>? Programs);
+
+    private void WriteScheduleCache(Channel channel, ProgramLoop programs)
     {
         try
         {
@@ -256,7 +280,7 @@ public partial class ChannelService
                 var temp = file + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
                 using (var stream = File.Create(temp))
                 {
-                    JsonSerializer.Serialize(stream, programs, ScheduleCacheJson);
+                    JsonSerializer.Serialize(stream, new CachedLoop(programs.AnchorUtc, programs.ToList()), ScheduleCacheJson);
                 }
 
                 File.Move(temp, file, overwrite: true);

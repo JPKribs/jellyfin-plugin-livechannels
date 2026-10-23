@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "12.2.2.0"
+version: "12.2.2.1"
 targetAbi: "12.2.0.0"
 framework: "net10.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -16,7 +16,7 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   fixed:
-  - The Refresh Guide progress bar no longer jumps backwards; the earlier fix never took effect on Jellyfin 12
-  developer:
-  - Built for Jellyfin 12.2 (target ABI 12.2.0.0). Servers on Jellyfin 12.0 or 12.1 keep the previous release.
-  - Updated test dependencies (Microsoft.NET.Test.Sdk 18.11, NSubstitute 6.2, xunit 2.9.3, xunit.runner.visualstudio 4.0.1).
+  - The guide no longer shows two overlapping schedules for a channel after a refresh where any channel failed
+  - A guide refresh no longer changes the program on air mid-show; the current program keeps its slot and the new schedule follows it
+  - Shuffled series always air a full batch of episodes instead of sometimes airing a lone leftover episode
+  - On channels with time-of-day rating blocks, a series batch is placed whole or skipped at a rating border instead of being cut after one episode

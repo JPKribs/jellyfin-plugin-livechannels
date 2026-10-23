@@ -99,6 +99,27 @@ public static class ProgramLoopBuilder
 
             if (current.Count > 0)
             {
+                // A shuffled loop airs ONE block per series, so a short tail block (nine episodes at four per
+                // block leave a lone ninth) would air as a single episode whenever the rotation lands on it. Fill
+                // it backwards with the units just before it (six to nine), whole units only and never past the
+                // block size, so the batch stays in air order and a multi-parter is not glued past its pair. The
+                // ordered modes play the series straight through, where the tail is simply its last episodes.
+                if (options.Mode == LoopMode.Shuffle && seq > 0)
+                {
+                    var tailStart = units.Count - 1;
+                    var tailUnits = 0;
+                    for (var size = 0; tailStart >= 0 && size < current.Count; tailStart--)
+                    {
+                        size += units[tailStart].Count;
+                        tailUnits++;
+                    }
+
+                    for (var u = units.Count - 1 - tailUnits; u >= 0 && current.Count + units[u].Count <= blockSize; u--)
+                    {
+                        current.InsertRange(0, units[u]);
+                    }
+                }
+
                 blocks.Add(new Block(groupKey, name, seq, current));
             }
         }

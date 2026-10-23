@@ -338,6 +338,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             });
         }
 
+        // Drop whatever Jellyfin still stores for this channel that this refresh no longer publishes, so the guide
+        // never shows the previous schedule beside this one (Jellyfin's own prune is skipped whenever anything
+        // else in the refresh failed).
+        _channels.PurgeStaleGuidePrograms(Name, channelId, list.Select(p => p.Id!).ToHashSet(StringComparer.Ordinal));
+
         return Task.FromResult<IEnumerable<ProgramInfo>>(list);
     }
 

@@ -33,20 +33,29 @@ public partial class ChannelService
         var blocks = ResolveRatingBlocks(channel);
         if (!HasTimeOfDayRating(blocks))
         {
-            return (ScheduleCalculator.BuildSchedule(programs, fromUtc, toUtc, ScheduleCalculator.Epoch), default);
+            return (ScheduleCalculator.BuildSchedule(programs, fromUtc, toUtc, ScheduleCalculator.AnchorFor(programs)), default);
         }
 
-        // The chain anchors at the last configuration save (stamped by Plugin.UpdateConfiguration and backfilled
-        // at startup), so every caller simulates the same chain. The fallback only exists for unit tests.
-        var anchorUtc = Plugin.Instance?.ReadConfiguration(c => c.ScheduleAnchorUtc) ?? default;
+        // A spliced loop chains from its splice anchor (the start of the item airing when it was rebuilt), so a
+        // rebuild continues what is on now. An unspliced loop anchors at the last configuration save (stamped by
+        // Plugin.UpdateConfiguration and backfilled at startup), so every caller simulates the same chain. The
+        // final fallback only exists for unit tests.
+        var spliced = ProgramLoop.AnchorOf(programs);
+        var anchorUtc = spliced ?? Plugin.Instance?.ReadConfiguration(c => c.ScheduleAnchorUtc) ?? default;
         if (anchorUtc == default)
         {
             anchorUtc = fromUtc;
         }
 
-        var schedule = DaypartSchedule.BuildResumable(programs, blocks, channel.TransitionWindowMinutes, TimeZoneInfo.Local, anchorUtc, fromUtc, toUtc, channel.Id, resume, out var state);
+        var schedule = DaypartSchedule.BuildResumable(programs, blocks, channel.TransitionWindowMinutes, TimeZoneInfo.Local, anchorUtc, fromUtc, toUtc, channel.Id, resume, out var state, MaxDaypartBlock(channel), exactStart: spliced is not null);
         return (schedule, state);
     }
+
+    // The longest same-series run the daypart chain places as one block. A shuffled loop deals one block per series
+    // per round, so each run already is exactly one block; an ordered loop plays a series straight through, so it
+    // is cut into the channel's episodes-per-block batches.
+    private static int MaxDaypartBlock(Channel channel)
+        => channel.EffectiveLoopMode() == LoopMode.Shuffle ? int.MaxValue : Math.Max(1, channel.EpisodesPerBlock);
 
     /// <summary>
     /// Whether the channel's rating limits vary by time of day (it carries at least one custom block), so it needs
