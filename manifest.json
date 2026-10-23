@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "12.2.2.1",
+        "changelog": "\n## Fixed\n- The guide no longer shows two overlapping schedules for a channel after a refresh where any channel failed\n- A guide refresh no longer changes the program on air mid-show; the current program keeps its slot and the new schedule follows it\n- Shuffled series always air a full batch of episodes instead of sometimes airing a lone leftover episode\n- On channels with time-of-day rating blocks, a series batch is placed whole or skipped at a rating border instead of being cut after one episode",
+        "targetAbi": "12.2.0.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v12.2.2.1/jellyfin-plugin-livechannels-12.2.2.1.zip",
+        "checksum": "2583801b32dae8f4d33316b666294c6c",
+        "timestamp": "2026-10-23T23:44:03Z"
+      },
+      {
         "version": "12.2.2.0",
         "changelog": "\n## Fixed\n- The Refresh Guide progress bar no longer jumps backwards; the earlier fix never took effect on Jellyfin 12\n\n## Developer\n- Built for Jellyfin 12.2 (target ABI 12.2.0.0). Servers on Jellyfin 12.0 or 12.1 keep the previous release.\n- Updated test dependencies (Microsoft.NET.Test.Sdk 18.11, NSubstitute 6.2, xunit 2.9.3, xunit.runner.visualstudio 4.0.1).",
         "targetAbi": "12.2.0.0",
