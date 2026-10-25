@@ -106,6 +106,7 @@ public partial class ChannelService
             return null;
         }
 
+        Task? extraction = null;
         try
         {
             var item = _libraryManager.GetItemById(itemId);
@@ -130,6 +131,7 @@ public partial class ChannelService
             // CancellationToken.None so a cold extraction still finishes caching even after we stop waiting for
             // it below; the next airing of this item then burns it immediately.
             var resolve = _subtitleEncoder.GetSubtitleFilePath(subtitles[relativeIndex], source, CancellationToken.None);
+            extraction = resolve;
             var ready = await Task.WhenAny(resolve, Task.Delay(TimeSpan.FromSeconds(1.5), cancellationToken)).ConfigureAwait(false);
             if (ready != resolve || resolve.Status != TaskStatus.RanToCompletion)
             {
@@ -152,7 +154,16 @@ public partial class ChannelService
         }
         finally
         {
-            _subtitleExtractions.TryRemove(key, out _);
+            // The guard lasts as long as the extraction itself, not just this wait: a cold extraction keeps running
+            // after we stop waiting, and releasing the key early would let the next tune-in start a duplicate.
+            if (extraction is { IsCompleted: false })
+            {
+                _ = extraction.ContinueWith(done => _subtitleExtractions.TryRemove(key, out _), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }
+            else
+            {
+                _subtitleExtractions.TryRemove(key, out _);
+            }
         }
     }
 

@@ -30,6 +30,13 @@ public sealed class TimerService
 
     private List<TimerInfo> _timers = new();
     private List<SeriesTimerInfo> _seriesTimers = new();
+
+    // Per series rule, the library items it has already dealt with: recorded, or excluded by the user cancelling
+    // the child timer. A looping channel airs the same item over and over, and neither the per-program dedupe nor
+    // the target-file check can see that for an item whose recording name carries the airing time (no episode
+    // numbering), so without this a rule re-records it at every airing and a cancelled child simply moves to the
+    // next one. Keyed by rule id; item ids in "N" form.
+    private Dictionary<string, HashSet<string>> _seriesHandled = new(StringComparer.Ordinal);
     private bool _loaded;
 
     /// <summary>
@@ -111,25 +118,84 @@ public sealed class TimerService
 
     /// <summary>
     /// Records a timer's final outcome: completed with the recording it produced, or errored. Terminal timers
-    /// age out on the next <see cref="GetTimers"/> read once their window has passed.
+    /// age out on the next <see cref="GetTimers"/> read once their window has passed. A timer the user cancelled
+    /// while its recording was being produced stays cancelled. A completed series child also marks its item as
+    /// recorded for the rule, so later airings of the same item are not recorded again.
     /// </summary>
     /// <param name="timerId">The timer id.</param>
     /// <param name="status">The terminal status.</param>
     /// <param name="recordingPath">The materialized recording file, or <c>null</c> when none was produced.</param>
-    public void CompleteTimer(string timerId, RecordingStatus status, string? recordingPath)
+    /// <returns>Whether the outcome was recorded (false for an unknown or cancelled timer).</returns>
+    public bool CompleteTimer(string timerId, RecordingStatus status, string? recordingPath)
     {
         lock (_gate)
         {
             EnsureLoaded();
             var timer = _timers.FirstOrDefault(t => string.Equals(t.Id, timerId, StringComparison.Ordinal));
-            if (timer is null)
+            if (timer is null || timer.Status == RecordingStatus.Cancelled)
             {
-                return;
+                return false;
             }
 
             timer.Status = status;
             timer.RecordingPath = recordingPath;
+            if (status == RecordingStatus.Completed)
+            {
+                MarkSeriesItemHandled(timer);
+            }
+
             Persist();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Counts one failed materialization attempt against the stored timer. Works on the stored instance rather
+    /// than a copy the caller holds, so a client edit that replaced the timer during the attempt is not
+    /// overwritten by a stale one.
+    /// </summary>
+    /// <param name="timerId">The timer id.</param>
+    /// <returns>The attempt count so far, or <c>null</c> when the timer is gone or no longer owed a recording.</returns>
+    public int? RecordFailedAttempt(string timerId)
+    {
+        lock (_gate)
+        {
+            EnsureLoaded();
+            var timer = _timers.FirstOrDefault(t => string.Equals(t.Id, timerId, StringComparison.Ordinal));
+            if (timer is null || IsTerminal(timer.Status))
+            {
+                return null;
+            }
+
+            timer.RetryCount++;
+            Persist();
+            return timer.RetryCount;
+        }
+    }
+
+    /// <summary>
+    /// Returns whether a series rule has already dealt with a library item: recorded it, had the user cancel it,
+    /// or still holds a child timer for it (at any airing). Series expansion skips such items, so a looping
+    /// channel cannot make a rule record the same item twice.
+    /// </summary>
+    /// <param name="ruleId">The series rule id.</param>
+    /// <param name="itemId">The library item id.</param>
+    /// <returns>Whether the item is already taken care of for the rule.</returns>
+    public bool IsSeriesItemTaken(string ruleId, Guid itemId)
+    {
+        lock (_gate)
+        {
+            EnsureLoaded();
+            if (_seriesHandled.TryGetValue(ruleId, out var handled) && handled.Contains(ItemKey(itemId)))
+            {
+                return true;
+            }
+
+            // A child that failed may be retried at a later airing; any other child (pending, underway, completed,
+            // cancelled) already covers the item.
+            return _timers.Any(t => string.Equals(t.SeriesTimerId, ruleId, StringComparison.Ordinal)
+                && t.Status != RecordingStatus.Error
+                && RecordingService.ScheduledItem(t) == itemId);
         }
     }
 
@@ -204,6 +270,11 @@ public sealed class TimerService
                 timer.SeriesTimerId = info.Id;
             }
 
+            foreach (var id in replaced)
+            {
+                MergeSeriesHandled(id, info.Id);
+            }
+
             _seriesTimers.Add(info);
             Persist();
             return info.Id;
@@ -212,7 +283,8 @@ public sealed class TimerService
 
     /// <summary>
     /// Removes a series rule WITHOUT touching its children. Used by rule consolidation, which re-links the
-    /// children to the surviving rule first; <see cref="CancelSeriesTimer"/> is the user-facing removal.
+    /// children (and the items already handled) to the surviving rule first; <see cref="CancelSeriesTimer"/> is
+    /// the user-facing removal.
     /// </summary>
     /// <param name="ruleId">The series rule id.</param>
     public void RemoveSeriesTimer(string ruleId)
@@ -220,7 +292,9 @@ public sealed class TimerService
         lock (_gate)
         {
             EnsureLoaded();
-            if (_seriesTimers.RemoveAll(t => string.Equals(t.Id, ruleId, StringComparison.Ordinal)) > 0)
+            var removed = _seriesTimers.RemoveAll(t => string.Equals(t.Id, ruleId, StringComparison.Ordinal)) > 0;
+            removed |= _seriesHandled.Remove(ruleId);
+            if (removed)
             {
                 Persist();
             }
@@ -229,7 +303,8 @@ public sealed class TimerService
 
     /// <summary>
     /// Repoints every child timer of one series rule at another, so collapsing duplicate rules never strands
-    /// children on a rule id clients can no longer resolve.
+    /// children on a rule id clients can no longer resolve. The items the old rule already handled carry over,
+    /// so the surviving rule does not record them again.
     /// </summary>
     /// <param name="fromRuleId">The rule losing its children.</param>
     /// <param name="toRuleId">The rule adopting them.</param>
@@ -238,7 +313,7 @@ public sealed class TimerService
         lock (_gate)
         {
             EnsureLoaded();
-            var changed = false;
+            var changed = MergeSeriesHandled(fromRuleId, toRuleId);
             foreach (var timer in _timers.Where(t => string.Equals(t.SeriesTimerId, fromRuleId, StringComparison.Ordinal)))
             {
                 timer.SeriesTimerId = toRuleId;
@@ -262,7 +337,13 @@ public sealed class TimerService
         lock (_gate)
         {
             EnsureLoaded();
-            if (_timers.RemoveAll(t => !string.IsNullOrEmpty(t.SeriesTimerId) && !liveRuleIds.Contains(t.SeriesTimerId)) > 0)
+            var removed = _timers.RemoveAll(t => !string.IsNullOrEmpty(t.SeriesTimerId) && !liveRuleIds.Contains(t.SeriesTimerId)) > 0;
+            foreach (var ruleId in _seriesHandled.Keys.Where(k => !liveRuleIds.Contains(k)).ToList())
+            {
+                removed |= _seriesHandled.Remove(ruleId);
+            }
+
+            if (removed)
             {
                 Persist();
             }
@@ -275,8 +356,10 @@ public sealed class TimerService
     /// deleted series child would be re-created by the very next expansion pass (the airing has no timer and
     /// no recording file, so it looks unscheduled). Tombstones block re-creation until the airing has fully
     /// passed, are skipped by the recording pass, age out once the window has passed, and are replaced by a
-    /// fresh timer if record is pressed again (the per-program dedupe in <see cref="SaveTimer"/>). Unknown ids
-    /// are ignored: the timer may already have aged out of the store.
+    /// fresh timer if record is pressed again (the per-program dedupe in <see cref="SaveTimer"/>). A cancelled
+    /// series child also excludes its item from the rule, so the tombstone aging out does not just move the
+    /// recording to the item's next airing. Unknown ids are ignored: the timer may already have aged out of the
+    /// store.
     /// </summary>
     /// <param name="timerId">The timer id.</param>
     public void CancelTimer(string timerId)
@@ -291,6 +374,7 @@ public sealed class TimerService
             }
 
             timer.Status = RecordingStatus.Cancelled;
+            MarkSeriesItemHandled(timer);
             Persist();
         }
     }
@@ -306,6 +390,7 @@ public sealed class TimerService
             EnsureLoaded();
             var removed = _seriesTimers.RemoveAll(t => string.Equals(t.Id, timerId, StringComparison.Ordinal));
             removed += _timers.RemoveAll(t => string.Equals(t.SeriesTimerId, timerId, StringComparison.Ordinal));
+            removed += _seriesHandled.Remove(timerId) ? 1 : 0;
             if (removed > 0)
             {
                 Persist();
@@ -338,10 +423,60 @@ public sealed class TimerService
             defaults.Overview = program.Overview;
             defaults.StartDate = program.StartDate;
             defaults.EndDate = program.EndDate;
-            defaults.Days = new List<DayOfWeek> { program.StartDate.DayOfWeek };
+            // Series day matching is done in local time (see RecordingService.MatchesRule), so seed the local
+            // weekday: the UTC one is the next day for an evening airing west of Greenwich.
+            defaults.Days = new List<DayOfWeek> { LocalDayOfWeek(program.StartDate, TimeZoneInfo.Local) };
         }
 
         return defaults;
+    }
+
+    /// <summary>
+    /// The weekday a UTC instant falls on in the given time zone.
+    /// </summary>
+    /// <param name="utc">The instant (treated as UTC unless it is marked local).</param>
+    /// <param name="zone">The time zone.</param>
+    /// <returns>The local weekday.</returns>
+    internal static DayOfWeek LocalDayOfWeek(DateTime utc, TimeZoneInfo zone)
+        => TimeZoneInfo.ConvertTimeFromUtc(utc.Kind == DateTimeKind.Local ? utc.ToUniversalTime() : DateTime.SpecifyKind(utc, DateTimeKind.Utc), zone).DayOfWeek;
+
+    private static string ItemKey(Guid itemId) => itemId.ToString("N", CultureInfo.InvariantCulture);
+
+    // Records that a series child's item is dealt with for its rule (recorded or excluded). Caller holds _gate
+    // and persists.
+    private void MarkSeriesItemHandled(TimerInfo timer)
+    {
+        if (string.IsNullOrEmpty(timer.SeriesTimerId) || RecordingService.ScheduledItem(timer) is not { } item)
+        {
+            return;
+        }
+
+        if (!_seriesHandled.TryGetValue(timer.SeriesTimerId, out var handled))
+        {
+            _seriesHandled[timer.SeriesTimerId] = handled = new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        handled.Add(ItemKey(item));
+    }
+
+    // Moves one rule's handled items onto another. Caller holds _gate and persists. Returns whether anything moved.
+    private bool MergeSeriesHandled(string fromRuleId, string toRuleId)
+    {
+        if (string.Equals(fromRuleId, toRuleId, StringComparison.Ordinal) || !_seriesHandled.Remove(fromRuleId, out var moved))
+        {
+            return false;
+        }
+
+        if (_seriesHandled.TryGetValue(toRuleId, out var target))
+        {
+            target.UnionWith(moved);
+        }
+        else
+        {
+            _seriesHandled[toRuleId] = moved;
+        }
+
+        return true;
     }
 
     private static string NewTimerId() => "lc_timer_" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
@@ -364,6 +499,8 @@ public sealed class TimerService
             var loaded = _store.Load();
             _timers = loaded.Timers ?? new List<TimerInfo>();
             _seriesTimers = loaded.SeriesTimers ?? new List<SeriesTimerInfo>();
+            _seriesHandled = (loaded.SeriesHandledItems ?? new Dictionary<string, List<string>>())
+                .ToDictionary(kv => kv.Key, kv => new HashSet<string>(kv.Value ?? new List<string>(), StringComparer.Ordinal), StringComparer.Ordinal);
         }
         catch (Exception ex)
         {
@@ -380,7 +517,12 @@ public sealed class TimerService
     {
         try
         {
-            _store.Save(new TimerFile { Timers = _timers, SeriesTimers = _seriesTimers });
+            _store.Save(new TimerFile
+            {
+                Timers = _timers,
+                SeriesTimers = _seriesTimers,
+                SeriesHandledItems = _seriesHandled.ToDictionary(kv => kv.Key, kv => kv.Value.ToList(), StringComparer.Ordinal)
+            });
         }
         catch (Exception ex)
         {
@@ -394,5 +536,9 @@ public sealed class TimerService
         public List<TimerInfo> Timers { get; set; } = new();
 
         public List<SeriesTimerInfo> SeriesTimers { get; set; } = new();
+
+        // Rule id -> library item ids the rule has recorded or had excluded. Absent in stores written before
+        // items were tracked, which load as empty.
+        public Dictionary<string, List<string>> SeriesHandledItems { get; set; } = new();
     }
 }

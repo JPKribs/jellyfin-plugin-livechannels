@@ -132,6 +132,48 @@ public class ScheduleContinuityTests
         Assert.Equal(anchor, schedule[0].Start);
     }
 
+    [Fact]
+    public void SplicedDaypart_KeepsTheAiringItemEvenWhenItsBlockWouldCrossIntoAStricterDaypart()
+    {
+        // 00:00-02:00 allows R, from 02:00 only PG. The splice lands at 01:30 on an R episode that was already on
+        // air; its rotated block runs four hours (well past 02:00), so re-checking it as a new block would skip it
+        // and jump the stream mid-show. It must air as-is, and only the picks after it follow the dayparts.
+        var blocks = new[]
+        {
+            new ResolvedRatingBlock(new RatingWindow(null, R, true), AllDay: false, 0, 2 * 60),
+            new ResolvedRatingBlock(new RatingWindow(null, Pg, true), AllDay: false, 2 * 60, 0)
+        };
+        var adult = Guid.NewGuid();
+        var loop = new List<ProgramEntry>();
+        loop.AddRange(Enumerable.Range(1, 4).Select(i => Ep(adult, i, R)));
+        loop.Add(Movie("Kids", Pg));
+        var anchor = Midnight.AddHours(1).AddMinutes(30);
+
+        var schedule = DaypartSchedule.BuildResumable(loop, blocks, 0, TimeZoneInfo.Utc, anchor, anchor, anchor.AddHours(3), "chan", null, out _, maxBlock: 4, exactStart: true);
+
+        Assert.Equal(loop[0].ItemId, schedule[0].Program.ItemId);
+        Assert.Equal(anchor, schedule[0].Start);
+        Assert.Equal("Kids", schedule[1].Program.Title);
+    }
+
+    [Fact]
+    public void Daypart_HugeTransitionBuffer_StillEnforcesTheRatingWindow()
+    {
+        // An unclamped buffer near int.MaxValue overflowed the block-span sum into a negative span, which dropped the
+        // transition look-ahead and let an R movie start in the R block and run on into the PG block. A buffer that
+        // large covers the whole day, so only PG content may air.
+        var blocks = new[]
+        {
+            new ResolvedRatingBlock(new RatingWindow(null, R, true), AllDay: false, 0, 2 * 60),
+            new ResolvedRatingBlock(new RatingWindow(null, Pg, true), AllDay: false, 2 * 60, 0)
+        };
+        var loop = new List<ProgramEntry> { Movie("Adult", R), Movie("Kids", Pg) };
+
+        var schedule = DaypartSchedule.Build(loop, blocks, int.MaxValue - 10, TimeZoneInfo.Utc, Midnight, Midnight, Midnight.AddHours(6), "chan");
+
+        Assert.All(schedule, slot => Assert.Equal("Kids", slot.Program.Title));
+    }
+
     // Consecutive runs of the schedule's programs by series (standalone items are runs of one).
     private static List<(Guid? SeriesId, int Count)> Runs(IReadOnlyList<ScheduledProgram> schedule)
     {

@@ -178,7 +178,16 @@ public sealed class IntroService : IDisposable
             _logger.LogDebug(ex, "Live Channels: intro cache for channel {Number} is unreadable; re-rendering", channel.Number);
         }
 
-        return _inFlight.GetOrAdd(channel.Number, _ => RenderAndForgetAsync(channel, logoPath, logoStamp, profile));
+        // A render that fails before its first real await completes synchronously, so its own finally runs before
+        // GetOrAdd stores it and the completed task would sit in the map forever, blocking every later re-render
+        // of this channel. Drop it here in that case (only if it is still the stored entry).
+        var task = _inFlight.GetOrAdd(channel.Number, _ => RenderAndForgetAsync(channel, logoPath, logoStamp, profile));
+        if (task.IsCompleted)
+        {
+            _inFlight.TryRemove(new KeyValuePair<int, Task>(channel.Number, task));
+        }
+
+        return task;
     }
 
     private async Task RenderAndForgetAsync(Channel channel, string? logoPath, string logoStamp, (string Key, int Width, int Bitrate, VideoEncoderProfile Video, string AudioEncoder, int AudioBitrate) profile)

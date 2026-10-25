@@ -252,12 +252,125 @@ public sealed class TimerServiceTests : IDisposable
         Assert.Equal(program.Name, defaults.Name);
         Assert.Equal(program.StartDate, defaults.StartDate);
         Assert.Equal(program.EndDate, defaults.EndDate);
-        Assert.Equal(new List<DayOfWeek> { DayOfWeek.Wednesday }, defaults.Days);
+        Assert.Equal(new List<DayOfWeek> { TimerService.LocalDayOfWeek(program.StartDate, TimeZoneInfo.Local) }, defaults.Days);
 
         // Without a program the dialog still gets a usable blank: any time, every day.
         var blank = TimerService.NewTimerDefaults(null);
         Assert.True(blank.RecordAnyTime);
         Assert.Equal(7, blank.Days.Count);
+    }
+
+    [Fact]
+    public void LocalDayOfWeek_UsesTheLocalDateNotTheUtcOne()
+    {
+        // 20:00 Wednesday in New York is 00:00 Thursday UTC; series day matching works in local time.
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        var utc = new DateTime(2026, 7, 23, 0, 0, 0, DateTimeKind.Utc);
+        Assert.Equal(DayOfWeek.Thursday, utc.DayOfWeek);
+        Assert.Equal(DayOfWeek.Wednesday, TimerService.LocalDayOfWeek(utc, zone));
+    }
+
+    [Fact]
+    public void CancelledSeriesChild_ExcludesItsItemFromTheRule_AcrossReload()
+    {
+        var item = Guid.NewGuid();
+        var service = NewService();
+        var rule = service.SaveSeriesTimer(new SeriesTimerInfo { ProgramId = "chan-1_1", Name = "Show" });
+        var child = service.SaveTimer(Child(rule, "chan-1_100", item, InHours(1), InHours(2)));
+
+        service.CancelTimer(child);
+
+        // The tombstone aging out must not let the next airing of the same item be scheduled.
+        Assert.True(NewService().IsSeriesItemTaken(rule, item));
+        Assert.False(NewService().IsSeriesItemTaken(rule, Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void CompletedSeriesChild_MarksItsItemRecorded_EvenAfterTheTimerAgesOut()
+    {
+        var item = Guid.NewGuid();
+        var service = NewService();
+        var rule = service.SaveSeriesTimer(new SeriesTimerInfo { ProgramId = "chan-1_1", Name = "Show" });
+        var child = service.SaveTimer(Child(rule, "chan-1_100", item, InHours(-3), InHours(-2)));
+
+        Assert.True(service.CompleteTimer(child, RecordingStatus.Completed, "/tmp/rec.mkv"));
+        Assert.Empty(service.GetTimers()); // aged out
+
+        Assert.True(NewService().IsSeriesItemTaken(rule, item));
+    }
+
+    [Fact]
+    public void PendingSeriesChild_TakesItsItem_ButAFailedOneDoesNot()
+    {
+        var pendingItem = Guid.NewGuid();
+        var failedItem = Guid.NewGuid();
+        var service = NewService();
+        var rule = service.SaveSeriesTimer(new SeriesTimerInfo { ProgramId = "chan-1_1", Name = "Show" });
+        service.SaveTimer(Child(rule, "chan-1_100", pendingItem, InHours(1), InHours(2)));
+        var failed = service.SaveTimer(Child(rule, "chan-1_200", failedItem, InHours(-2), InHours(1)));
+        service.CompleteTimer(failed, RecordingStatus.Error, recordingPath: null);
+
+        Assert.True(service.IsSeriesItemTaken(rule, pendingItem));
+        Assert.False(service.IsSeriesItemTaken(rule, failedItem));
+    }
+
+    [Fact]
+    public void HandledItems_FollowConsolidation_AndClearWithTheRule()
+    {
+        var item = Guid.NewGuid();
+        var service = NewService();
+        var older = service.SaveSeriesTimer(new SeriesTimerInfo { ProgramId = "chan-1_1", Name = "Show" });
+        var newer = service.SaveSeriesTimer(new SeriesTimerInfo { ProgramId = "chan-1_2", Name = "Show" });
+        service.CancelTimer(service.SaveTimer(Child(older, "chan-1_100", item, InHours(1), InHours(2))));
+
+        service.RelinkSeriesChildren(older, newer);
+        service.RemoveSeriesTimer(older);
+        service.RemoveOrphanSeriesChildren(new[] { newer });
+        Assert.True(service.IsSeriesItemTaken(newer, item));
+
+        service.CancelSeriesTimer(newer);
+        Assert.False(service.IsSeriesItemTaken(newer, item));
+    }
+
+    [Fact]
+    public void CompleteTimer_DoesNotOverwriteACancel()
+    {
+        var service = NewService();
+        var id = service.SaveTimer(Timer("prog-1", InHours(-2), InHours(1)));
+        service.CancelTimer(id);
+
+        Assert.False(service.CompleteTimer(id, RecordingStatus.Completed, "/tmp/rec.mkv"));
+        Assert.Equal(RecordingStatus.Cancelled, Assert.Single(service.GetTimers()).Status);
+    }
+
+    [Fact]
+    public void RecordFailedAttempt_CountsOnTheStoredTimer_KeepingAConcurrentEdit()
+    {
+        var service = NewService();
+        var id = service.SaveTimer(Timer("prog-1", InHours(-2), InHours(-1)));
+        var stale = Assert.Single(service.TimersDueForRecording());
+
+        // A client edit replaces the stored instance while the recording pass holds the old one.
+        var edited = Timer("prog-1", InHours(-2), InHours(-1));
+        edited.Id = id;
+        edited.PostPaddingSeconds = 120;
+        service.SaveTimer(edited);
+
+        Assert.Equal(1, service.RecordFailedAttempt(stale.Id));
+        var stored = Assert.Single(service.GetTimers());
+        Assert.Equal(120, stored.PostPaddingSeconds);
+        Assert.Equal(1, stored.RetryCount);
+
+        service.CancelTimer(id);
+        Assert.Null(service.RecordFailedAttempt(id));
+    }
+
+    private static TimerInfo Child(string ruleId, string programId, Guid item, DateTime start, DateTime end)
+    {
+        var timer = Timer(programId, start, end);
+        timer.SeriesTimerId = ruleId;
+        RecordingService.SetScheduledItem(timer, item);
+        return timer;
     }
 
     private static DateTime InHours(int hours) => DateTime.UtcNow.AddHours(hours);

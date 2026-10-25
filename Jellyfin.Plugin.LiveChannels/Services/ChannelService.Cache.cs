@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using Jellyfin.Plugin.LiveChannels.Models;
 using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
@@ -24,6 +25,16 @@ public partial class ChannelService
     // edits take effect on the next guide refresh or tune-in.
     private static readonly JsonSerializerOptions ScheduleCacheJson = new() { PropertyNameCaseInsensitive = true };
     private static readonly object ScheduleLock = new();
+
+    // The schedule directory the live service instance reads and writes. Fixed at construction (like the live-TV
+    // service's stream root, a StreamDirectory change applies on restart), so a configuration save must clear THIS
+    // directory too, not only the one the new configuration names, or the instance keeps serving a stale cache.
+    private static string? _activeScheduleDir;
+
+    // Bumped by every cache clear. A build or disk read captures it first and drops its result (no disk write, no
+    // hot pin) when a clear landed meanwhile: that result was resolved from the pre-save channel configuration and
+    // would otherwise outlive the clear until the next guide refresh.
+    private static long _cacheGeneration;
 
     /// <summary>The name of the directory, under the stream root, that holds the per-channel schedule files.</summary>
     public const string ScheduleDirName = "schedule";
@@ -88,6 +99,11 @@ public partial class ChannelService
             scheduledSeconds,
             metadataSeconds);
 
+        SaveObservedDurations();
+    }
+
+    private void SaveObservedDurations()
+    {
         lock (_durationsLock)
         {
             try
@@ -115,7 +131,11 @@ public partial class ChannelService
         var metadataSeconds = TimeSpan.FromTicks(metadataTicks).TotalSeconds;
         if (Math.Abs(observed.MetadataSeconds - metadataSeconds) > 1)
         {
-            _observedDurations.TryRemove(itemId, out _);
+            if (_observedDurations.TryRemove(itemId, out _))
+            {
+                SaveObservedDurations();
+            }
+
             return null;
         }
 
@@ -160,27 +180,51 @@ public partial class ChannelService
     /// <param name="paths">The application paths, used to locate the stream root the cache lives in.</param>
     public static void ClearScheduleCache(IApplicationPaths paths)
     {
+        // Invalidate in-flight builds and reads before anything is deleted, so none of them can write or pin the
+        // pre-save schedule after this clear.
+        Interlocked.Increment(ref _cacheGeneration);
+
         // Flush the in-memory hot copies too, so a channel currently on screen does not keep serving its old
         // schedule (with the old filters) to new tune-ins until the asynchronous guide refresh reaches it.
         MemorySchedules.Clear();
 
+        var configured = ScheduleDir(paths);
+        var active = Volatile.Read(ref _activeScheduleDir);
+        lock (ScheduleLock)
+        {
+            ClearScheduleDir(configured);
+            if (active is not null && !string.Equals(active, configured, StringComparison.Ordinal))
+            {
+                ClearScheduleDir(active);
+            }
+        }
+    }
+
+    // Deletes the per-channel schedule files (and any temp file a failed write left behind) in one directory. The
+    // observed-durations file survives a channel edit: the durations describe the media files, not the channel
+    // configuration, and each one costs a full airing to re-learn.
+    private static void ClearScheduleDir(string dir)
+    {
         try
         {
-            lock (ScheduleLock)
+            if (!Directory.Exists(dir))
             {
-                var dir = ScheduleDir(paths);
-                if (Directory.Exists(dir))
+                return;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(dir))
+            {
+                // The durations file and its store's own temp files are left alone (the durations store is not
+                // serialised by this lock, so one of its temp files may be mid-write).
+                var name = Path.GetFileName(file);
+                if (name.StartsWith(DurationsFileName, StringComparison.Ordinal))
                 {
-                    // Delete only the per-channel schedule files. The observed-durations file survives a
-                    // channel edit: the durations describe the media files, not the channel configuration,
-                    // and each one costs a full airing to re-learn.
-                    foreach (var file in Directory.EnumerateFiles(dir, "*.json"))
-                    {
-                        if (!string.Equals(Path.GetFileName(file), DurationsFileName, StringComparison.Ordinal))
-                        {
-                            File.Delete(file);
-                        }
-                    }
+                    continue;
+                }
+
+                if (name.EndsWith(".json", StringComparison.Ordinal) || name.EndsWith(".tmp", StringComparison.Ordinal))
+                {
+                    File.Delete(file);
                 }
             }
         }
@@ -189,6 +233,9 @@ public partial class ChannelService
             // Best effort: a stale cache is overwritten on the next guide refresh regardless.
         }
     }
+
+    // The current cache generation, captured before a build or read so its result can be dropped if a clear lands.
+    internal static long CacheGeneration => Interlocked.Read(ref _cacheGeneration);
 
     /// <summary>
     /// Resolves the directory the live streams (and the schedule cache) are written to: the configured stream
@@ -265,19 +312,28 @@ public partial class ChannelService
     // The on-disk schedule: the loop and its splice anchor (null when it was not spliced onto a previous build).
     private sealed record CachedLoop(DateTime? AnchorUtc, List<ProgramEntry>? Programs);
 
-    private void WriteScheduleCache(Channel channel, ProgramLoop programs)
+    // Writes the schedule unless a cache clear landed since `generation` was captured (the schedule then reflects
+    // the pre-save configuration). Returns false when the write was skipped for that reason.
+    internal bool WriteScheduleCache(Channel channel, ProgramLoop programs, long generation)
     {
+        string? temp = null;
         try
         {
             // Each channel owns its own file, so a write touches only this channel. The lock still serialises writes
             // so two refreshes cannot interleave their temp-file moves, and the atomic move keeps a concurrent
-            // reader from ever seeing a half-written file.
+            // reader from ever seeing a half-written file. The clear holds the same lock, so it cannot slip between
+            // the generation check and the move.
             lock (ScheduleLock)
             {
+                if (CacheGeneration != generation)
+                {
+                    return false;
+                }
+
                 var file = ScheduleFileFor(channel);
                 Directory.CreateDirectory(_scheduleDir);
 
-                var temp = file + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
+                temp = file + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
                 using (var stream = File.Create(temp))
                 {
                     JsonSerializer.Serialize(stream, new CachedLoop(programs.AnchorUtc, programs.ToList()), ScheduleCacheJson);
@@ -289,6 +345,19 @@ public partial class ChannelService
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Could not write the schedule cache for channel {Name}", channel.Name);
+            if (temp is not null)
+            {
+                try
+                {
+                    File.Delete(temp);
+                }
+                catch (Exception)
+                {
+                    // Best effort; the next configuration save sweeps stray temp files.
+                }
+            }
         }
+
+        return true;
     }
 }

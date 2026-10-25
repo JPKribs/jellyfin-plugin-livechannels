@@ -172,23 +172,28 @@ public static class StreamArguments
         // decode and discard from the start of the file -- minutes for a deep join into a 4K item, so the
         // producer writes nothing before it is given up on. For burn-in, -copyts preserves the source timestamps
         // so the libass subtitle overlay stays aligned to the seeked position (the timeline offset below removes
-        // that base so the channel still starts at zero).
+        // that base so the channel still starts at zero). -start_at_zero measures those timestamps from the file's
+        // own start rather than its raw clock: a source whose start_time is not zero (a DVR .ts/.m2ts commonly
+        // starts hundreds of seconds in) would otherwise land its output that far past the channel timeline, and
+        // the extracted subtitle file (timed from the file's start) would no longer line up with the picture.
         if (hasOffset)
         {
             args.Add("-ss");
             args.Add(seconds);
             if (burnIn)
             {
-                args.Add("-copyts");
+                Add(args, "-copyts", "-start_at_zero");
             }
         }
 
-        // Bound how much content is read (an input option, applied after the seek). Live channels never set
-        // this; the stress test does, so N copies of the exact production command can race over a fixed slice.
+        // Bound how much content is read (an input option, applied after the seek). The stress test sets this so N
+        // copies of the exact production command race over a fixed slice; a time-of-day channel sets it only as a
+        // defensive cap when its schedule hands over a slot shorter than the item. Millisecond precision, so a
+        // short cap is not rounded away to nothing.
         if (durationLimit is { } limit && limit > TimeSpan.Zero)
         {
             args.Add("-t");
-            args.Add(limit.TotalSeconds.ToString("F0", CultureInfo.InvariantCulture));
+            args.Add(limit.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture));
         }
 
         // Read at exactly realtime so the segments are produced at the rate the player consumes them, keeping the
@@ -212,12 +217,7 @@ public static class StreamArguments
         // A linear channel mixes items of different resolutions, framerates, and aspect ratios. Players probe
         // the stream once and assume a fixed format, so the output stays constant: letterbox-pad every item to
         // the same WxH, force a constant framerate, and pin the pixel format (or upload it to the GPU).
-        var height = (int)Math.Round(width * 9.0 / 16.0);
-        if (height % 2 != 0)
-        {
-            height++;
-        }
-
+        var height = OutputHeight(width);
         var w = width.ToString(CultureInfo.InvariantCulture);
         var h = height.ToString(CultureInfo.InvariantCulture);
         string scale;
@@ -290,44 +290,7 @@ public static class StreamArguments
             args.Add(AudioMap(audioOrdinal));
         }
 
-        var br = bitrate.ToString(CultureInfo.InvariantCulture);
-        Add(args, "-c:v", video.Name);
-
-        // Force the encoder to signal progressive in the sequence header. yadif + setparams clear the per-frame
-        // interlaced flag, but hardware encoders (notably h264_qsv) write the field order into the SPS from the
-        // codec context at init and ignore the frame flag, so the output is tagged 1080i. Jellyfin then re-probes
-        // our stream as interlaced and inserts a deinterlace_vaapi pass that fails on QSV. Setting the field order
-        // at the encoder makes the output genuinely progressive, so Jellyfin remuxes it instead of re-transcoding.
-        Add(args, "-field_order", "progressive");
-
-        // Closed GOP gives the downstream segmenter predictable GOP boundaries, so Jellyfin can remux into HLS
-        // instead of re-transcoding to realign keyframes.
-        Add(args, "-flags", "+cgop");
-
-        if (video.UsePreset)
-        {
-            Add(args, "-preset", "veryfast", "-sc_threshold", "0");
-        }
-
-        foreach (var extra in video.ExtraEncoderArgs)
-        {
-            args.Add(extra);
-        }
-
-        // One GOP per HLS segment at the fixed frame rate, so the segmenter (and Jellyfin's delivery remux behind
-        // it) cuts every segment at precisely SegmentSeconds: the first segment closes as early as possible at
-        // tune-in and none is stretched waiting for a keyframe that lands past the mark.
-        Add(args, "-b:v", br + "k", "-maxrate", br + "k",
-            "-bufsize", (bitrate * 2).ToString(CultureInfo.InvariantCulture) + "k", "-g", GopFrames);
-
-        // Re-sample audio to a constant 48 kHz stereo track and let aresample fill or drop samples to keep it
-        // locked to the video, so audio never drifts out of sync within or across items.
-        var abr = audioBitrate.ToString(CultureInfo.InvariantCulture);
-        Add(args, "-c:a", audioEncoder, "-b:a", abr + "k", "-ac", "2", "-ar", "48000", "-af", "aresample=async=1:min_hard_comp=0.100");
-
-        // A generous muxing queue absorbs the brief audio/video imbalance at each item's start instead of
-        // aborting with "Too many packets buffered".
-        Add(args, "-max_muxing_queue_size", "1024");
+        AppendEncoders(args, video, bitrate, audioEncoder, audioBitrate);
 
         // Continue the timeline from where the previous item ended so timestamps never jump backwards at a
         // boundary (backward jumps cause downstream non-monotonic DTS and audio desync). When the burn-in seek used
@@ -351,15 +314,16 @@ public static class StreamArguments
     /// Builds the ffmpeg arguments for the whole channel as ONE continuous process using the concat demuxer:
     /// every item is decoded, scaled/padded to one frame, and re-encoded by a single encoder, so the output
     /// timestamps and MPEG-TS continuity counters never reset at an item boundary (no seams). The playlist is
-    /// looped forever and the stream is seeked to the current position on tune-in.
+    /// looped forever, and the caller rotates it to start at the item airing now, so the seek only ever lands
+    /// inside the first listed file.
     /// </summary>
     /// <param name="listFilePath">Path to the concat demuxer list file (one <c>file '...'</c> line per item).</param>
-    /// <param name="offset">Seek offset into the concatenated loop (the current wall-clock position).</param>
+    /// <param name="offset">Seek offset into the first listed item (how far into the airing item the clock is).</param>
     /// <param name="width">Target output width.</param>
     /// <param name="bitrate">Target video bitrate in kbps.</param>
-    /// <param name="video">The resolved video-encoder profile. Its hardware *decoder* is not used here, because
-    /// hardware decoders fail on the per-segment resolution changes a concatenated playlist produces; the
-    /// hardware *encoder* still applies.</param>
+    /// <param name="video">The resolved video-encoder profile. Its hardware decoder is used only when the caller
+    /// passes <paramref name="decodeHwaccel"/> (a playlist whose items all share one resolution); the hardware
+    /// encoder always applies.</param>
     /// <param name="audioEncoder">The ffmpeg audio encoder name.</param>
     /// <param name="audioBitrate">Target audio bitrate in kbps.</param>
     /// <param name="decodeHwaccel">The hardware decoder to use, or <c>null</c> to decode in software.</param>
@@ -419,12 +383,7 @@ public static class StreamArguments
         Add(args, "-readrate", RealtimeReadRate, "-readrate_initial_burst", initialBurstSeconds.ToString("0.###", CultureInfo.InvariantCulture));
         Add(args, "-stream_loop", "-1", "-safe", "0", "-f", "concat", "-i", listFilePath);
 
-        var height = (int)Math.Round(width * 9.0 / 16.0);
-        if (height % 2 != 0)
-        {
-            height++;
-        }
-
+        var height = OutputHeight(width);
         var w = width.ToString(CultureInfo.InvariantCulture);
         var h = height.ToString(CultureInfo.InvariantCulture);
         args.Add("-vf");
@@ -436,32 +395,7 @@ public static class StreamArguments
         args.Add(download + "yadif=deint=1,scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
             + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,setparams=field_mode=prog," + video.PixelStage);
 
-        var br = bitrate.ToString(CultureInfo.InvariantCulture);
-        Add(args, "-c:v", video.Name);
-
-        // Signal progressive in the sequence header so Jellyfin remuxes instead of re-transcoding (see Build).
-        Add(args, "-field_order", "progressive");
-
-        // Closed GOP for clean segment boundaries (see Build).
-        Add(args, "-flags", "+cgop");
-
-        if (video.UsePreset)
-        {
-            Add(args, "-preset", "veryfast", "-sc_threshold", "0");
-        }
-
-        foreach (var extra in video.ExtraEncoderArgs)
-        {
-            args.Add(extra);
-        }
-
-        // One GOP per HLS segment, so segment cuts land at precisely SegmentSeconds (see Build).
-        Add(args, "-b:v", br + "k", "-maxrate", br + "k",
-            "-bufsize", (bitrate * 2).ToString(CultureInfo.InvariantCulture) + "k", "-g", GopFrames);
-
-        var abr = audioBitrate.ToString(CultureInfo.InvariantCulture);
-        Add(args, "-c:a", audioEncoder, "-b:a", abr + "k", "-ac", "2", "-ar", "48000", "-af", "aresample=async=1:min_hard_comp=0.100");
-        Add(args, "-max_muxing_queue_size", "1024");
+        AppendEncoders(args, video, bitrate, audioEncoder, audioBitrate);
 
         // One continuous encoder, so within a run no per-item timeline offset is needed. Across runs it matters:
         // a producer restarted mid-session (self-heal, or a session whose producer died under an active viewer)
@@ -491,28 +425,37 @@ public static class StreamArguments
     /// <param name="seconds">Clip length; the caller loops it.</param>
     /// <param name="timeline">Output timestamp offset, continuing the channel's timeline.</param>
     /// <param name="fontPath">A TrueType font to label the slate, or <c>null</c> to fall back to colour bars.</param>
+    /// <param name="video">The encoder profile, which must produce the same codec as the channel's content so the
+    /// copy-mode segmenter never sees the codec change mid-playlist; <c>null</c> for software H.264.</param>
+    /// <param name="audioEncoder">The ffmpeg audio encoder name, matching the channel's content.</param>
+    /// <param name="audioBitrate">Target audio bitrate in kbps.</param>
     /// <returns>The ffmpeg argument list.</returns>
-    public static List<string> BuildSlate(int width, int bitrate, double seconds, TimeSpan timeline, string? fontPath)
+    public static List<string> BuildSlate(int width, int bitrate, double seconds, TimeSpan timeline, string? fontPath, VideoEncoderProfile? video = null, string audioEncoder = "aac", int audioBitrate = 192)
     {
-        var height = (int)Math.Round(width * 9.0 / 16.0);
-        if (height % 2 != 0)
-        {
-            height++;
-        }
+        ArgumentNullException.ThrowIfNull(audioEncoder);
+        video ??= new VideoEncoderProfile("libx264", "H.264 (software)", false, Array.Empty<string>(), Array.Empty<string>(), "format=yuv420p", true);
 
+        var height = OutputHeight(width);
         var size = width.ToString(CultureInfo.InvariantCulture) + "x" + height.ToString(CultureInfo.InvariantCulture);
-        var br = bitrate.ToString(CultureInfo.InvariantCulture);
         var hasFont = !string.IsNullOrEmpty(fontPath);
 
-        var args = new List<string> { "-hide_banner", "-loglevel", "error" };
+        // -progress reports the slate's output position like every producer, so a standby session's timeline keeps
+        // advancing and a later restart resumes after the slate instead of rewinding over it.
+        var args = new List<string> { "-hide_banner", "-loglevel", "error", "-progress", "pipe:2" };
+        foreach (var init in video.InitArgs)
+        {
+            args.Add(init);
+        }
 
         // Pace the synthetic sources to realtime (-re) so the looped slate feeds the segmenter at the rate the
         // player consumes it. Without it ffmpeg renders each clip far faster than realtime and lurches the live
         // edge forward, the same failure a per-item burst would cause.
         Add(args, "-re", "-f", "lavfi", "-i", hasFont ? "color=c=0x0f1419:size=" + size + ":rate=30" : "smptebars=size=" + size + ":rate=30");
         Add(args, "-re", "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000");
-        Add(args, "-t", seconds.ToString("F0", CultureInfo.InvariantCulture));
+        Add(args, "-t", seconds.ToString("F3", CultureInfo.InvariantCulture));
 
+        // The slate ends in the profile's own pixel stage, exactly as content does, so the encoder receives the
+        // frame format (or GPU upload) it expects.
         if (hasFont)
         {
             // Escaped for the filtergraph like every other path, so a drive colon or an apostrophe cannot break it.
@@ -522,15 +465,14 @@ public static class StreamArguments
             Add(args, "-vf",
                 "drawtext=fontfile=" + font + ":text='Standby':fontcolor=white:fontsize=" + title + ":x=(w-tw)/2:y=(h/2)-" + title + ","
                 + "drawtext=fontfile=" + font + ":text='Channel content is unavailable':fontcolor=0xaaaaaa:fontsize=" + sub + ":x=(w-tw)/2:y=(h/2)+10,"
-                + "format=yuv420p");
+                + video.PixelStage);
         }
         else
         {
-            Add(args, "-vf", "format=yuv420p");
+            Add(args, "-vf", video.PixelStage);
         }
 
-        Add(args, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-b:v", br + "k", "-g", GopFrames);
-        Add(args, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000");
+        AppendEncoders(args, video, bitrate, audioEncoder, audioBitrate);
 
         if (timeline > TimeSpan.Zero)
         {
@@ -538,13 +480,14 @@ public static class StreamArguments
             args.Add(timeline.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture));
         }
 
-        Add(args, "-y", "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-muxdelay", "0", "pipe:1");
+        Add(args, "-y", "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-muxpreload", "0", "-muxdelay", "0", "pipe:1");
         return args;
     }
 
     /// <summary>
     /// Converts a configured window length in minutes into the number of HLS segments to retain, clamped to a
-    /// sensible floor. The window must cover the drift the above-realtime producer creates, and bounds disk use.
+    /// sensible floor. The window must cover the tune-in head start plus the worst-case burst advance of the
+    /// self-heal path, and bounds disk use.
     /// </summary>
     /// <param name="windowMinutes">The desired on-disk window in minutes.</param>
     /// <returns>The segment count for the playlist window.</returns>
@@ -602,6 +545,61 @@ public static class StreamArguments
             playlistPath);
 
         return args;
+    }
+
+    /// <summary>
+    /// The output height for a 16:9 frame of the given width, rounded up to the even number every encoder needs.
+    /// </summary>
+    /// <param name="width">The output width.</param>
+    /// <returns>The output height.</returns>
+    internal static int OutputHeight(int width)
+    {
+        var height = (int)Math.Round(width * 9.0 / 16.0);
+        return height % 2 != 0 ? height + 1 : height;
+    }
+
+    // The encoder half every producer shares (content, continuous playlist, and slate alike), so the segmenter
+    // sees one uniform stream shape whichever process produced the bytes.
+    private static void AppendEncoders(List<string> args, VideoEncoderProfile video, int bitrate, string audioEncoder, int audioBitrate)
+    {
+        var br = bitrate.ToString(CultureInfo.InvariantCulture);
+        Add(args, "-c:v", video.Name);
+
+        // Force the encoder to signal progressive in the sequence header. yadif + setparams clear the per-frame
+        // interlaced flag, but hardware encoders (notably h264_qsv) write the field order into the SPS from the
+        // codec context at init and ignore the frame flag, so the output is tagged 1080i. Jellyfin then re-probes
+        // our stream as interlaced and inserts a deinterlace_vaapi pass that fails on QSV. Setting the field order
+        // at the encoder makes the output genuinely progressive, so Jellyfin remuxes it instead of re-transcoding.
+        Add(args, "-field_order", "progressive");
+
+        // Closed GOP gives the downstream segmenter predictable GOP boundaries, so Jellyfin can remux into HLS
+        // instead of re-transcoding to realign keyframes.
+        Add(args, "-flags", "+cgop");
+
+        if (video.UsePreset)
+        {
+            Add(args, "-preset", "veryfast", "-sc_threshold", "0");
+        }
+
+        foreach (var extra in video.ExtraEncoderArgs)
+        {
+            args.Add(extra);
+        }
+
+        // One GOP per HLS segment at the fixed frame rate, so the segmenter (and Jellyfin's delivery remux behind
+        // it) cuts every segment at precisely SegmentSeconds: the first segment closes as early as possible at
+        // tune-in and none is stretched waiting for a keyframe that lands past the mark.
+        Add(args, "-b:v", br + "k", "-maxrate", br + "k",
+            "-bufsize", (bitrate * 2).ToString(CultureInfo.InvariantCulture) + "k", "-g", GopFrames);
+
+        // Re-sample audio to a constant 48 kHz stereo track and let aresample fill or drop samples to keep it
+        // locked to the video, so audio never drifts out of sync within or across items.
+        var abr = audioBitrate.ToString(CultureInfo.InvariantCulture);
+        Add(args, "-c:a", audioEncoder, "-b:a", abr + "k", "-ac", "2", "-ar", "48000", "-af", "aresample=async=1:min_hard_comp=0.100");
+
+        // A generous muxing queue absorbs the brief audio/video imbalance at each item's start instead of
+        // aborting with "Too many packets buffered".
+        Add(args, "-max_muxing_queue_size", "1024");
     }
 
     // Whether the encoder is an Intel hardware encoder (QSV or VAAPI), which can run the GPU-resident pipeline.

@@ -27,6 +27,7 @@ public static class ConfigurationValidator
     {
         ArgumentNullException.ThrowIfNull(config);
 
+        Normalize(config);
         ValidatePlayback(config);
 
         // The Popular channel takes the same per-channel checks as every configured channel (its number and
@@ -66,6 +67,75 @@ public static class ConfigurationValidator
             {
                 throw new ArgumentException("Duplicate channel number: " + channel.Number);
             }
+        }
+    }
+
+    /// <summary>The largest rating transition window accepted, in minutes (one day).</summary>
+    public const int MaxTransitionWindowMinutes = 1440;
+
+    // An API client can send explicit nulls the dashboard never does, and the JSON save stores them as-is. Every
+    // reader assumes the model's non-null defaults, so a null collection or string would pass the checks below and
+    // then throw at guide refresh or tune-in. Replace them with the defaults here; the save persists this object.
+    private static void Normalize(PluginConfiguration config)
+    {
+        config.Channels ??= new List<Channel>();
+        config.Channels.RemoveAll(channel => channel is null);
+        config.PopularChannel ??= new PluginConfiguration().PopularChannel;
+        config.DefaultSubtitleLanguage ??= string.Empty;
+        config.SubtitleFont ??= string.Empty;
+        config.SubtitleTextColor ??= string.Empty;
+        config.SubtitleOutlineColor ??= string.Empty;
+        config.StreamDirectory ??= string.Empty;
+
+        NormalizeChannel(config.PopularChannel);
+        foreach (var channel in config.Channels)
+        {
+            NormalizeChannel(channel);
+        }
+    }
+
+    private static void NormalizeChannel(Channel channel)
+    {
+        channel.Id ??= string.Empty;
+        channel.Name ??= string.Empty;
+        channel.LogoData ??= string.Empty;
+        channel.LogoContentType ??= string.Empty;
+        channel.LogoSymbol ??= string.Empty;
+        channel.AudioLanguage ??= string.Empty;
+        channel.MinOfficialRating ??= string.Empty;
+        channel.MaxOfficialRating ??= string.Empty;
+
+        channel.Years ??= new List<int>();
+        channel.Studios ??= new List<string>();
+        channel.Studios.RemoveAll(studio => studio is null);
+        channel.People ??= new List<PersonRef>();
+        channel.People.RemoveAll(person => person is null);
+        foreach (var person in channel.People)
+        {
+            person.Name ??= string.Empty;
+        }
+
+        channel.RatingBlocks ??= new List<RatingBlock>();
+        channel.RatingBlocks.RemoveAll(block => block is null);
+        foreach (var block in channel.RatingBlocks)
+        {
+            block.MinOfficialRating ??= string.Empty;
+            block.MaxOfficialRating ??= string.Empty;
+        }
+
+        channel.Sources ??= new List<LibrarySource>();
+        channel.Sources.RemoveAll(source => source is null);
+        foreach (var source in channel.Sources)
+        {
+            source.LibraryId ??= string.Empty;
+            source.LibraryName ??= string.Empty;
+            source.CollectionId ??= string.Empty;
+            source.CollectionName ??= string.Empty;
+            source.Genres ??= new List<string>();
+            source.Genres.RemoveAll(genre => genre is null);
+            source.ExcludeGenres ??= new List<string>();
+            source.ExcludeGenres.RemoveAll(genre => genre is null);
+            source.ItemIds ??= new List<Guid>();
         }
     }
 
@@ -185,9 +255,9 @@ public static class ConfigurationValidator
     // an out-of-range value is rejected with a reason instead of silently misbehaving at schedule time.
     private static void ValidateChannelLimits(Channel channel)
     {
-        if (channel.TransitionWindowMinutes < 0)
+        if (channel.TransitionWindowMinutes is < 0 or > MaxTransitionWindowMinutes)
         {
-            throw new ArgumentException("Transition window cannot be negative: " + Describe(channel));
+            throw new ArgumentException("Transition window must be between 0 and 1440 minutes: " + Describe(channel));
         }
 
         if (channel.EpisodesPerBlock < 1)

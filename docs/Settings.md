@@ -97,7 +97,7 @@ The Channel Settings section covers playback, guide tags, episode grouping, cont
 | **Category** | Tags the whole channel in the guide as **News** or **Sports**. Kids is set per rating block, and the movie tag applies automatically while a movie is playing, so a channel can carry up to three tags at once. | None |
 | **Content types** | What airs: **Episodes** (on), **Movies** (on), **Specials** (season 0, off), **Music videos** (on), **Home videos** (off). | see left |
 | **Episodes per block** | Consecutive episodes of one series before moving on. 1 disables grouping. | 1 |
-| **Keep multipart episodes together** | Holds a two part episode ("The Trap (1)" and "(2)") in the same block so it never splits. | on |
+| **Keep multipart episodes together** | Holds every part of a multipart story ("The Trap (1)", "(2)", "(3)", and so on) in the same block so it never splits, even when that runs past the episodes per block. | on |
 | **Loop order** | **Shuffle** is deterministic and repeatable, so the guide and the stream always agree, and each series contributes one block per loop pass so nothing dominates. **Alphabetical** plays by name. **Chronological** plays oldest to newest by release date. | Shuffle |
 | **Episode order** | Within a series, **Air order** or **Random**. | Air order |
 | **Favor content type** | On a shuffled channel, weights **Movies**, **Shows**, or **Music videos** more heavily by repeating them toward a target share. | No preference |

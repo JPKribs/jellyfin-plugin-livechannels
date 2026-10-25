@@ -66,7 +66,8 @@ public static class ScheduleCalculator
             accumulated += dur;
         }
 
-        // Floating accumulation can leave position exactly at the cycle end; treat as the start of item 0.
+        // Unreachable for a well-formed loop (integer ticks, position < cycle); a defensive fallback for entries
+        // with a non-positive duration, which break the running sum. Treat as the start of item 0.
         return (0, TimeSpan.Zero);
     }
 

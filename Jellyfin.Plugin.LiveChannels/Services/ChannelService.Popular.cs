@@ -171,6 +171,7 @@ public partial class ChannelService
             }
         }
 
+        var seriesArtwork = new Dictionary<Guid, ArtworkSet>();
         var entries = new List<ProgramEntry>();
         foreach (var item in items.Values)
         {
@@ -200,7 +201,14 @@ public partial class ChannelService
                 continue;
             }
 
-            var entry = ToEntry(item, SafeGetMediaStreams(item.Id));
+            // The audio-language requirement applies here exactly as on a normal channel, from the same single read.
+            var streams = SafeGetMediaStreams(item.Id);
+            if (!AudioLanguageAllows(channel.AudioLanguage, streams))
+            {
+                continue;
+            }
+
+            var entry = ToEntry(item, streams, seriesArtwork);
             if (entry is not null)
             {
                 entries.Add(entry);

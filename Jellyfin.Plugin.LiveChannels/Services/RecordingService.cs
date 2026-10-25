@@ -34,7 +34,7 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// series state (Jellyfin surfaces a program's series link only via a child timer pointing at the rule).
 /// Driven by the live TV service's once-a-minute heartbeat plus a kick after each series create.
 /// </summary>
-public sealed partial class RecordingService
+public sealed partial class RecordingService : IDisposable
 {
     // How far ahead series rules are expanded into child timers. Far enough that the upcoming list is useful,
     // small enough that a looping channel (where the same series airs over and over) cannot flood the store.
@@ -44,9 +44,14 @@ public sealed partial class RecordingService
     // bounds the store's growth no matter how dense the loop is.
     private const int MaxChildrenPerRulePass = 16;
 
-    // A materialization that keeps failing (source missing, recording folder unwritable) is retried on later
-    // passes up to this many attempts, then marked errored so it stops occupying the due list.
-    private const int MaxMaterializeAttempts = 3;
+    // A materialization that keeps failing (source missing, recording folder unwritable, a NAS briefly
+    // unmounted) is retried on later passes with a growing delay between attempts, and only marked errored once
+    // it has failed this long past its window, so a transient outage does not turn into a permanent error.
+    private static readonly TimeSpan GiveUpAfter = TimeSpan.FromHours(6);
+    private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(30);
+
+    // Suffix of the temp file a cross-volume copy writes before moving it into place.
+    private const string CopyTempSuffix = ".copying.tmp";
 
     private readonly ChannelService _channels;
     private readonly TimerService _timers;
@@ -61,6 +66,15 @@ public sealed partial class RecordingService
     // Non-reentrancy gate for the maintenance pass: the heartbeat and the post-create kick may overlap, and a
     // long copy must not stack a second pass behind it.
     private int _running;
+
+    // Cancelled at shutdown so a long copy stops instead of holding the server up (its temp file is removed).
+    private readonly CancellationTokenSource _shutdown = new();
+
+    // When each failing timer may next be retried. Only touched by the pass, which is non-reentrant.
+    private readonly Dictionary<string, DateTime> _retryAfter = new(StringComparer.Ordinal);
+
+    // Whether the stale-copy sweep has run this process; it runs once, on the first pass, before any copy.
+    private bool _sweptCopies;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RecordingService"/> class.
@@ -94,12 +108,19 @@ public sealed partial class RecordingService
     /// </summary>
     public void Kick()
     {
-        if (Interlocked.CompareExchange(ref _running, 1, 0) != 0)
+        if (_shutdown.IsCancellationRequested || Interlocked.CompareExchange(ref _running, 1, 0) != 0)
         {
             return;
         }
 
         _ = Task.Run(RunPassAsync);
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        _shutdown.Cancel();
+        _shutdown.Dispose();
     }
 
     // The interesting failure here is per-timer and handled inside; this catch only guards the pass itself
@@ -108,11 +129,22 @@ public sealed partial class RecordingService
     {
         try
         {
+            var token = _shutdown.Token;
             var options = ReadLiveTvOptions();
             var defaultRoot = DefaultRecordingRoot();
+            if (!_sweptCopies)
+            {
+                _sweptCopies = true;
+                SweepStaleCopies(options, defaultRoot);
+            }
+
             ConsolidateSeriesRules();
             ExpandSeriesRules(options, defaultRoot);
-            await MaterializeDueAsync(options, defaultRoot).ConfigureAwait(false);
+            await MaterializeDueAsync(options, defaultRoot, token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException && _shutdown.IsCancellationRequested)
+        {
+            // Shutting down; the interrupted timer is still due and is retried on the next start.
         }
         catch (Exception ex)
         {
@@ -167,8 +199,9 @@ public sealed partial class RecordingService
 
     // Expands each series rule into concrete child timers for upcoming airings of its series on its channel,
     // linked back via SeriesTimerId (the link clients need to show and cancel series state). One airing per
-    // distinct episode per pass, skipping programs that already have a timer or an already-materialized file,
-    // so re-running is idempotent and a looping channel does not re-record the same episode forever.
+    // distinct episode, skipping items the rule has already recorded, had cancelled, or holds a child for, and
+    // programs that already have a timer or an already-materialized file, so re-running is idempotent and a
+    // looping channel does not re-record the same episode forever.
     private void ExpandSeriesRules(LiveTvOptions? options, string defaultRoot)
     {
         foreach (var rule in _timers.GetSeriesTimers())
@@ -189,7 +222,8 @@ public sealed partial class RecordingService
             foreach (var slot in timeline)
             {
                 var program = slot.Program;
-                if ((program.SeriesId ?? program.ItemId) != seriesKey || !MatchesRule(rule, slot.Start) || !seenItems.Add(program.ItemId))
+                if ((program.SeriesId ?? program.ItemId) != seriesKey || !MatchesRule(rule, slot.Start) || !seenItems.Add(program.ItemId)
+                    || _timers.IsSeriesItemTaken(rule.Id, program.ItemId))
                 {
                     continue;
                 }
@@ -263,34 +297,73 @@ public sealed partial class RecordingService
         };
     }
 
-    // Produces the recording for every timer whose window has ended. Failures are retried on later passes; a
-    // timer that keeps failing is marked errored so the due list cannot grow without bound.
-    private async Task MaterializeDueAsync(LiveTvOptions? options, string defaultRoot)
+    // Produces the recording for every timer whose window has ended. Failures are retried on later passes with a
+    // growing delay; a timer still failing well past its window is marked errored so the due list cannot grow
+    // without bound.
+    private async Task MaterializeDueAsync(LiveTvOptions? options, string defaultRoot, CancellationToken cancellationToken)
     {
-        foreach (var timer in _timers.TimersDueForRecording())
+        var now = DateTime.UtcNow;
+        var due = _timers.TimersDueForRecording();
+        foreach (var stale in _retryAfter.Keys.Where(id => !due.Any(t => string.Equals(t.Id, id, StringComparison.Ordinal))).ToList())
         {
+            _retryAfter.Remove(stale);
+        }
+
+        foreach (var timer in due)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_retryAfter.TryGetValue(timer.Id, out var after) && now < after)
+            {
+                continue;
+            }
+
             try
             {
-                await MaterializeAsync(timer, options, defaultRoot).ConfigureAwait(false);
+                await MaterializeAsync(timer, options, defaultRoot, cancellationToken).ConfigureAwait(false);
+                _retryAfter.Remove(timer.Id);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
-                timer.RetryCount++;
-                if (timer.RetryCount >= MaxMaterializeAttempts)
+                // Counted on the stored timer, not this instance: a client edit made meanwhile must not be lost.
+                if (_timers.RecordFailedAttempt(timer.Id) is not { } attempts)
                 {
+                    _retryAfter.Remove(timer.Id);
+                    continue;
+                }
+
+                if (now - timer.EndDate >= GiveUpAfter)
+                {
+                    _retryAfter.Remove(timer.Id);
                     _timers.CompleteTimer(timer.Id, RecordingStatus.Error, recordingPath: null);
-                    _logger.LogWarning(ex, "Live Channels: could not produce the recording for \"{Name}\"; giving up after {Attempts} attempts", timer.Name, timer.RetryCount);
+                    _logger.LogWarning(ex, "Live Channels: could not produce the recording for \"{Name}\"; giving up after {Attempts} attempts", timer.Name, attempts);
                 }
                 else
                 {
-                    _timers.SaveTimer(timer);
-                    _logger.LogWarning(ex, "Live Channels: could not produce the recording for \"{Name}\" (attempt {Attempt}); it will be retried", timer.Name, timer.RetryCount);
+                    var delay = RetryDelay(attempts);
+                    _retryAfter[timer.Id] = now + delay;
+                    _logger.LogWarning(ex, "Live Channels: could not produce the recording for \"{Name}\" (attempt {Attempt}); retrying in {Minutes} minute(s)", timer.Name, attempts, (int)delay.TotalMinutes);
                 }
             }
         }
     }
 
-    private async Task MaterializeAsync(TimerInfo timer, LiveTvOptions? options, string defaultRoot)
+    /// <summary>
+    /// The delay before retrying a recording that has failed the given number of times: one minute, doubling per
+    /// failure, capped at <see cref="MaxRetryDelay"/>.
+    /// </summary>
+    /// <param name="attempts">The failed attempts so far (1 or more).</param>
+    /// <returns>The delay before the next attempt.</returns>
+    internal static TimeSpan RetryDelay(int attempts)
+    {
+        var minutes = Math.Pow(2, Math.Clamp(attempts - 1, 0, 16));
+        return TimeSpan.FromMinutes(Math.Min(minutes, MaxRetryDelay.TotalMinutes));
+    }
+
+    private async Task MaterializeAsync(TimerInfo timer, LiveTvOptions? options, string defaultRoot, CancellationToken cancellationToken)
     {
         var resolved = Resolve(timer.ProgramId, ScheduledItem(timer))
             ?? throw new InvalidOperationException("The program no longer resolves to a scheduled library item.");
@@ -319,8 +392,9 @@ public sealed partial class RecordingService
         else
         {
             // Cross-volume (or a filesystem without hardlinks): copy through a temp name and move, so a crash
-            // mid-copy never leaves a half-written file that scans as a corrupt recording.
-            var temp = target.File + ".copying.tmp";
+            // mid-copy never leaves a half-written file that scans as a corrupt recording. A copy interrupted by
+            // shutdown is abandoned and its temp file removed; one interrupted by a crash is swept on the next start.
+            var temp = target.File + CopyTempSuffix;
             try
             {
                 // Plain using blocks: the copy itself is async, and a FileStream's synchronous Dispose after
@@ -330,7 +404,7 @@ public sealed partial class RecordingService
                 using (var src = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, openOptions))
                 using (var dst = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 81920, openOptions))
                 {
-                    await src.CopyToAsync(dst).ConfigureAwait(false);
+                    await src.CopyToAsync(dst, cancellationToken).ConfigureAwait(false);
                 }
 
                 File.Move(temp, target.File, overwrite: true);
@@ -342,7 +416,14 @@ public sealed partial class RecordingService
             }
         }
 
-        _timers.CompleteTimer(timer.Id, RecordingStatus.Completed, target.File);
+        if (!_timers.CompleteTimer(timer.Id, RecordingStatus.Completed, target.File))
+        {
+            // Cancelled while the file was being produced: the cancel stands. The file is a finished recording of
+            // the library item, so it is left for the user rather than deleted.
+            _logger.LogInformation("Live Channels: \"{Name}\" was cancelled while its recording was produced at {Path}; the timer stays cancelled", timer.Name, target.File);
+            return;
+        }
+
         _logger.LogInformation("Live Channels: recorded \"{Name}\" to {Path} ({Method})", timer.Name, target.File, linked ? "hardlink" : "copy");
         _activity.Log(
             "Live Channel recording: " + (string.IsNullOrEmpty(timer.Name) ? program.Title : timer.Name),
@@ -582,7 +663,29 @@ public sealed partial class RecordingService
         return program.Title + " " + DateStamp(slotStartUtc);
     }
 
-    private static string DateStamp(DateTime utc) => utc.ToLocalTime().ToString("yyyy_MM_dd_HH_mm_ss", CultureInfo.InvariantCulture);
+    private static string DateStamp(DateTime utc) => DateStamp(utc, TimeZoneInfo.Local);
+
+    /// <summary>
+    /// The local-time stamp used in recording names. Inside the repeated hour when clocks fall back, the same
+    /// local time occurs twice, so the UTC offset is appended there to keep the two airings' names apart
+    /// (otherwise the second would adopt the first's file as already recorded). Every other time is unchanged.
+    /// </summary>
+    /// <param name="utc">The airing's start (treated as UTC unless it is marked local).</param>
+    /// <param name="zone">The time zone to stamp in.</param>
+    /// <returns>The stamp.</returns>
+    internal static string DateStamp(DateTime utc, TimeZoneInfo zone)
+    {
+        var instant = utc.Kind == DateTimeKind.Local ? utc.ToUniversalTime() : DateTime.SpecifyKind(utc, DateTimeKind.Utc);
+        var local = TimeZoneInfo.ConvertTimeFromUtc(instant, zone);
+        var stamp = local.ToString("yyyy_MM_dd_HH_mm_ss", CultureInfo.InvariantCulture);
+        if (!zone.IsAmbiguousTime(local))
+        {
+            return stamp;
+        }
+
+        var offset = zone.GetUtcOffset(instant);
+        return stamp + "_UTC" + (offset < TimeSpan.Zero ? "-" : "+") + offset.ToString("hhmm", CultureInfo.InvariantCulture);
+    }
 
     private static string SourceExtension(ProgramEntry program)
         => string.IsNullOrEmpty(program.Path) ? ".ts" : Path.GetExtension(program.Path);
@@ -679,15 +782,45 @@ public sealed partial class RecordingService
         return null;
     }
 
+    // Sweeps temp files left in the recording folders by a copy that a crash interrupted. Runs once per process,
+    // on the first pass, before that pass starts any copy of its own, so every temp file found is an orphan.
+    private void SweepStaleCopies(LiveTvOptions? options, string defaultRoot)
+    {
+        var roots = new[] { defaultRoot, options?.SeriesRecordingPath, options?.MovieRecordingPath }
+            .Where(r => !string.IsNullOrWhiteSpace(r) && Directory.Exists(r))
+            .Distinct(StringComparer.Ordinal);
+        var enumeration = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
+        foreach (var root in roots)
+        {
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(root!, "*" + CopyTempSuffix, enumeration))
+                {
+                    _logger.LogInformation("Live Channels: removing the interrupted recording copy {Path}", file);
+                    TryDelete(file);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Live Channels: could not sweep interrupted copies under {Path}", root);
+            }
+        }
+    }
+
     // Hardlinks source to dest when the platform and volume allow it, so a same-volume recording costs no
-    // space. Any failure (cross-volume above all) simply reports false and the caller copies.
+    // space. Any failure (cross-volume above all) simply reports false and the caller copies; the OS error is
+    // logged so an unexpected one (permissions, a filesystem without links) can be told apart from cross-volume.
     private bool TryHardLink(string source, string dest)
     {
         try
         {
-            return OperatingSystem.IsWindows()
-                ? NativeMethods.CreateHardLinkW(dest, source, IntPtr.Zero)
-                : NativeMethods.Link(source, dest) == 0;
+            if (OperatingSystem.IsWindows() ? NativeMethods.CreateHardLinkW(dest, source, IntPtr.Zero) : PosixLink(source, dest) == 0)
+            {
+                return true;
+            }
+
+            _logger.LogDebug("Live Channels: hardlink from {Source} to {Dest} failed (OS error {Error}); copying instead", source, dest, Marshal.GetLastPInvokeError());
+            return false;
         }
         catch (Exception ex)
         {
@@ -695,6 +828,28 @@ public sealed partial class RecordingService
             return false;
         }
     }
+
+    // link(2) through the C library. On glibc Linux the bare name "libc" resolves to libc.so, which is absent or
+    // a linker script on a stock install, so the versioned soname is tried first there; anywhere it does not
+    // exist (macOS, musl), the bare name is used. The binding that worked is remembered.
+    private static int PosixLink(string existingPath, string newPath)
+    {
+        if (OperatingSystem.IsLinux() && Volatile.Read(ref _glibcMissing) == 0)
+        {
+            try
+            {
+                return NativeMethods.LinkGlibc(existingPath, newPath);
+            }
+            catch (DllNotFoundException)
+            {
+                Volatile.Write(ref _glibcMissing, 1);
+            }
+        }
+
+        return NativeMethods.Link(existingPath, newPath);
+    }
+
+    private static int _glibcMissing;
 
     private void TryDelete(string path)
     {
@@ -728,6 +883,10 @@ public sealed partial class RecordingService
         [LibraryImport("libc", EntryPoint = "link", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         internal static partial int Link(string existingPath, string newPath);
+
+        [LibraryImport("libc.so.6", EntryPoint = "link", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        internal static partial int LinkGlibc(string existingPath, string newPath);
 
         [LibraryImport("kernel32.dll", EntryPoint = "CreateHardLinkW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

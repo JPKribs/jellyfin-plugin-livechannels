@@ -22,6 +22,7 @@ public sealed class SessionStats
     private readonly object _logLock = new();
     private long _speedBits;
     private long _timelineBits;
+    private long _anchorTicks;
 
     /// <summary>
     /// Gets or sets the most recent encode speed as a realtime multiple, parsed from the producer ffmpeg's
@@ -35,10 +36,45 @@ public sealed class SessionStats
 
     /// <summary>
     /// Gets the furthest point on the channel timeline the session has produced, in seconds (zero until a
-    /// producer reports progress). A producer restarted under a viewer who is still watching resumes from here,
-    /// so the timestamps it appends continue forward instead of rewinding to the start of the channel.
+    /// producer reports progress): the end of the last output frame, i.e. its timestamp plus one frame. A
+    /// producer restarted under a viewer who is still watching resumes from here, so the timestamps it appends
+    /// continue strictly forward instead of repeating the last one or rewinding to the start of the channel.
     /// </summary>
-    public double TimelineSeconds => BitConverter.Int64BitsToDouble(Interlocked.Read(ref _timelineBits));
+    public double TimelineSeconds
+    {
+        get
+        {
+            var last = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _timelineBits));
+            return last > 0 ? last + (1.0 / Utilities.StreamArguments.OutputFps) : 0;
+        }
+    }
+
+    /// <summary>
+    /// Gets the wall-clock (guide) time that channel timeline zero corresponds to, or <c>null</c> until the
+    /// session's first producer starts content. Timeline position <c>t</c> then airs what the guide shows at
+    /// <c>anchor + t</c>, so a producer restarted mid-session can resume the schedule where the dead one's output
+    /// actually ended (it ran ahead of the wall clock by its head start) instead of replaying that lead.
+    /// </summary>
+    public DateTime? ContentAnchorUtc
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _anchorTicks);
+            return ticks == 0 ? null : new DateTime(ticks, DateTimeKind.Utc);
+        }
+    }
+
+    /// <summary>
+    /// Records the session's content anchor (see <see cref="ContentAnchorUtc"/>) unless one is already set, so a
+    /// restarted producer keeps the anchor its session started with.
+    /// </summary>
+    /// <param name="anchorUtc">The guide time that timeline zero corresponds to.</param>
+    /// <returns>The anchor in effect after the call.</returns>
+    public DateTime SetContentAnchorOnce(DateTime anchorUtc)
+    {
+        Interlocked.CompareExchange(ref _anchorTicks, anchorUtc.ToUniversalTime().Ticks, 0);
+        return ContentAnchorUtc ?? anchorUtc;
+    }
 
     /// <summary>
     /// Gets or sets the path of the session's ffmpeg diagnostic log (inside the session directory), or

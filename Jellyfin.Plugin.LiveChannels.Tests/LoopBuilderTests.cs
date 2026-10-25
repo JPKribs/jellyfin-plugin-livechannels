@@ -116,19 +116,68 @@ public class LoopBuilderTests
     }
 
     [Fact]
-    public void MultiPart_BlockExtendsByAtMostOne_ThirdPartNotGlued()
+    public void MultiPart_ChainsEveryPart_BeyondBlockSize()
     {
-        // A three-parter (1)(2)(3) with block size 2: a block holds the pair (1)(2) but never a third part, so no
-        // block exceeds blockSize + 1. The series' single shuffled block therefore never contains all three.
+        // A four-parter (1)(2)(3)(4) at block size 1: the block extends as far as the story needs, so the series'
+        // single shuffled block airs all four parts, in order, back to back.
+        var s = Guid.NewGuid();
+        var loop = ProgramLoopBuilder.Build(new[]
+        {
+            Ep(s, "Show", 1, 1, "The Saga (1)"),
+            Ep(s, "Show", 1, 2, "The Saga (2)"),
+            Ep(s, "Show", 1, 3, "The Saga (3)"),
+            Ep(s, "Show", 1, 4, "The Saga (4)")
+        }, Opts(block: 1, mode: LoopMode.Shuffle));
+
+        Assert.Equal(new[] { 1, 2, 3, 4 }, EpisodeOrder(loop, s).ToArray());
+    }
+
+    [Fact]
+    public void MultiPart_ChainStaysWhole_WhenEpisodesShuffled()
+    {
+        // With shuffled episodes a whole multi-part story moves as one unit, so its parts stay adjacent and in order
+        // wherever it lands.
+        var s = Guid.NewGuid();
+        var eps = new List<ProgramEntry> { Ep(s, "Show", 1, 1, "Opener") };
+        eps.Add(Ep(s, "Show", 1, 2, "Long Road Part 1"));
+        eps.Add(Ep(s, "Show", 1, 3, "Long Road Part 2"));
+        eps.Add(Ep(s, "Show", 1, 4, "Long Road Part 3"));
+        for (var n = 5; n <= 12; n++)
+        {
+            eps.Add(Ep(s, "Show", 1, n, "Ep " + n));
+        }
+
+        var order = EpisodeOrder(ProgramLoopBuilder.Build(eps, Opts(block: 20, shuffleEp: true)), s);
+        var first = order.IndexOf(2);
+        Assert.Equal(new[] { 2, 3, 4 }, order.Skip(first).Take(3).ToArray());
+    }
+
+    [Fact]
+    public void MultiPart_OnlyConsecutivePartsChain()
+    {
+        // A part continues only the part directly before it: same series, same base title, next number. Different
+        // stories, a repeated number, a gap in the numbering, or another series all break the chain.
+        var s = Guid.NewGuid();
+        Assert.True(ProgramLoopBuilder.ContinuesPart(Ep(s, "S", 1, 1, "Trap (1)"), Ep(s, "S", 1, 2, "Trap (2)")));
+        Assert.False(ProgramLoopBuilder.ContinuesPart(Ep(s, "S", 1, 1, "Trap (1)"), Ep(s, "S", 1, 2, "Heist (2)")));
+        Assert.False(ProgramLoopBuilder.ContinuesPart(Ep(s, "S", 1, 1, "Trap (1)"), Ep(s, "S", 1, 2, "Trap (1)")));
+        Assert.False(ProgramLoopBuilder.ContinuesPart(Ep(s, "S", 1, 2, "Trap (2)"), Ep(s, "S", 1, 4, "Trap (4)")));
+        Assert.False(ProgramLoopBuilder.ContinuesPart(Ep(s, "S", 1, 1, "Trap (1)"), Ep(Guid.NewGuid(), "S", 1, 2, "Trap (2)")));
+        Assert.True(ProgramLoopBuilder.ContinuesPart(Ep(s, "S", 1, 1, "Trap - Part 1"), Ep(s, "S", 1, 2, "trap part 2")));
+    }
+
+    [Fact]
+    public void MultiPart_Off_DoesNotChain()
+    {
         var s = Guid.NewGuid();
         var loop = ProgramLoopBuilder.Build(new[]
         {
             Ep(s, "Show", 1, 1, "The Saga (1)"),
             Ep(s, "Show", 1, 2, "The Saga (2)"),
             Ep(s, "Show", 1, 3, "The Saga (3)")
-        }, Opts(block: 2, mode: LoopMode.Shuffle));
+        }, Opts(block: 1, keepMulti: false, mode: LoopMode.Shuffle));
 
-        Assert.True(loop.Count <= 2, "a block glued more than a pair together: " + loop.Count);
+        Assert.Single(loop);
     }
 
     [Fact]

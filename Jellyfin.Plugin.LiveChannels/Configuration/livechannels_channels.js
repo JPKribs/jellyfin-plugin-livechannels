@@ -31,6 +31,10 @@ export default function (view) {
     // can never persist half-made edits to channel A, and switching away discards consistently (with a
     // confirm when something would be lost).
     var editing = null;
+    // The server's channel list as of the last load or successful save, serialised. A save first re-reads the
+    // server copy and refuses when it differs, so a second tab (or admin) editing channels is not silently
+    // overwritten with this page's older list.
+    var serverChannels = '';
     // Compares the editor against its just-loaded state, for the unsaved-changes check.
     var editorTracker = Shared.createChangeTracker({ serialize: editorSnapshot });
     var currentEnabled = true;
@@ -1100,7 +1104,7 @@ export default function (view) {
         // Rating blocks are mutated live on the cards; the transition window is read here. The blocks are now
         // authoritative, so neutralise the legacy single-band fields to keep them from double-applying.
         ch.RatingBlocks = ch.RatingBlocks || [];
-        ch.TransitionWindowMinutes = Math.max(0, parseInt(el('transitionWindow').value, 10) || 0);
+        ch.TransitionWindowMinutes = Math.min(1440, Math.max(0, parseInt(el('transitionWindow').value, 10) || 0));
         ch.MinOfficialRating = '';
         ch.MaxOfficialRating = '';
         ch.IncludeUnrated = true;
@@ -1143,9 +1147,11 @@ export default function (view) {
         if (!ch.Sources.length) { Shared.setStatus('channelStatus', 'Add at least one library source.', true); return; }
         if (ch.Sources.some(function (s) { return s.Kind === 'Collection' ? !s.CollectionId : !s.LibraryId; })) { Shared.setStatus('channelStatus', 'Pick a library or collection for each source.', true); return; }
 
-        // The copy is complete and valid: write it back over the stored channel and persist.
-        channels[currentIndex] = ch;
-        persist('channelStatus', 'Saved.', 'Save failed.');
+        // The copy is complete and valid: persist a working set with it in place, and adopt that set only once
+        // the server accepts it, so a rejected save leaves the stored channels (and the editor) as they were.
+        var candidate = channels.slice();
+        candidate[currentIndex] = JSON.parse(JSON.stringify(ch));
+        persist(candidate, 'channelStatus', 'Saved.', 'Save failed.');
     }
 
     function stripInternal(list) {
@@ -1170,20 +1176,37 @@ export default function (view) {
         }).catch(function () { /* best effort */ });
     }
 
-    function persist(statusId, okMessage, errMessage) {
+    // Saves `candidate` as the channel list. `channels` is replaced with it only after the server accepts the
+    // save; on failure nothing local changes, so the next save does not resend a rejected list.
+    function persist(candidate, statusId, okMessage, errMessage, newIndex) {
         return Shared.getConfig().then(function (fresh) {
-            fresh.Channels = stripInternal(channels);
-            config = fresh;
-            return Shared.saveConfig(fresh);
-        }).then(function () {
+            if (JSON.stringify(fresh.Channels || []) !== serverChannels) {
+                var conflict = new Error('Channels were changed somewhere else since this page loaded. Reload the page, then make the change again.');
+                conflict.conflict = true;
+                throw conflict;
+            }
+            fresh.Channels = stripInternal(candidate);
+            return Shared.saveConfig(fresh).then(function () { return fresh; });
+        }).then(function (saved) {
+            config = saved;
+            channels = candidate;
+            if (newIndex !== undefined) currentIndex = newIndex;
             renderSelect();
             refreshLiveTv();
             Shared.setStatus(statusId, okMessage + ' Refreshing Live TV…', false);
+            // Re-read the stored list as the new baseline (the server may normalise what was sent).
+            return Shared.getConfig().then(function (cfg) { serverChannels = JSON.stringify(cfg.Channels || []); }).catch(function () {});
         }).catch(function (err) {
+            if (err && err.conflict) {
+                Shared.setStatus(statusId, err.message, true);
+                return;
+            }
             // Surface the server's validation message (like the settings page does) instead of a bare failure.
             var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
             read.then(function (t) {
                 Shared.setStatus(statusId, t ? t.replace(/^"|"$/g, '') : errMessage, true);
+            }, function () {
+                Shared.setStatus(statusId, errMessage, true);
             });
         });
     }
@@ -1215,9 +1238,9 @@ export default function (view) {
         Shared.setStatus('ioStatus', 'Exported ' + channels.length + ' channel' + (channels.length === 1 ? '' : 's') + ' to ' + name + '.', false);
     }
 
-    // Finds the index of the first channel with the given number, or -1.
-    function indexByNumber(number) {
-        for (var i = 0; i < channels.length; i++) { if ((channels[i].Number || 0) === (number || 0)) return i; }
+    // Finds the index of the first channel in `list` with the given number, or -1.
+    function indexByNumber(list, number) {
+        for (var i = 0; i < list.length; i++) { if ((list[i].Number || 0) === (number || 0)) return i; }
         return -1;
     }
 
@@ -1238,30 +1261,31 @@ export default function (view) {
         }
         if (!clean.length) { Shared.setStatus('ioStatus', 'Nothing to import: the file contains no channels.', true); return; }
 
+        // Merge into a copy of the working set; it replaces `channels` only once the save succeeds.
+        var candidate = channels.slice();
         var added = 0, replaced = 0;
         clean.forEach(function (ic) {
             delete ic.__items;
             ic.Sources = (ic.Sources || []).map(function (s) { delete s.__items; return s; });
             ic.Id = ic.Id || newId();
 
-            var idx = indexByNumber(ic.Number);
+            var idx = indexByNumber(candidate, ic.Number);
             if (idx >= 0) {
-                ic.Id = channels[idx].Id || ic.Id; // keep the slot's existing stable id
-                channels[idx] = ic;
+                ic.Id = candidate[idx].Id || ic.Id; // keep the slot's existing stable id
+                candidate[idx] = ic;
                 replaced++;
             } else {
                 // Avoid colliding with the id of a channel we are keeping.
-                var collides = channels.some(function (c) { return c.Id === ic.Id; });
+                var collides = candidate.some(function (c) { return c.Id === ic.Id; });
                 if (collides) ic.Id = newId();
-                channels.push(ic);
+                candidate.push(ic);
                 added++;
             }
         });
 
-        currentIndex = channels.length ? 0 : -1;
         // Resolve item names for any hand-picked sources so the editor reads cleanly, then save + refresh Live TV.
-        hydrateItemNames().then(function () {
-            persist('ioStatus', 'Imported ' + clean.length + ' channel' + (clean.length === 1 ? '' : 's') + ' (' + added + ' added, ' + replaced + ' replaced).', 'Import failed to save.');
+        hydrateItemNames(candidate).then(function () {
+            persist(candidate, 'ioStatus', 'Imported ' + clean.length + ' channel' + (clean.length === 1 ? '' : 's') + ' (' + added + ' added, ' + replaced + ' replaced).', 'Import failed to save.', candidate.length ? 0 : -1);
         });
     }
 
@@ -1302,9 +1326,9 @@ export default function (view) {
             // Delete the channel that was asked about, even if the list shifted while the dialog was open.
             var index = channels.indexOf(ch);
             if (!ok || index < 0) return;
-            channels.splice(index, 1);
-            currentIndex = -1;
-            persist('channelStatus', 'Deleted.', 'Delete failed.');
+            var candidate = channels.slice();
+            candidate.splice(index, 1);
+            persist(candidate, 'channelStatus', 'Deleted.', 'Delete failed.', -1);
         });
     }
 
@@ -1316,9 +1340,9 @@ export default function (view) {
 
     // MARK: Hydration
 
-    function hydrateItemNames() {
+    function hydrateItemNames(list) {
         var ids = [];
-        channels.forEach(function (ch) {
+        list.forEach(function (ch) {
             (ch.Sources || []).forEach(function (s) {
                 s.__items = [];
                 (s.ItemIds || []).forEach(function (id) { ids.push(id); });
@@ -1332,7 +1356,7 @@ export default function (view) {
             ((result && result.Items) || []).forEach(function (it) {
                 byId[it.Id] = it.Name + (it.ProductionYear ? ' (' + it.ProductionYear + ')' : '') + (it.Type === 'Series' ? ' (show)' : '');
             });
-            channels.forEach(function (ch) {
+            list.forEach(function (ch) {
                 (ch.Sources || []).forEach(function (s) {
                     s.__items = (s.ItemIds || []).map(function (id) { return { Id: id, Name: byId[id] || id }; });
                 });
@@ -1391,14 +1415,17 @@ export default function (view) {
             return Shared.getConfig();
         }).then(function (cfg) {
             config = cfg;
+            serverChannels = JSON.stringify(config.Channels || []);
             channels = (config.Channels || []).map(function (ch) {
                 ch.Sources = ch.Sources || [];
                 return ch;
             });
-            return hydrateItemNames();
+            return hydrateItemNames(channels);
         }).then(function () {
             currentIndex = channels.length ? 0 : -1;
             renderSelect();
+        }).catch(function () {
+            Shared.setStatus('channelStatus', 'Could not load the channels. Reload the page to try again.', true);
         });
     }
 

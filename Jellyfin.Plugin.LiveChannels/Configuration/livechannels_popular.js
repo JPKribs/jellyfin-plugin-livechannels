@@ -179,7 +179,7 @@ export default function (view) {
             // Blocks are mutated live on the cards; the transition window is read here. The blocks are authoritative,
             // so neutralise the legacy single-band fields to keep them from double-applying.
             pc.RatingBlocks = (popularConfig && popularConfig.RatingBlocks) || [];
-            pc.TransitionWindowMinutes = Math.max(0, parseInt(el('popularTransitionWindow').value, 10) || 0);
+            pc.TransitionWindowMinutes = Math.min(1440, Math.max(0, parseInt(el('popularTransitionWindow').value, 10) || 0));
             pc.MinOfficialRating = '';
             pc.MaxOfficialRating = '';
             pc.IncludeUnrated = true;
@@ -220,7 +220,9 @@ export default function (view) {
         Shared.initCollapsibles();
         // Populate the rating options before applying the saved values to them.
         loadRatings().then(function () {
-            Shared.getConfig().then(loadPopular);
+            return Shared.getConfig().then(loadPopular);
+        }).catch(function () {
+            Shared.setStatus('popularStatus', 'Could not load the settings. Reload the page to try again.', true);
         });
     }
 }

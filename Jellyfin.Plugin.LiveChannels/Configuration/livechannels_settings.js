@@ -182,7 +182,7 @@ export default function (view) {
             fresh.TranscodeWidth = parseInt(el('resolution').value, 10) || 1280;
             fresh.VideoCodec = el('videoCodec').value;
             fresh.AudioCodec = el('audioCodec').value;
-            fresh.TranscodeVideoBitrateKbps = Math.max(500, parseInt(el('videoBitrate').value, 10) || 4000);
+            fresh.TranscodeVideoBitrateKbps = Math.min(200000, Math.max(100, parseInt(el('videoBitrate').value, 10) || 4000));
             var maxSessions = parseInt(el('maxSessions').value, 10);
             fresh.MaxConcurrentSessions = isNaN(maxSessions) ? 3 : Math.max(0, maxSessions);
             var timeout = parseInt(el('sessionTimeout').value, 10);
@@ -376,7 +376,9 @@ export default function (view) {
     }
 
     function stressCancel() {
-        ApiClient.ajax({ type: 'DELETE', url: ApiClient.getUrl('livechannels/stresstest') }).then(pollStress);
+        ApiClient.ajax({ type: 'DELETE', url: ApiClient.getUrl('livechannels/stresstest') }).then(pollStress).catch(function () {
+            Shared.setStatus('stressStatus', 'Could not cancel the test.', true);
+        });
     }
 
     function bind() {
@@ -390,7 +392,9 @@ export default function (view) {
         Shared.initCollapsibles();
         // Populate the language options before applying the saved value to the dropdown.
         loadLanguages().then(function () {
-            Shared.getConfig().then(loadSettings);
+            return Shared.getConfig().then(loadSettings);
+        }).catch(function () {
+            Shared.setStatus('settingsStatus', 'Could not load the settings. Reload the page to try again.', true);
         });
         // A stress test may already be running (started earlier, page revisited): resume its display. The
         // poll stops itself on the first response when no test is running.

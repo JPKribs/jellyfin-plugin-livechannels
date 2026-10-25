@@ -160,6 +160,53 @@ public class DaypartScheduleTests
         }
     }
 
+    [Fact]
+    public void Build_KeepsMultiPartStoryWhole_PastBlockSize()
+    {
+        // An R-rated four-parter at one episode per block: each part alone would fit the last hours before the PG
+        // daytime window, splitting the story at 06:00. Kept whole, the chain only airs where all four parts fit, so
+        // wherever part 1 airs, parts 2-4 follow it directly.
+        var series = Guid.NewGuid();
+        var loop = new List<ProgramEntry>();
+        for (var part = 1; part <= 4; part++)
+        {
+            var id = 100 + part;
+            loop.Add(new ProgramEntry(new Guid($"00000000-0000-0000-0000-{id:D12}"), "saga" + id.ToString(System.Globalization.CultureInfo.InvariantCulture), null, TimeSpan.FromHours(1).Ticks, "/media/saga")
+            {
+                ParentalRatingValue = R,
+                SeriesId = series,
+                SeasonNumber = 1,
+                EpisodeNumber = part,
+                RawName = "The Saga (" + part.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")"
+            });
+        }
+
+        for (var i = 0; i < 5; i++)
+        {
+            loop.Add(Entry(200 + i, Pg, minutes: 45));
+        }
+
+        var schedule = DaypartSchedule.Build(loop, Blocks, 0, TimeZoneInfo.Utc, Midnight, Midnight, Midnight.AddDays(3), "chan", maxBlock: 1, keepMultiPart: true);
+
+        var airings = 0;
+        for (var i = 0; i < schedule.Count; i++)
+        {
+            if (schedule[i].Program.EpisodeNumber != 1 || schedule[i].Program.SeriesId != series)
+            {
+                continue;
+            }
+
+            airings++;
+            Assert.True(i + 3 < schedule.Count || schedule[i].Start > Midnight.AddDays(3).AddHours(-4), "part 1 aired without room for the rest");
+            for (var k = 1; k <= 3 && i + k < schedule.Count; k++)
+            {
+                Assert.Equal(k + 1, schedule[i + k].Program.EpisodeNumber);
+            }
+        }
+
+        Assert.True(airings > 0, "the four-parter never aired");
+    }
+
     private static ProgramEntry[] BuildLoop()
     {
         var ratings = new int?[] { 50, Pg, 200, R, 50, Pg, 200, R };

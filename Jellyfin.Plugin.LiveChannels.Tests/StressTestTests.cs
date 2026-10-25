@@ -26,4 +26,18 @@ public class StressTestTests
     [Fact]
     public void Recommend_IsZero_WithNoRounds()
         => Assert.Equal(0, StressTestService.Recommend(Array.Empty<StressRound>()));
+
+    [Theory]
+    [InlineData("frame=1800", true, 1800)]
+    [InlineData("frame=0", true, 0)]
+    [InlineData("frame= 42", true, 42)]
+    [InlineData("fps=30.0", false, 0)]
+    [InlineData("frame=", false, 0)]
+    [InlineData("frame=-3", false, 0)]
+    [InlineData(null, false, 0)]
+    public void TryParseFrames_ReadsProgressFrameCount(string? line, bool parsed, long frames)
+    {
+        Assert.Equal(parsed, StressTestService.TryParseFrames(line, out var value));
+        Assert.Equal(frames, value);
+    }
 }

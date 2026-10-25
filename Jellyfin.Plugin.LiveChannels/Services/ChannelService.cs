@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.LiveChannels.Models;
 using JPKribs.Jellyfin.Base;
@@ -70,6 +71,7 @@ public partial class ChannelService
         _userManager = userManager;
         _userDataManager = userDataManager;
         _scheduleDir = ScheduleDir(appPaths);
+        Volatile.Write(ref _activeScheduleDir, _scheduleDir);
         _durationsStore = new JsonFileStore<Dictionary<Guid, ObservedDuration>>(Path.Combine(_scheduleDir, DurationsFileName), logger);
         _logger = logger;
     }
@@ -134,6 +136,7 @@ public partial class ChannelService
             return hot;
         }
 
+        var generation = CacheGeneration;
         var stopwatch = Stopwatch.StartNew();
         var cached = TryReadScheduleCache(channel);
         var programs = (IReadOnlyList<ProgramEntry>?)cached ?? RefreshPrograms(channel);
@@ -153,7 +156,13 @@ public partial class ChannelService
                 stopwatch.Elapsed.TotalSeconds);
         }
 
-        MemorySchedules[channel.Number] = programs;
+        // A configuration save that landed during the load has already cleared the cache; pinning this pre-save
+        // schedule would serve it to every later tune-in until the next guide refresh.
+        if (CacheGeneration == generation)
+        {
+            MemorySchedules[channel.Number] = programs;
+        }
+
         return programs;
     }
 
@@ -169,11 +178,18 @@ public partial class ChannelService
     public IReadOnlyList<ProgramEntry> RefreshPrograms(Channel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
+        var generation = CacheGeneration;
         IReadOnlyList<ProgramEntry>? previous = MemorySchedules.TryGetValue(channel.Number, out var hotPrevious)
             ? hotPrevious
             : TryReadScheduleCache(channel);
         var programs = Splice(channel, previous, BuildPrograms(channel), DateTime.UtcNow);
-        WriteScheduleCache(channel, programs);
+
+        // A build takes seconds (tens of seconds on a large channel); a configuration save during it means this loop
+        // was built from the old channel settings. The caller still gets it, but it is neither cached nor pinned.
+        if (!WriteScheduleCache(channel, programs, generation))
+        {
+            return programs;
+        }
 
         // Update the hot copy only for a channel that is already hot (someone is watching it, or it was tuned
         // recently), so its live viewers see the fresh schedule without a disk round-trip. A channel that is

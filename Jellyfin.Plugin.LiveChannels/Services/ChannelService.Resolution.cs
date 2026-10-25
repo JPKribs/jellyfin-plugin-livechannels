@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using Jellyfin.Data.Enums;
@@ -17,11 +16,6 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 // ChannelService: resolving a channel's configured sources into the ordered, probed program loop.
 public partial class ChannelService
 {
-    // Series artwork memoised for the duration of one build, so a series contributing dozens of episodes is
-    // loaded once rather than per episode. Cleared when a build starts, so a metadata refresh is picked up by the
-    // next guide refresh rather than being cached for the life of the process.
-    private readonly ConcurrentDictionary<Guid, ArtworkSet> _seriesArtwork = new();
-
     // The item kinds a channel includes, from its Content Types toggles. Episodes are queried when either regular
     // episodes or specials are wanted; the season-0 split between them is applied per item during the build.
     private static BaseItemKind[] BuildKinds(Channel channel)
@@ -131,7 +125,6 @@ public partial class ChannelService
     /// <returns>The ordered program loop.</returns>
     private IReadOnlyList<ProgramEntry> BuildPrograms(Channel channel)
     {
-        _seriesArtwork.Clear();
         if (string.Equals(channel.Id, PopularChannelId, StringComparison.Ordinal))
         {
             return ResolvePopularPrograms(channel);
@@ -190,6 +183,10 @@ public partial class ChannelService
             ? ResolvePeopleAllowed(channel.People, filterScope, kinds)
             : null;
 
+        // Series artwork memoised for this one build, so a series contributing dozens of episodes is loaded once
+        // rather than per episode. Local to the build, so concurrent builds (guide refresh, a tune-in rebuild, a DVR
+        // resolve) never clear each other's memo, and a metadata refresh is picked up by the next build.
+        var seriesArtwork = new Dictionary<Guid, ArtworkSet>();
         var entries = new List<ProgramEntry>();
         foreach (var item in byId.Values)
         {
@@ -222,7 +219,7 @@ public partial class ChannelService
                 continue;
             }
 
-            var entry = ToEntry(item, streams);
+            var entry = ToEntry(item, streams, seriesArtwork);
             if (entry is not null)
             {
                 entries.Add(entry);
@@ -497,7 +494,7 @@ public partial class ChannelService
         return allowed;
     }
 
-    private ProgramEntry? ToEntry(BaseItem? item, IReadOnlyList<MediaStream> streams)
+    private ProgramEntry? ToEntry(BaseItem? item, IReadOnlyList<MediaStream> streams, Dictionary<Guid, ArtworkSet> seriesArtwork)
     {
         if (item is null)
         {
@@ -532,7 +529,7 @@ public partial class ChannelService
         }
 
         var defaultAudio = DefaultAudio(streams);
-        var images = ResolveGuideImages(item);
+        var images = ResolveGuideImages(item, seriesArtwork);
 
         return new ProgramEntry(item.Id, title, item.Overview, ticks, item.Path)
         {
@@ -565,13 +562,13 @@ public partial class ChannelService
     // (plus a backdrop and a clear logo) instead of one image forced into whichever shape the client lays out.
     // An episode's own primary is a landscape still, so its poster comes from the series, resolved once per
     // series and memoised for the rest of the build.
-    private ArtworkSet ResolveGuideImages(BaseItem item)
+    private ArtworkSet ResolveGuideImages(BaseItem item, Dictionary<Guid, ArtworkSet> seriesArtwork)
     {
         var own = ArtworkOf(item);
         var kind = item.GetBaseItemKind();
         var landscapePrimary = kind is BaseItemKind.Episode or BaseItemKind.MusicVideo;
         var parent = item is Episode { SeriesId: var seriesId } && seriesId != Guid.Empty
-            ? ArtworkOfSeries(seriesId)
+            ? ArtworkOfSeries(seriesId, seriesArtwork)
             : default;
 
         return GuideImages.Select(own, parent, landscapePrimary);
@@ -579,16 +576,16 @@ public partial class ChannelService
 
     // A series' artwork, resolved once per series per build. A series that cannot be loaded caches as "no
     // artwork", so a broken link is not re-queried for every one of its episodes.
-    private ArtworkSet ArtworkOfSeries(Guid seriesId)
+    private ArtworkSet ArtworkOfSeries(Guid seriesId, Dictionary<Guid, ArtworkSet> seriesArtwork)
     {
-        if (_seriesArtwork.TryGetValue(seriesId, out var cached))
+        if (seriesArtwork.TryGetValue(seriesId, out var cached))
         {
             return cached;
         }
 
         var series = _libraryManager.GetItemById(seriesId);
         var artwork = series is null ? default : ArtworkOf(series);
-        _seriesArtwork[seriesId] = artwork;
+        seriesArtwork[seriesId] = artwork;
         return artwork;
     }
 

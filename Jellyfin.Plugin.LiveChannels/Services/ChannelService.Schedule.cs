@@ -47,7 +47,7 @@ public partial class ChannelService
             anchorUtc = fromUtc;
         }
 
-        var schedule = DaypartSchedule.BuildResumable(programs, blocks, channel.TransitionWindowMinutes, TimeZoneInfo.Local, anchorUtc, fromUtc, toUtc, channel.Id, resume, out var state, MaxDaypartBlock(channel), exactStart: spliced is not null);
+        var schedule = DaypartSchedule.BuildResumable(programs, blocks, channel.TransitionWindowMinutes, TimeZoneInfo.Local, anchorUtc, fromUtc, toUtc, channel.Id, resume, out var state, MaxDaypartBlock(channel), exactStart: spliced is not null, keepMultiPart: channel.KeepMultiPartTogether);
         return (schedule, state);
     }
 

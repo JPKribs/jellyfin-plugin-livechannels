@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using Jellyfin.Plugin.LiveChannels.Models;
+using Jellyfin.Plugin.LiveChannels.Services;
 
 namespace Jellyfin.Plugin.LiveChannels.Utilities;
 
@@ -55,6 +56,8 @@ public static class DaypartSchedule
     /// <param name="maxBlock">The longest run of one series' consecutive episodes treated as a single block (the
     /// channel's episodes per block for an ordered loop, whose series run straight through; unbounded for a shuffled
     /// loop, where each run already is one block).</param>
+    /// <param name="keepMultiPart">When <c>true</c> a block reaching <paramref name="maxBlock"/> still extends over the
+    /// rest of a multi-part story ("(1)", "(2)", "(3)"...), so the story is never split across blocks.</param>
     /// <returns>The ordered, contiguous programmes covering the window (the first may start before <paramref name="fromUtc"/>; nothing precedes the anchor).</returns>
     public static IReadOnlyList<ScheduledProgram> Build(
         IReadOnlyList<ProgramEntry> loop,
@@ -65,8 +68,9 @@ public static class DaypartSchedule
         DateTime fromUtc,
         DateTime toUtc,
         string seed,
-        int maxBlock = int.MaxValue)
-        => BuildResumable(loop, blocks, transitionMinutes, timeZone, anchorUtc, fromUtc, toUtc, seed, resume: null, out _, maxBlock);
+        int maxBlock = int.MaxValue,
+        bool keepMultiPart = false)
+        => BuildResumable(loop, blocks, transitionMinutes, timeZone, anchorUtc, fromUtc, toUtc, seed, resume: null, out _, maxBlock, keepMultiPart: keepMultiPart);
 
     /// <summary>
     /// The same simulation, resumable: when <paramref name="resume"/> is a state captured from a previous call
@@ -86,6 +90,7 @@ public static class DaypartSchedule
     /// <param name="resume">A state from a previous call to continue from, or <c>null</c> to walk from the anchor. Ignored (with a fresh anchor walk) when it belongs to a different anchor, lies past the window start, or no longer fits the loop.</param>
     /// <param name="state">The walk's exit state, valid to resume the next window from.</param>
     /// <param name="maxBlock">The longest run of one series' consecutive episodes treated as a single block.</param>
+    /// <param name="keepMultiPart">When <c>true</c> a block extends past <paramref name="maxBlock"/> to keep a multi-part story whole.</param>
     /// <param name="exactStart">When <c>true</c> the chain starts exactly at <paramref name="anchorUtc"/> with the
     /// loop's first item (a spliced loop, rotated so the item airing when it was rebuilt comes first), instead of at
     /// local midnight of the anchor's day with a seeded lead item.</param>
@@ -102,7 +107,8 @@ public static class DaypartSchedule
         DaypartChainState? resume,
         out DaypartChainState state,
         int maxBlock = int.MaxValue,
-        bool exactStart = false)
+        bool exactStart = false,
+        bool keepMultiPart = false)
     {
         ArgumentNullException.ThrowIfNull(loop);
         ArgumentNullException.ThrowIfNull(blocks);
@@ -117,9 +123,14 @@ public static class DaypartSchedule
             return schedule;
         }
 
+        // A transition buffer past a whole day adds nothing (the span already covers every window) and, unclamped,
+        // overflows the block-span sum below into a negative span that silently disables the rating check.
+        transitionMinutes = Math.Clamp(transitionMinutes, 0, RatingSchedule.MinutesPerDay);
+
         DateTime t;
         int cursor;
         var pending = 0;
+        var forceFirst = false;
         if (resume is { } prior && prior.AnchorUtc == anchorUtc && prior.TimeUtc != default
             && prior.TimeUtc <= fromUtc && prior.Cursor >= 0 && prior.Cursor < loop.Count)
         {
@@ -130,8 +141,12 @@ public static class DaypartSchedule
         }
         else if (exactStart)
         {
+            // The first item is the one that was already on air when the loop was spliced: it airs as-is, never
+            // re-checked as the head of a new block. Re-checking it at its own start minute (and against a block
+            // formed from the rotated loop) could skip it and jump the stream mid-show.
             t = anchorUtc;
             cursor = 0;
+            forceFirst = true;
         }
         else
         {
@@ -150,7 +165,13 @@ public static class DaypartSchedule
         for (var walked = 0; walked < MaxWalk && t < toUtc && schedule.Count < MaxPrograms; walked++)
         {
             ProgramEntry item;
-            if (pending > 0)
+            if (forceFirst)
+            {
+                item = loop[cursor];
+                cursor = (cursor + 1) % loop.Count;
+                forceFirst = false;
+            }
+            else if (pending > 0)
             {
                 // The rest of a block that was checked whole when it started.
                 item = loop[cursor];
@@ -161,7 +182,7 @@ public static class DaypartSchedule
             {
                 var localT = TimeZoneInfo.ConvertTimeFromUtc(t, timeZone);
                 var minute = (localT.Hour * 60) + localT.Minute;
-                if (PickBlock(loop, cursor, blocks, minute, transitionMinutes, maxBlock, out var start, out var length))
+                if (PickBlock(loop, cursor, blocks, minute, transitionMinutes, maxBlock, keepMultiPart, out var start, out var length))
                 {
                     item = loop[start];
                     cursor = (start + 1) % loop.Count;
@@ -196,15 +217,16 @@ public static class DaypartSchedule
     // The first block at or after the cursor (wrapping once) that airs whole under the rating window covering its
     // entire airtime: from its start until its last item's start plus the transition buffer, the same span each of
     // its items would be checked against on its own, so placing the block whole is never less strict than placing
-    // it item by item. A block is a run of one series' consecutive episodes (at most maxBlock long); a movie or
+    // it item by item. A block is a run of one series' consecutive episodes (at most maxBlock long, plus the rest of a multi-part
+    // story it ends inside); a movie or
     // other standalone item is a block of one. A block that does not fit is skipped whole.
-    private static bool PickBlock(IReadOnlyList<ProgramEntry> loop, int cursor, IReadOnlyList<ResolvedRatingBlock> blocks, int minute, int transitionMinutes, int maxBlock, out int start, out int length)
+    private static bool PickBlock(IReadOnlyList<ProgramEntry> loop, int cursor, IReadOnlyList<ResolvedRatingBlock> blocks, int minute, int transitionMinutes, int maxBlock, bool keepMultiPart, out int start, out int length)
     {
         var scanned = 0;
         while (scanned < loop.Count)
         {
             start = (cursor + scanned) % loop.Count;
-            length = BlockLength(loop, start, Math.Min(Math.Max(1, maxBlock), loop.Count - scanned));
+            length = BlockLength(loop, start, Math.Max(1, maxBlock), loop.Count - scanned, keepMultiPart);
 
             long leadTicks = 0;
             for (var k = 0; k < length - 1; k++)
@@ -233,8 +255,10 @@ public static class DaypartSchedule
         return false;
     }
 
-    // How many consecutive items from start belong to the same series (capped), or 1 for a standalone item.
-    private static int BlockLength(IReadOnlyList<ProgramEntry> loop, int start, int cap)
+    // How many consecutive items from start belong to the same series (capped), or 1 for a standalone item. With
+    // keepMultiPart a block that reaches the cap still runs on through the rest of a multi-part story, so (1)...(4)
+    // air together; limit (the items left to scan) is never exceeded.
+    private static int BlockLength(IReadOnlyList<ProgramEntry> loop, int start, int cap, int limit, bool keepMultiPart)
     {
         var series = loop[start].SeriesId;
         if (series is null)
@@ -242,8 +266,15 @@ public static class DaypartSchedule
             return 1;
         }
 
+        cap = Math.Min(cap, limit);
         var length = 1;
         while (length < cap && loop[(start + length) % loop.Count].SeriesId == series)
+        {
+            length++;
+        }
+
+        while (keepMultiPart && length < limit
+            && ProgramLoopBuilder.ContinuesPart(loop[(start + length - 1) % loop.Count], loop[(start + length) % loop.Count]))
         {
             length++;
         }

@@ -112,4 +112,57 @@ public class RecordingTargetTests
         Assert.Equal(Path.Combine(Root, "Heat (1995)", "Heat (1995).mkv"), target.File);
         Assert.Equal("Recordings", target.LibraryName);
     }
+
+    [Fact]
+    public void DateStamp_IsPlainLocalTime_OutsideTheFallBackHour()
+    {
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        var stamp = RecordingService.DateStamp(new DateTime(2026, 7, 23, 0, 30, 0, DateTimeKind.Utc), zone);
+        Assert.Equal("2026_07_22_20_30_00", stamp);
+    }
+
+    [Fact]
+    public void DateStamp_KeepsTheTwoFallBackAiringsApart()
+    {
+        // 01:30 happens twice in New York on 2026-11-01: first at UTC-4, then again an hour later at UTC-5.
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        var first = RecordingService.DateStamp(new DateTime(2026, 11, 1, 5, 30, 0, DateTimeKind.Utc), zone);
+        var second = RecordingService.DateStamp(new DateTime(2026, 11, 1, 6, 30, 0, DateTimeKind.Utc), zone);
+
+        Assert.NotEqual(first, second);
+        Assert.StartsWith("2026_11_01_01_30_00", first, StringComparison.Ordinal);
+        Assert.StartsWith("2026_11_01_01_30_00", second, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(2, 2)]
+    [InlineData(4, 8)]
+    [InlineData(6, 30)]
+    [InlineData(100, 30)]
+    public void RetryDelay_DoublesUpToTheCap(int attempts, int expectedMinutes)
+    {
+        Assert.Equal(TimeSpan.FromMinutes(expectedMinutes), RecordingService.RetryDelay(attempts));
+    }
+
+    [Fact]
+    public void Hash_IsUnchangedForAscii_AndSeparatesNonLatinNames()
+    {
+        // The original byte-per-char FNV-1a, which existing ASCII logo file names and source ids were keyed by.
+        static string Legacy(string value)
+        {
+            var hash = 2166136261u;
+            foreach (var c in value)
+            {
+                hash = unchecked((hash ^ (byte)c) * 16777619u);
+            }
+
+            return hash.ToString("x8", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        Assert.Equal(Legacy("Channel 7|2|tv|1"), LiveChannelsTvService.Hash("Channel 7|2|tv|1"));
+
+        // U+0141 and U+0241 share a low byte, so the old hash could not tell these names apart.
+        Assert.NotEqual(LiveChannelsTvService.Hash("Łodz"), LiveChannelsTvService.Hash("Ɂodz"));
+    }
 }

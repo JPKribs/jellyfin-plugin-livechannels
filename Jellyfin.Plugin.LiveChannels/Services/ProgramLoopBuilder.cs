@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Jellyfin.Plugin.LiveChannels.Models;
@@ -10,7 +11,7 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// Options controlling how a channel's resolved items are ordered into its looping schedule.
 /// </summary>
 /// <param name="EpisodesPerBlock">Consecutive episodes of a series to play before moving on (minimum 1).</param>
-/// <param name="KeepMultiPartTogether">Keep multi-part episodes adjacent and never split across a block.</param>
+/// <param name="KeepMultiPartTogether">Keep every part of a multi-part story ((1), (2), (3)...) adjacent and never split across a block.</param>
 /// <param name="Mode">How block order is arranged: shuffle (deterministically), alphabetical by name, or chronological by date.</param>
 /// <param name="ShuffleEpisodes">Shuffle episodes within a series instead of playing them in air order.</param>
 /// <param name="ChannelId">Channel id, seeding the deterministic shuffle so the guide and stream agree.</param>
@@ -102,7 +103,7 @@ public static class ProgramLoopBuilder
                 // A shuffled loop airs ONE block per series, so a short tail block (nine episodes at four per
                 // block leave a lone ninth) would air as a single episode whenever the rotation lands on it. Fill
                 // it backwards with the units just before it (six to nine), whole units only and never past the
-                // block size, so the batch stays in air order and a multi-parter is not glued past its pair. The
+                // block size, so the batch stays in air order and a multi-part story is never split. The
                 // ordered modes play the series straight through, where the tail is simply its last episodes.
                 if (options.Mode == LoopMode.Shuffle && seq > 0)
                 {
@@ -199,31 +200,18 @@ public static class ProgramLoopBuilder
             .ToList();
     }
 
-    // Groups consecutive episodes that share a base title and a part marker into one unit, so a two-parter is kept
-    // together (a block extends by at most one episode to hold the pair). A unit is capped at two episodes: a
-    // three-parter (1)(2)(3) keeps (1)(2) together and lets (3) fall into the next block -- we never extend a block
-    // by more than one. Every other episode is its own single-item unit.
+    // Groups a multi-part story into one unit, however many parts it has: (1)(2)(3)(4) stay together, and the block
+    // holding them extends as far as the story needs. A part joins the run only when it directly follows the previous
+    // part (same base title, next part number), so two unrelated "(1)" episodes are never glued together. Every other
+    // episode is its own single-item unit.
     private static List<List<ProgramEntry>> GroupUnits(List<ProgramEntry> ordered, bool keepMultiPart)
     {
         var units = new List<List<ProgramEntry>>();
-        if (!keepMultiPart)
-        {
-            foreach (var e in ordered)
-            {
-                units.Add(new List<ProgramEntry> { e });
-            }
-
-            return units;
-        }
-
         List<ProgramEntry>? run = null;
-        string? runBase = null;
 
         foreach (var e in ordered)
         {
-            // Join the run only to complete a pair (cap at two episodes), so (1)(2) stay together but (3) does not.
-            var partBase = MultiPartBase(e.RawName);
-            if (partBase is not null && runBase is not null && run!.Count < 2 && string.Equals(partBase, runBase, StringComparison.OrdinalIgnoreCase))
+            if (keepMultiPart && run is not null && ContinuesPart(run[^1], e))
             {
                 run.Add(e);
                 continue;
@@ -234,17 +222,7 @@ public static class ProgramLoopBuilder
                 units.Add(run);
             }
 
-            if (partBase is not null)
-            {
-                run = new List<ProgramEntry> { e };
-                runBase = partBase;
-            }
-            else
-            {
-                units.Add(new List<ProgramEntry> { e });
-                run = null;
-                runBase = null;
-            }
+            run = new List<ProgramEntry> { e };
         }
 
         if (run is not null)
@@ -255,23 +233,46 @@ public static class ProgramLoopBuilder
         return units;
     }
 
-    // Returns the title with its trailing part marker stripped (e.g. "The Trap (1)" -> "The Trap"), or null
-    // when the name has no part marker. A short, non-empty base guards against false matches.
-    private static string? MultiPartBase(string? name)
+    /// <summary>
+    /// Whether <paramref name="next"/> is the part directly after <paramref name="previous"/> in a multi-part story:
+    /// the same series, the same base title, and the next part number ("The Trap (1)" then "The Trap (2)").
+    /// </summary>
+    /// <param name="previous">The earlier episode.</param>
+    /// <param name="next">The episode that may continue it.</param>
+    /// <returns><c>true</c> when the two belong together as consecutive parts.</returns>
+    internal static bool ContinuesPart(ProgramEntry previous, ProgramEntry next)
     {
+        ArgumentNullException.ThrowIfNull(previous);
+        ArgumentNullException.ThrowIfNull(next);
+
+        return previous.SeriesId is not null
+            && previous.SeriesId == next.SeriesId
+            && TryParsePart(previous.RawName, out var prevBase, out var prevPart)
+            && TryParsePart(next.RawName, out var nextBase, out var nextPart)
+            && nextPart == prevPart + 1
+            && string.Equals(prevBase, nextBase, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Splits a title into its base and trailing part number (e.g. "The Trap (1)" -> "The Trap", 1). False when the
+    // name has no part marker. A short, non-empty base guards against false matches.
+    private static bool TryParsePart(string? name, out string baseTitle, out int part)
+    {
+        baseTitle = string.Empty;
+        part = 0;
         if (string.IsNullOrWhiteSpace(name))
         {
-            return null;
+            return false;
         }
 
         var match = PartSuffix.Match(name);
         if (!match.Success)
         {
-            return null;
+            return false;
         }
 
-        var baseTitle = match.Groups["base"].Value.Trim();
-        return baseTitle.Length >= 2 ? baseTitle : null;
+        var number = match.Groups["n1"].Success ? match.Groups["n1"] : match.Groups["n2"].Success ? match.Groups["n2"] : match.Groups["n3"];
+        baseTitle = match.Groups["base"].Value.Trim();
+        return baseTitle.Length >= 2 && int.TryParse(number.Value, NumberStyles.None, CultureInfo.InvariantCulture, out part);
     }
 
     // The content type of a block, from its first item: an episode (has a series), a movie, or otherwise a

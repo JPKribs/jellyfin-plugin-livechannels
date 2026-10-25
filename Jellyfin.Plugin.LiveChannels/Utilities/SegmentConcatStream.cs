@@ -25,6 +25,7 @@ public sealed class SegmentConcatStream : Stream
     private FileStream? _segment;
     private long _number = -1;
     private long _firstNumber = -1;
+    private long _lastServed = -1;
     private long _bytesServed;
     private bool _disposed;
 
@@ -103,6 +104,7 @@ public sealed class SegmentConcatStream : Stream
                 if (read > 0)
                 {
                     _bytesServed += read;
+                    _lastServed = _number;
                     _onData?.Invoke();
                     return read;
                 }
@@ -155,11 +157,13 @@ public sealed class SegmentConcatStream : Stream
 
             // The close summary is the reader's whole story in one line; "0 bytes" here means the consumer
             // connected but never received data, which is the signature of a delivery problem.
-            _log?.Invoke(_firstNumber < 0
+            // The range ends at the last segment that actually served bytes: the cursor itself has already moved
+            // one past it the moment that segment hit end of file.
+            _log?.Invoke(_lastServed < 0
                 ? "closed without serving any data (no segments were available)"
                 : string.Create(
                     CultureInfo.InvariantCulture,
-                    $"closed after seg{_firstNumber}..seg{_number} ({_bytesServed} bytes served)"));
+                    $"closed after seg{_firstNumber}..seg{_lastServed} ({_bytesServed} bytes served)"));
         }
 
         base.Dispose(disposing);

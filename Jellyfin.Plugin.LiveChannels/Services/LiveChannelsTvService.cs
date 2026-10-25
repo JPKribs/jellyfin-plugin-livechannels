@@ -464,18 +464,32 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         // Fresh start: a new session with its own directory, producer, and this open as its first consumer.
         LiveSession session;
         string playlist;
+        bool started;
         lock (_openGate)
         {
             // Between releasing the lock above and re-acquiring it, another open for this channel may have won the
-            // race and created the session; join it rather than starting a second encoder.
+            // race and created the session; join it rather than starting a second encoder. A session whose producer
+            // has just died while its viewers are still attached is revived and joined the same way.
             liveStreamId = NewLiveId();
-            if (_byChannel.TryGetValue(channelId, out var raced) && TryJoin(raced, liveStreamId))
+            if (_byChannel.TryGetValue(channelId, out var raced)
+                && (TryJoin(raced, liveStreamId) || (TryRestartProducer(raced) && TryJoin(raced, liveStreamId))))
             {
                 session = raced;
                 playlist = Path.Combine(raced.Path, "stream.m3u8");
+                started = false;
             }
             else
             {
+                // A session still in the channel slot here has a dead producer that could not be revived. Retire it
+                // before taking the slot: left alone, its viewers would let it restart later, putting a second
+                // encoder on this channel beside the new one.
+                if (raced is not null && TeardownSession(raced, force: true))
+                {
+                    _logger.LogWarning("Live Channels: retired the stalled session {Id} for {Name} before starting a fresh one", raced.Id, channel.Name);
+                }
+
+                started = true;
+
                 // Each session gets its own directory holding the live playlist and its rolling segments; the whole
                 // directory is removed on teardown.
                 var dir = Path.Combine(_streamRoot, liveStreamId);
@@ -542,10 +556,14 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             throw;
         }
 
-        _activity.Log(
-            "Live Channel: " + channel.Name + " has started",
-            "LiveChannels.ChannelStarted",
-            overview: "This channel is now being encoded.");
+        // Only the open that started the encoder logs it; one that joined a session raced in by another open did not.
+        if (started)
+        {
+            _activity.Log(
+                "Live Channel: " + channel.Name + " has started",
+                "LiveChannels.ChannelStarted",
+                overview: "This channel is now being encoded.");
+        }
 
         return (session, liveStreamId);
     }
@@ -919,12 +937,28 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
 
         var channel = _channels.FindChannel(session.ChannelId);
-        if (channel is null || !session.TryClaimRestart(RestartInterval, MaxProducerRestarts))
+        if (channel is null)
         {
             return false;
         }
 
+        // The claim, the token read and the worker swap happen under the session lock teardown also takes, so a
+        // teardown racing this either sees the replacement (and waits on it before disposing) or wins first and
+        // the restart is refused; a replacement can never start on a disposed token or a deleted directory.
         var timeline = TimeSpan.FromSeconds(session.Stats.TimelineSeconds);
+        var restarted = session.TryRestart(
+            RestartInterval,
+            MaxProducerRestarts,
+            token => Task.Run(
+                () => RunProducerAsync(
+                    () => _streams.StreamToHlsAsync(channel, session.Path, token, session.Stats, nextSegment, timeline),
+                    channel.Name),
+                CancellationToken.None));
+        if (!restarted)
+        {
+            return false;
+        }
+
         _logger.LogWarning(
             "Live Channels: the encoder for {Name} stopped while someone was watching; restarting it (attempt {Attempt}) from seg{Segment} at {Timeline:F0}s",
             session.ChannelName,
@@ -934,11 +968,6 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         session.Stats.AppendLog("producer stopped unexpectedly; restarting at seg"
             + nextSegment.ToString(CultureInfo.InvariantCulture));
 
-        session.AdoptWorker(Task.Run(
-            () => RunProducerAsync(
-                () => _streams.StreamToHlsAsync(channel, session.Path, session.Cts.Token, session.Stats, nextSegment, timeline),
-                channel.Name),
-            CancellationToken.None));
         WatchProducer(session);
         return true;
     }
@@ -1150,17 +1179,26 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     {
         ReapCompletedSessions();
 
-        var active = new HashSet<string>(DistinctSessions().Select(s => s.Path), StringComparer.Ordinal);
         var removed = 0;
         try
         {
             if (Directory.Exists(_streamRoot))
             {
-                foreach (var sessionDir in Directory.EnumerateDirectories(_streamRoot))
+                // Only the plugin's own session directories are candidates; the schedule cache and any foreign
+                // directory in a user-configured root are never touched. The directories are listed BEFORE the live
+                // sessions are snapshotted, and the snapshot is taken under the open gate: a tune-in creates its
+                // directory and registers its session inside that gate, so every directory listed here either
+                // belongs to a session in the snapshot or is a genuine orphan, never one still being set up.
+                var candidates = Directory.EnumerateDirectories(_streamRoot).Where(IsSessionDir).ToList();
+                HashSet<string> active;
+                lock (_openGate)
                 {
-                    // Only the plugin's own session directories are candidates; the schedule cache and any
-                    // foreign directory in a user-configured root are never touched.
-                    if (active.Contains(sessionDir) || !IsSessionDir(sessionDir))
+                    active = new HashSet<string>(DistinctSessions().Select(s => s.Path), StringComparer.Ordinal);
+                }
+
+                foreach (var sessionDir in candidates)
+                {
+                    if (active.Contains(sessionDir))
                     {
                         continue;
                     }
@@ -1832,14 +1870,22 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             _ => "png"
         };
 
-    private static string Hash(string value)
+    // FNV-1a over the UTF-8 bytes. Hashing each char's low byte alone made names differing only in non-Latin
+    // characters collide (so a renamed channel could keep a stale logo); UTF-8 matches the old byte-per-char
+    // hash exactly for ASCII, so existing ASCII keys (logo files, source ids) are unchanged.
+    internal static string Hash(string value)
     {
         unchecked
         {
             var hash = 2166136261u;
-            foreach (var c in value)
+            Span<byte> utf8 = stackalloc byte[4];
+            foreach (var rune in value.EnumerateRunes())
             {
-                hash = (hash ^ (byte)c) * 16777619u;
+                var count = rune.EncodeToUtf8(utf8);
+                for (var i = 0; i < count; i++)
+                {
+                    hash = (hash ^ utf8[i]) * 16777619u;
+                }
             }
 
             return hash.ToString("x8", CultureInfo.InvariantCulture);
@@ -1951,31 +1997,25 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             return ticks > 0 && DateTime.UtcNow - new DateTime(ticks, DateTimeKind.Utc) < window;
         }
 
-        // Claims the right to start a replacement producer, refusing when the session is gone, when replacements
-        // are coming too fast, or when it has already had too many.
-        public bool TryClaimRestart(TimeSpan minimumInterval, int maxRestarts)
+        // Starts a replacement producer and attaches it, refusing when the session is gone, when its current
+        // producer is still running, when replacements are coming too fast, or when it has already had too many.
+        // Done under the lock MarkTornDown takes: the session's token is read and the new worker attached before
+        // any teardown can claim the session, so teardown always waits on (and cancels) the worker that is
+        // actually running. The start delegate must only schedule work, not block.
+        public bool TryRestart(TimeSpan minimumInterval, int maxRestarts, Func<CancellationToken, Task> start)
         {
             lock (_gate)
             {
                 var now = DateTime.UtcNow;
-                if (IsTornDown || Restarts >= maxRestarts || now - _lastRestartUtc < minimumInterval)
+                if (IsTornDown || !Worker.IsCompleted || Restarts >= maxRestarts || now - _lastRestartUtc < minimumInterval)
                 {
                     return false;
                 }
 
                 _lastRestartUtc = now;
                 Restarts++;
+                Worker = start(Cts.Token);
                 return true;
-            }
-        }
-
-        /// <summary>Attaches the replacement producer this session now runs on.</summary>
-        /// <param name="worker">The new producer task.</param>
-        public void AdoptWorker(Task worker)
-        {
-            lock (_gate)
-            {
-                Worker = worker;
             }
         }
 

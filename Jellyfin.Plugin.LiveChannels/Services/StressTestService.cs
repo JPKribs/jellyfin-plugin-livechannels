@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -32,6 +33,13 @@ public sealed class StressTestService : IDisposable
 
     // Output frames per slice: SliceLength at the channel's constant 30 fps.
     private const double SliceFrames = 60.0 * 30.0;
+
+    // A stream must deliver nearly its whole slice to count: one that hit the end of the file early or died
+    // part-way finished "fast" only because it had less to do.
+    private const double MinCompleteFraction = 0.95;
+
+    // How long a producer that closed its output gets to exit on its own before it is killed.
+    private static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(5);
 
     // Hard ceiling on rounds; a home server sustaining more concurrent 60s encodes than this does not need a test.
     private const int MaxStreams = 8;
@@ -117,6 +125,10 @@ public sealed class StressTestService : IDisposable
         var height = video?.Height ?? 0;
         var isHdr = ChannelService.ComputeIsHdr(video);
         var runtime = item.RunTimeTicks is long ticks ? TimeSpan.FromTicks(ticks) : TimeSpan.Zero;
+        if (runtime < SliceLength + TimeSpan.FromSeconds(30))
+        {
+            return "Pick an item longer than 90 seconds (this one is too short, or its length is unknown).";
+        }
 
         CancellationToken token;
         lock (_lock)
@@ -199,7 +211,21 @@ public sealed class StressTestService : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        _cts?.Dispose();
+        lock (_lock)
+        {
+            // Cancel first so any running round kills its ffmpeg processes instead of leaving them to finish.
+            try
+            {
+                _cts?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Already disposed.
+            }
+
+            _cts?.Dispose();
+            _cts = null;
+        }
     }
 
     private async Task RunAsync(string ffmpeg, string path, int height, bool isHdr, TimeSpan runtime, CancellationToken token)
@@ -213,8 +239,8 @@ public sealed class StressTestService : IDisposable
                     _currentStreams = streams;
                 }
 
-                var minFps = await RunRoundAsync(ffmpeg, path, height, isHdr, runtime, streams, token).ConfigureAwait(false);
-                var round = new StressRound(streams, Math.Round(minFps, 1), minFps >= PassFps);
+                var (minFps, allCompleted) = await RunRoundAsync(ffmpeg, path, height, isHdr, runtime, streams, token).ConfigureAwait(false);
+                var round = new StressRound(streams, Math.Round(minFps, 1), allCompleted && minFps >= PassFps);
                 _logger.LogInformation("Live Channels: stress round {Streams} stream(s) -> slowest {Fps:F1} fps ({Verdict})", streams, minFps, round.Passed ? "pass" : "fail");
 
                 lock (_lock)
@@ -252,10 +278,10 @@ public sealed class StressTestService : IDisposable
     }
 
     // Runs one round: N concurrent copies of the production command, each seeked to a different section, and
-    // returns the slowest stream's output frame rate.
-    private async Task<double> RunRoundAsync(string ffmpeg, string path, int height, bool isHdr, TimeSpan runtime, int streams, CancellationToken token)
+    // returns the slowest stream's output frame rate and whether every stream exited cleanly with a full slice.
+    private async Task<(double MinFps, bool AllCompleted)> RunRoundAsync(string ffmpeg, string path, int height, bool isHdr, TimeSpan runtime, int streams, CancellationToken token)
     {
-        var tasks = new List<Task<double>>(streams);
+        var tasks = new List<Task<ProducerResult>>(streams);
         for (var i = 0; i < streams; i++)
         {
             var offset = OffsetFor(i, runtime);
@@ -264,7 +290,7 @@ public sealed class StressTestService : IDisposable
         }
 
         var results = await Task.WhenAll(tasks).ConfigureAwait(false);
-        return results.Min();
+        return (results.Min(r => r.Fps), results.All(r => r.Completed));
     }
 
     // Spreads concurrent copies across the file so they exercise different sections, clamped so every copy has a
@@ -281,9 +307,10 @@ public sealed class StressTestService : IDisposable
         return desired < usable ? desired : TimeSpan.FromTicks(usable.Ticks * (index + 1) / (index + 2));
     }
 
-    // Runs one producer to completion, discarding its output, and returns its output frame rate measured from
-    // the first byte it produces (excluding process start-up) to exit. Zero when it produced nothing.
-    private async Task<double> RunProducerAsync(string ffmpeg, IReadOnlyList<string> args, CancellationToken token)
+    // Runs one producer to completion, discarding its output. Its frame rate is the frames ffmpeg reports encoding
+    // (from -progress on stderr) over the time from its first output byte (excluding process start-up) to exit.
+    // It completed only if it exited cleanly having encoded nearly the whole slice.
+    private async Task<ProducerResult> RunProducerAsync(string ffmpeg, IReadOnlyList<string> args, CancellationToken token)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -304,8 +331,8 @@ public sealed class StressTestService : IDisposable
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeout.CancelAfter(RoundTimeout);
 
-        // Drain stderr so ffmpeg can never stall on a full pipe; the content is not needed.
-        var stderr = DrainAsync(process.StandardError.BaseStream, timeout.Token);
+        // Read stderr throughout (so ffmpeg can never stall on a full pipe), keeping the last reported frame count.
+        var progress = ReadFramesAsync(process.StandardError, timeout.Token);
 
         long firstByteStamp = 0;
         var buffer = new byte[81920];
@@ -320,6 +347,11 @@ public sealed class StressTestService : IDisposable
                     firstByteStamp = Stopwatch.GetTimestamp();
                 }
             }
+
+            // Output closed: ffmpeg is finishing up. Let it exit on its own so its exit code is real.
+            using var grace = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
+            grace.CancelAfter(ExitGrace);
+            await process.WaitForExitAsync(grace.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -338,39 +370,76 @@ public sealed class StressTestService : IDisposable
             {
                 // Already exited.
             }
-
-            await stderr.ConfigureAwait(false);
         }
 
+        var endStamp = Stopwatch.GetTimestamp();
+        var frames = await progress.ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
-        if (firstByteStamp == 0)
-        {
-            return 0;
-        }
 
-        var wallSeconds = (Stopwatch.GetTimestamp() - firstByteStamp) / (double)Stopwatch.Frequency;
-        return wallSeconds > 0 ? SliceFrames / wallSeconds : 0;
-    }
-
-    private static async Task DrainAsync(Stream stream, CancellationToken token)
-    {
-        var buffer = new byte[4096];
+        using var reaped = new CancellationTokenSource(ExitGrace);
         try
         {
-            int read;
-            do
-            {
-                read = await stream.ReadAsync(buffer, token).ConfigureAwait(false);
-            }
-            while (read > 0);
+            await process.WaitForExitAsync(reaped.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            // Round over; nothing to drain.
+            // Could not be reaped in time; scored as not completed below.
+        }
+
+        var cleanExit = process.HasExited && process.ExitCode == 0;
+        if (firstByteStamp == 0)
+        {
+            return new ProducerResult(0, false);
+        }
+
+        var wallSeconds = (endStamp - firstByteStamp) / (double)Stopwatch.Frequency;
+        var fps = wallSeconds > 0 ? frames / wallSeconds : 0;
+        return new ProducerResult(fps, cleanExit && frames >= SliceFrames * MinCompleteFraction);
+    }
+
+    /// <summary>
+    /// Parses a frame count from one line of ffmpeg's <c>-progress</c> output (<c>frame=1234</c>).
+    /// </summary>
+    /// <param name="line">The progress line.</param>
+    /// <param name="frames">The frame count when the line carries one.</param>
+    /// <returns>Whether the line was a frame count.</returns>
+    internal static bool TryParseFrames(string? line, out long frames)
+    {
+        frames = 0;
+        const string Prefix = "frame=";
+        if (line is null || !line.StartsWith(Prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return long.TryParse(line.AsSpan(Prefix.Length).Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out frames);
+    }
+
+    private static async Task<long> ReadFramesAsync(StreamReader reader, CancellationToken token)
+    {
+        long frames = 0;
+        try
+        {
+            string? line;
+            while ((line = await reader.ReadLineAsync(token).ConfigureAwait(false)) is not null)
+            {
+                if (TryParseFrames(line, out var value))
+                {
+                    frames = value;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Round over; keep the last count seen.
         }
         catch (IOException)
         {
             // Pipe closed with the process; done.
         }
+
+        return frames;
     }
+
+    private readonly record struct ProducerResult(double Fps, bool Completed);
 }

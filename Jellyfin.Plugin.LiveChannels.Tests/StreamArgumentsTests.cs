@@ -451,11 +451,48 @@ public class StreamArgumentsTests
     public void DurationLimit_BoundsTheInput_ForTheStressTest()
     {
         // The stress test runs the production command over a fixed slice: -t is an input option (before -i)
-        // and appears only when a limit is passed — live channels never set one.
+        // and appears only when a limit is passed.
         var bounded = StreamArguments.Build("/m.mkv", TimeSpan.FromSeconds(300), default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, false, null, 0, TimeSpan.FromSeconds(60));
-        Assert.True(Pair(bounded, "-t", "60"));
+        Assert.True(Pair(bounded, "-t", "60.000"));
         Assert.True(bounded.IndexOf("-t") < bounded.IndexOf("-i"));
         Assert.DoesNotContain("-t", Build());
+    }
+
+    [Fact]
+    public void DurationLimit_KeepsMillisecondPrecision()
+    {
+        // A daypart slot cap shorter than half a second used to round to "-t 0" (no output at all).
+        var a = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, false, null, 0, TimeSpan.FromMilliseconds(400));
+        Assert.True(Pair(a, "-t", "0.400"));
+    }
+
+    [Fact]
+    public void BurnInSeek_MeasuresCopytsFromTheFileStart()
+    {
+        // A source whose start_time is not zero (DVR .ts) must not land its output that far past the timeline.
+        var a = Build(offset: TimeSpan.FromSeconds(30), sub: (0, true));
+        var copyts = a.IndexOf("-copyts");
+        Assert.True(copyts >= 0);
+        Assert.Equal("-start_at_zero", a[copyts + 1]);
+        Assert.DoesNotContain("-start_at_zero", Build(offset: TimeSpan.FromSeconds(30)));
+    }
+
+    [Theory]
+    [InlineData("libx265", "ac3")]
+    [InlineData("libx264", "eac3")]
+    public void Slate_EncodesTheChannelsCodecs(string encoder, string audio)
+    {
+        // Standby must not switch the copy-mode segmenter's playlist to a different codec mid-stream.
+        var video = new VideoEncoderProfile(encoder, encoder, false, Array.Empty<string>(), Array.Empty<string>(), "format=yuv420p", true);
+        var a = StreamArguments.BuildSlate(1280, 4000, 10, TimeSpan.FromSeconds(42), null, video, audio, 256);
+        Assert.True(Pair(a, "-c:v", encoder));
+        Assert.True(Pair(a, "-c:a", audio));
+        Assert.True(Pair(a, "-b:a", "256k"));
+        Assert.True(Pair(a, "-field_order", "progressive"));
+        Assert.True(Pair(a, "-flags", "+cgop"));
+        Assert.True(Pair(a, "-muxpreload", "0"));
+        Assert.True(Pair(a, "-progress", "pipe:2"));
+        Assert.True(Pair(a, "-output_ts_offset", "42.000"));
     }
 
     [Fact]

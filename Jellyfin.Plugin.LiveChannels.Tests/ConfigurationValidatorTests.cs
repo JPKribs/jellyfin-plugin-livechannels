@@ -273,4 +273,70 @@ public class ConfigurationValidatorTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    [Fact]
+    public void TransitionWindow_AboveOneDay_Throws()
+    {
+        var channel = Ch(1);
+        channel.TransitionWindowMinutes = ConfigurationValidator.MaxTransitionWindowMinutes + 1;
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(WithChannels(channel)));
+
+        channel.TransitionWindowMinutes = ConfigurationValidator.MaxTransitionWindowMinutes;
+        ConfigurationValidator.Validate(WithChannels(channel));
+    }
+
+    [Fact]
+    public void ExplicitNulls_AreReplacedWithDefaults()
+    {
+        var channel = Ch(1);
+        channel.RatingBlocks = null!;
+        channel.People = null!;
+        channel.Studios = null!;
+        channel.Years = null!;
+        channel.LogoContentType = null!;
+        channel.AudioLanguage = null!;
+        channel.Sources[0].Genres = null!;
+        channel.Sources[0].ItemIds = null!;
+        var config = WithChannels(channel);
+        config.PopularChannel = null!;
+        config.StreamDirectory = null!;
+
+        ConfigurationValidator.Validate(config);
+
+        Assert.NotNull(channel.RatingBlocks);
+        Assert.NotNull(channel.People);
+        Assert.NotNull(channel.Studios);
+        Assert.NotNull(channel.Years);
+        Assert.Equal(string.Empty, channel.LogoContentType);
+        Assert.Equal(string.Empty, channel.AudioLanguage);
+        Assert.NotNull(channel.Sources[0].Genres);
+        Assert.NotNull(channel.Sources[0].ItemIds);
+        Assert.NotNull(config.PopularChannel);
+        Assert.Equal(0, config.PopularChannel.Number);
+        Assert.Equal(string.Empty, config.StreamDirectory);
+        Assert.Empty(channel.EffectiveRatingBlocks());
+    }
+
+    [Fact]
+    public void NullChannelList_AndNullEntries_AreNormalised()
+    {
+        var config = new PluginConfiguration { Channels = null! };
+        ConfigurationValidator.Validate(config);
+        Assert.Empty(config.Channels);
+
+        config = WithChannels(Ch(1));
+        config.Channels.Add(null!);
+        config.Channels[0].Sources.Add(null!);
+        ConfigurationValidator.Validate(config);
+        Assert.Single(config.Channels);
+        Assert.Single(config.Channels[0].Sources);
+    }
+
+    [Fact]
+    public void EnabledChannelWithNullSources_ThrowsInsteadOfCrashing()
+    {
+        var channel = Ch(1);
+        channel.Sources = null!;
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(WithChannels(channel)));
+    }
 }
