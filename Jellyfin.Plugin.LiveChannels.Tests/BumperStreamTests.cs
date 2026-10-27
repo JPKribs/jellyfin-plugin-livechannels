@@ -81,19 +81,32 @@ public sealed class BumperStreamTests : IClassFixture<MediaFixtures>
             var second = Item("Second item");
             var channel = new Channel { Id = Guid.NewGuid().ToString("N"), Name = "Bumper slot", Number = ChannelNumber + 1 };
 
-            // The second item's bumper is already rendered, as it would be by the time the first item ends.
+            // The second item's bumper is already rendered, as it would be by the time the first item ends; its
+            // Then line names the first item again, whose next slot starts after both slots. The stream joins one
+            // second into the first item itself (its slot began sixteen seconds earlier, bumper included), with the
+            // clock taken once the render is done; the Then time is only to the minute, so a render that straddles
+            // a minute boundary is redone.
             var service = NewService(ff, out var bumpers);
             var width = StreamSessionService.OutputFor(null).Width;
-            bumpers.Prepare(channel, second, width, null);
-            for (var i = 0; i < 1200 && bumpers.TryGetCached(channel, second, width, null) is null; i++)
+            var slot = BumperService.BumperLength + TimeSpan.FromTicks(first.DurationTicks);
+            ProgramLoop loop = null!;
+            for (var attempt = 0; attempt < 3; attempt++)
             {
-                await Task.Delay(100).ConfigureAwait(false);
+                var estimate = DateTime.UtcNow.AddSeconds(-16);
+                var expected = StreamSessionService.ThenFor((first, estimate + slot + slot));
+                bumpers.Prepare(channel, second, width, null, expected);
+                for (var i = 0; i < 1200 && bumpers.TryGetCached(channel, second, width, null, expected) is null; i++)
+                {
+                    await Task.Delay(100).ConfigureAwait(false);
+                }
+
+                var anchor = DateTime.UtcNow.AddSeconds(-16);
+                loop = new ProgramLoop(new[] { first, second }, anchor, BumperService.BumperLength.Ticks);
+                if (bumpers.TryGetCached(channel, second, width, null, StreamSessionService.ThenFor((first, anchor + slot + slot))) is not null)
+                {
+                    break;
+                }
             }
-
-            Assert.NotNull(bumpers.TryGetCached(channel, second, width, null));
-
-            // One second into the first item itself (its slot began sixteen seconds ago, bumper included).
-            var loop = new ProgramLoop(new[] { first, second }, DateTime.UtcNow.AddSeconds(-16), BumperService.BumperLength.Ticks);
             var log = _media.Output("slot.log");
             var output = _media.Output("slot.ts");
             await Stream(ff, channel, loop, log, output, "Second item\n$ ffmpeg", after: "Up Next: Second item", untilSeconds: 14, service).ConfigureAwait(false);

@@ -48,6 +48,25 @@ internal sealed record BumperContent(string Title, string? Tag, string? Subtitle
         return new BumperContent(title, tag, subtitle, !episode && subtitle is not null, DetailsLine(program, episode || movie), score, rating);
     }
 
+    /// <summary>
+    /// What the card's "Then" line calls an item: an episode by its series and season and episode
+    /// (<c>The Long Way Home · S2 · E6</c>, or <c>· Special</c>), anything else by its own name.
+    /// </summary>
+    /// <param name="program">The item that airs after the card's own.</param>
+    /// <returns>The line's text.</returns>
+    public static string ThenText(ProgramEntry program)
+    {
+        ArgumentNullException.ThrowIfNull(program);
+        var name = Clean(program.RawName) ?? Clean(program.Title) ?? "Untitled";
+        if (!IsEpisode(program))
+        {
+            return name;
+        }
+
+        var series = Clean(program.SeriesName) ?? name;
+        return EpisodeTag(program.SeasonNumber, program.EpisodeNumber) is { } tag ? series + " · " + tag : series;
+    }
+
     /// <summary>The season and episode tag: <c>Special</c> for season 0, <c>S2 · E5</c>, <c>E5</c> with no season, or <c>null</c> with no episode number.</summary>
     /// <param name="season">The season number.</param>
     /// <param name="episode">The (first) episode number.</param>
@@ -140,5 +159,23 @@ internal sealed record BumperContent(string Title, string? Tag, string? Subtitle
         }
 
         return string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
+}
+
+/// <summary>The card's secondary "Then" line: what airs after the card's own item, and when its slot starts.</summary>
+/// <param name="Text">The item's name (see <see cref="BumperContent.ThenText"/>).</param>
+/// <param name="Time">Its start, as the server's clock shows it (<c>9:45 PM</c>).</param>
+internal sealed record BumperThen(string Text, string Time)
+{
+    /// <summary>The Then line for an item starting at a guide time.</summary>
+    /// <param name="program">The item.</param>
+    /// <param name="startUtc">When its slot starts.</param>
+    /// <param name="zone">The server's time zone.</param>
+    /// <returns>The line.</returns>
+    public static BumperThen For(ProgramEntry program, DateTime startUtc, TimeZoneInfo zone)
+    {
+        ArgumentNullException.ThrowIfNull(zone);
+        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(startUtc, DateTimeKind.Utc), zone);
+        return new BumperThen(BumperContent.ThenText(program), local.ToString("h:mm tt", CultureInfo.InvariantCulture));
     }
 }

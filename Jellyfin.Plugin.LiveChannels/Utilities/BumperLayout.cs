@@ -37,11 +37,13 @@ internal readonly record struct PixelBox(int X, int Y, int Width, int Height);
 /// <param name="Color">The drawtext colour (<c>0xRRGGBB@alpha</c>).</param>
 internal readonly record struct PlacedText(string Text, BumperFace Face, string FontPath, int Size, int X, int Baseline, string Color);
 
-/// <summary>One row of the info column: its text, the pill behind a tag, and when it slides in.</summary>
+/// <summary>One row of the card: its text, the pill behind a tag, and when it comes in.</summary>
 /// <param name="Texts">The row's lines (one per title line, or the pieces of a single row).</param>
 /// <param name="Pill">The rounded box behind the season and episode tag, or <c>null</c>.</param>
-/// <param name="Delay">Seconds into the bumper the row starts sliding in.</param>
-internal sealed record PlacedRow(IReadOnlyList<PlacedText> Texts, PixelBox? Pill, double Delay);
+/// <param name="Delay">Seconds into the bumper the row starts coming in.</param>
+/// <param name="Slides">Whether the row slides in from the left (the info column's rows) or only fades in where it rests (the Then line).</param>
+/// <param name="Divider">The hairline above the row, or <c>null</c>.</param>
+internal sealed record PlacedRow(IReadOnlyList<PlacedText> Texts, PixelBox? Pill, double Delay, bool Slides = true, PixelBox? Divider = null);
 
 /// <summary>
 /// Where everything on an Up Next bumper goes for one item at one frame size. The design is drawn at 1280x720 and
@@ -66,7 +68,17 @@ internal sealed class BumperLayout
 
     // The title's size, in design pixels, once it no longer fits on one line.
     private const int SmallTitle = 46;
+
+    // The Then line's geometry in design pixels: its row, its gap below the artwork, and above it in the column the
+    // space before the hairline and between the hairline and the row.
+    private const int ThenRowHeight = 22;
+    private const int ThenGap = 14;
+    private const int ThenMargin = 18;
+    private const int ThenPadding = 16;
     private static readonly double[] RowDelays = [1.0, 1.3, 1.6, 1.9];
+
+    // When the Then line fades in: last, after every row of the info column.
+    private const double ThenDelay = 2.2;
 
     private BumperLayout()
     {
@@ -128,8 +140,9 @@ internal sealed class BumperLayout
     /// <param name="width">The frame width.</param>
     /// <param name="height">The frame height.</param>
     /// <param name="fonts">The fonts, for measuring.</param>
+    /// <param name="then">What airs after the card's item, for the secondary "Then" line, or <c>null</c> for none. It sits under wide or square artwork, and as the info column's last row beside a poster or on a text-only card, where the column has the room a long name needs.</param>
     /// <returns>The layout.</returns>
-    public static BumperLayout Compute(BumperContent content, ArtShape shape, int width, int height, BumperFonts fonts)
+    public static BumperLayout Compute(BumperContent content, ArtShape shape, int width, int height, BumperFonts fonts, BumperThen? then = null)
     {
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(fonts);
@@ -154,7 +167,10 @@ internal sealed class BumperLayout
             };
             var w = P(artW);
             var h = P(artH);
-            art = new PixelBox(right - w, areaTop + ((areaBottom - areaTop - h) / 2), w, h);
+
+            // A Then line under the artwork is centred with it, as one group.
+            var under = then is not null && shape != ArtShape.Portrait ? P(ThenGap) + P(ThenRowHeight) : 0;
+            art = new PixelBox(right - w, areaTop + ((areaBottom - areaTop - h - under) / 2), w, h);
             columnRight = right - w - P(64);
         }
         else
@@ -236,9 +252,12 @@ internal sealed class BumperLayout
                 size * 1.45));
         }
 
-        // Centre the column in the area, then stack the rows down it.
+        // Centre the column in the area, then stack the rows down it. A Then line in the column (beside a poster, or
+        // on a text-only card) closes it, below a hairline.
         var gap = P(14);
-        var block = rows.Sum(r => r.Height) + (gap * (rows.Count - 1));
+        var thenInColumn = then is not null && shape is ArtShape.Portrait or ArtShape.None;
+        var thenBlock = thenInColumn ? P(ThenMargin) + P(ThenPadding) + P(ThenRowHeight) : 0;
+        var block = rows.Sum(r => r.Height) + (gap * (rows.Count - 1)) + thenBlock;
         var y = areaTop + ((areaBottom - areaTop - block) / 2);
         var placed = new List<PlacedRow>();
         for (var i = 0; i < rows.Count; i++)
@@ -270,6 +289,20 @@ internal sealed class BumperLayout
                 : null;
             placed.Add(new PlacedRow(placedTexts, pillBox, RowDelays[Math.Min(i, RowDelays.Length - 1)]));
             y += rowHeight + gap;
+        }
+
+        if (then is not null)
+        {
+            if (thenInColumn)
+            {
+                var dividerY = (int)Math.Round(y - gap + P(ThenMargin));
+                var divider = new PixelBox(left, dividerY, column, Math.Max(1, P(1)));
+                placed.Add(ThenRow(then, left, column, dividerY + P(ThenPadding), timeAfterLabel: true, divider, fonts, P));
+            }
+            else if (art is { } frame)
+            {
+                placed.Add(ThenRow(then, frame.X, frame.Width, frame.Y + frame.Height + P(ThenGap), timeAfterLabel: false, null, fonts, P));
+            }
         }
 
         // The parental rating badge, top right.
@@ -318,6 +351,52 @@ internal sealed class BumperLayout
             CountdownNumber = number,
             BarHeight = Math.Max(2, P(4)),
         };
+    }
+
+    // The Then line: THEN in the accent colour, the item's name, and its start time. Under the artwork the time sits
+    // at the frame's right edge; in the column it follows THEN, so the name has the rest of the column to itself.
+    // The name ends in an ellipsis when it runs out of room.
+    private static PlacedRow ThenRow(BumperThen then, int x, int width, int top, bool timeAfterLabel, PixelBox? divider, BumperFonts fonts, Func<double, int> P)
+    {
+        var rowHeight = P(ThenRowHeight);
+        var labelSize = P(12);
+        var nameSize = P(17);
+        var timeSize = P(15);
+        var label = fonts.For(BumperFace.SemiBold, "THEN");
+        var time = fonts.For(BumperFace.Regular, then.Time);
+        var space = P(12);
+        var labelWidth = (int)Math.Round(label.Metrics.Measure("THEN", labelSize));
+        var timeWidth = (int)Math.Round(time.Metrics.Measure(then.Time, timeSize));
+
+        int timeX;
+        int nameX;
+        int nameRoom;
+        if (timeAfterLabel)
+        {
+            timeX = x + labelWidth + space;
+            nameX = timeX + timeWidth + space;
+            nameRoom = x + width - nameX;
+        }
+        else
+        {
+            timeX = x + width - timeWidth;
+            nameX = x + labelWidth + space;
+            nameRoom = timeX - space - nameX;
+        }
+
+        var nameFont = fonts.For(BumperFace.Medium, then.Text);
+        var name = Ellipsize(then.Text, nameFont.Metrics, nameSize, Math.Max(0, nameRoom));
+        var texts = new List<PlacedText>
+        {
+            new("THEN", BumperFace.SemiBold, label.Path, labelSize, x, Baseline(top, rowHeight, label.Metrics, labelSize), "0x" + Accent + "@1"),
+            new(then.Time, BumperFace.Regular, time.Path, timeSize, timeX, Baseline(top, rowHeight, time.Metrics, timeSize), "0xFFFFFF@0.6"),
+        };
+        if (name.Length > 0)
+        {
+            texts.Add(new PlacedText(name, BumperFace.Medium, nameFont.Path, nameSize, nameX, Baseline(top, rowHeight, nameFont.Metrics, nameSize), "0xFFFFFF@0.85"));
+        }
+
+        return new PlacedRow(texts, null, ThenDelay, Slides: false, Divider: divider);
     }
 
     /// <summary>The artwork frame for an image of the given size: wide, tall or square by its proportions.</summary>

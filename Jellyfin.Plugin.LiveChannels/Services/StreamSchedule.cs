@@ -35,9 +35,13 @@ internal interface IStreamSchedule
     /// <summary>Advances to the next item.</summary>
     void Advance();
 
-    /// <summary>The item after the current one as the schedule stands now (a rebuild may still change it), or <c>null</c> when unknown.</summary>
-    /// <returns>The next item, or <c>null</c>.</returns>
-    ProgramEntry? PeekNext();
+    /// <summary>
+    /// The item <paramref name="ahead"/> slots after the current one and the guide time its slot starts, as the
+    /// schedule stands now (a rebuild may still change it), or <c>null</c> when the schedule does not reach that far.
+    /// </summary>
+    /// <param name="ahead">How many slots ahead (1 is the next).</param>
+    /// <returns>The item and its slot's start, or <c>null</c>.</returns>
+    (ProgramEntry Program, DateTime StartUtc)? Following(int ahead);
 }
 
 /// <summary>
@@ -162,7 +166,18 @@ internal sealed class LoopStreamSchedule : IStreamSchedule
 
     public StreamStep Current => new(_programs[_index], _offset, null, TimeSpan.FromTicks(ProgramLoop.LeadOf(_programs)));
 
-    public ProgramEntry? PeekNext() => _programs[(_index + 1) % _programs.Count];
+    public (ProgramEntry Program, DateTime StartUtc)? Following(int ahead)
+    {
+        var index = _index;
+        var start = _itemStartUtc;
+        for (var i = 0; i < ahead; i++)
+        {
+            start += TimeSpan.FromTicks(ProgramLoop.SlotTicks(_programs, index));
+            index = (index + 1) % _programs.Count;
+        }
+
+        return (_programs[index], start);
+    }
 
     public void Advance()
     {
@@ -307,7 +322,8 @@ internal sealed class DaypartStreamSchedule : IStreamSchedule
         }
     }
 
-    public ProgramEntry? PeekNext() => _pos + 1 < _window.Count ? _window[_pos + 1].Program : null;
+    public (ProgramEntry Program, DateTime StartUtc)? Following(int ahead)
+        => _pos + ahead < _window.Count ? (_window[_pos + ahead].Program, _window[_pos + ahead].Start) : null;
 
     public void Advance()
     {

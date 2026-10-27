@@ -307,8 +307,16 @@ internal static class BumperArguments
         var pillDone = false;
         foreach (var row in layout.Rows)
         {
-            var slide = SlideX(layout.Slide, row.Delay);
+            // The info column's rows slide in from the left; the Then line only fades in where it rests.
+            var slide = row.Slides ? SlideX(layout.Slide, row.Delay) : string.Empty;
             var alpha = "'clip((t-" + F(row.Delay) + ")/" + F(HeaderFade) + ",0,1)'";
+            if (row.Divider is { } divider)
+            {
+                filter.Append("color=c=white@0.14:s=").Append(I(divider.Width)).Append('x').Append(I(divider.Height)).Append(":r=").Append(fps).Append(":d=").Append(seconds)
+                    .Append(",format=rgba,").Append(FadeIn(row.Delay, HeaderFade)).Append("[divider];");
+                Overlay("[divider]", I(divider.X), I(divider.Y));
+            }
+
             if (row.Pill is { } pill && !pillDone)
             {
                 var pillInput = Image(files.Pill);

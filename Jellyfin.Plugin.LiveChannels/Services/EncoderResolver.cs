@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Linq;
 using Jellyfin.Plugin.LiveChannels.Models;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Configuration;
@@ -111,6 +112,67 @@ public class EncoderResolver
             default:
                 return Software(codec);
         }
+    }
+
+    /// <summary>
+    /// Whether Jellyfin's hardware decoding settings (Dashboard &gt; Playback &gt; Transcoding) allow decoding an item on
+    /// the GPU. The plugin decodes on the GPU exactly when Jellyfin itself would, so a format the server's GPU
+    /// cannot decode (one its owner left unticked) goes straight to the software path instead of failing on the
+    /// GPU first. An item whose format was not recorded (a schedule cached before it was) keeps the GPU.
+    /// </summary>
+    /// <param name="program">The item.</param>
+    /// <returns>Whether the item may decode on the GPU.</returns>
+    public bool CanHardwareDecode(ProgramEntry program)
+    {
+        ArgumentNullException.ThrowIfNull(program);
+        var options = ReadOptions();
+        return options is null || CanHardwareDecode(options, program.SourceVideoCodec, program.SourceBitDepth ?? (program.IsHdr ? 10 : null), program.SourcePixelFormat);
+    }
+
+    /// <summary>
+    /// The decision behind <see cref="CanHardwareDecode(ProgramEntry)"/>: the codec must be ticked under "Enable
+    /// hardware decoding for", a 10-bit HEVC or VP9 source needs its 10-bit switch, and an HEVC range extension
+    /// source (4:2:2 or 4:4:4) needs the 10-bit or 12-bit HEVC RExt switch for its depth. A 12-bit 4:2:0 HEVC source
+    /// counts as range extension too, as it is in the HEVC profiles.
+    /// </summary>
+    /// <param name="options">Jellyfin's encoding options.</param>
+    /// <param name="codec">The source codec as ffprobe names it (<c>h264</c>, <c>hevc</c>, ...), or <c>null</c> when unknown.</param>
+    /// <param name="bitDepth">The source bit depth, or <c>null</c> when unknown (taken as 8).</param>
+    /// <param name="pixelFormat">The source pixel format, or <c>null</c> when unknown.</param>
+    /// <returns>Whether the source may decode on the GPU.</returns>
+    internal static bool CanHardwareDecode(EncodingOptions options, string? codec, int? bitDepth, string? pixelFormat)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (string.IsNullOrEmpty(codec))
+        {
+            return true;
+        }
+
+        var allowed = options.HardwareDecodingCodecs ?? Array.Empty<string>();
+        if (!allowed.Any(c => string.Equals(c, codec, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        var depth = bitDepth ?? 8;
+        var chroma422Or444 = pixelFormat is { } format
+            && (format.Contains("422", StringComparison.Ordinal) || format.Contains("444", StringComparison.Ordinal));
+        if (string.Equals(codec, "hevc", StringComparison.OrdinalIgnoreCase))
+        {
+            if (chroma422Or444 || depth > 10)
+            {
+                return depth > 10 ? options.EnableDecodingColorDepth12HevcRext : options.EnableDecodingColorDepth10HevcRext;
+            }
+
+            return depth <= 8 || options.EnableDecodingColorDepth10Hevc;
+        }
+
+        if (string.Equals(codec, "vp9", StringComparison.OrdinalIgnoreCase))
+        {
+            return depth <= 8 || options.EnableDecodingColorDepth10Vp9;
+        }
+
+        return true;
     }
 
     /// <summary>

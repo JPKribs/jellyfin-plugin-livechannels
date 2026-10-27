@@ -122,6 +122,12 @@ public sealed class ProgramEntry
     /// <summary>Gets the source video codec (e.g. <c>h264</c>, <c>hevc</c>), or <c>null</c> when unknown (an unprobed item, or a schedule cached before this was recorded). Probed once at guide refresh and cached here.</summary>
     public string? SourceVideoCodec { get; init; }
 
+    /// <summary>Gets the source video's bit depth (8, 10, 12), or <c>null</c> when unknown (an unprobed item, or a schedule cached before this was recorded). With <see cref="SourcePixelFormat"/> it decides whether Jellyfin's hardware decoding settings allow decoding the item on the GPU. Probed once at guide refresh and cached here.</summary>
+    public int? SourceBitDepth { get; init; }
+
+    /// <summary>Gets the source video's pixel format (e.g. <c>yuv420p10le</c>, <c>yuv422p10le</c>), or <c>null</c> when unknown. A 4:2:2 or 4:4:4 HEVC source is the range extension profile, which Jellyfin's settings allow on the GPU separately. Probed once at guide refresh and cached here.</summary>
+    public string? SourcePixelFormat { get; init; }
+
     /// <summary>Gets the source video's tagged colour space (e.g. <c>bt709</c>, <c>smpte170m</c>), or <c>null</c> when untagged or unknown, so the stream pipeline converts the item from the right matrix into the channel's bt709. Probed once at guide refresh and cached here.</summary>
     public string? SourceColorSpace { get; init; }
 

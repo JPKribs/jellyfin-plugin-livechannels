@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Services;
+using Jellyfin.Plugin.LiveChannels.Utilities;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -56,7 +57,8 @@ public sealed class BumperRenderTests : IDisposable
         var program = Episode(art, "The Long Way Home", "Harbor Lights");
         var output = Path.Combine(_dir, name + ".mp4");
 
-        Assert.True(await Service(ffmpeg).RenderAsync(Channel(), program, 1280, logo, output));
+        var then = name == "portrait" ? new BumperThen("The Long Way Home · S2 · E6", "10:30 PM") : new BumperThen("Northbound", "9:45 PM");
+        Assert.True(await Service(ffmpeg).RenderAsync(Channel(), program, 1280, logo, output, then));
         Preview(ffmpeg, output, name);
 
         var video = ffmpeg.Stream(output, "video")!.Value;
@@ -103,7 +105,8 @@ public sealed class BumperRenderTests : IDisposable
         foreach (var (name, program) in cases)
         {
             var output = Path.Combine(_dir, name + ".mp4");
-            Assert.True(await service.RenderAsync(Channel(), program, 1920, null, output), name);
+            var then = new BumperThen("Dr. Strangelove or: How I Learned to Stop Worrying and Love the Bomb", "11:52 PM");
+            Assert.True(await service.RenderAsync(Channel(), program, 1920, null, output, name == "video" ? null : then), name);
             Assert.InRange(Duration(ffmpeg, output), 14.9, 15.1);
             Assert.Equal(1080, ffmpeg.Stream(output, "video")!.Value.GetProperty("height").GetInt32());
             Preview(ffmpeg, output, name);

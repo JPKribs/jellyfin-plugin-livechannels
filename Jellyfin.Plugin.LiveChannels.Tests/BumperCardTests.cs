@@ -340,6 +340,30 @@ public sealed class BumperCardTests : IDisposable
     }
 
     [Fact]
+    public void AMovie_ShowsItsPoster_FallingBackToItsLandscapeArt()
+    {
+        var thumb = Touch("movie-thumb.jpg");
+        var backdrop = Touch("movie-backdrop.jpg");
+        var poster = Touch("movie-poster.jpg");
+        ProgramEntry Movie(string? p, string? t, string? b) => new(Guid.NewGuid(), "Film", null, TimeSpan.FromMinutes(100).Ticks, "/m.mkv")
+        {
+            ItemKind = "Movie",
+            IsMovie = true,
+            PrimaryImagePath = p,
+            ThumbImagePath = t,
+            BackdropImagePath = b,
+        };
+
+        Assert.Equal(poster, BumperService.ChooseArt(Movie(poster, thumb, backdrop)));
+        Assert.Equal(thumb, BumperService.ChooseArt(Movie(null, thumb, backdrop)));
+        Assert.Equal(backdrop, BumperService.ChooseArt(Movie("/missing.jpg", null, backdrop)));
+
+        // A music video or home video is landscape first, like an episode.
+        var clip = new ProgramEntry(Guid.NewGuid(), "Clip", null, TimeSpan.FromMinutes(4).Ticks, "/c.mp4") { ItemKind = "MusicVideo", PrimaryImagePath = poster, ThumbImagePath = thumb };
+        Assert.Equal(thumb, BumperService.ChooseArt(clip));
+    }
+
+    [Fact]
     public void AClipEntry_PlaysLikeAnUnprobedLibraryItemWithNoLibraryId()
     {
         var entry = BumperService.ClipEntry("/tmp/b.mp4", "Up Next", 1920, 15);
@@ -348,6 +372,82 @@ public sealed class BumperCardTests : IDisposable
         Assert.Equal("bt709", entry.SourceColorSpace);
         Assert.Equal(TimeSpan.FromSeconds(15).Ticks, entry.DurationTicks);
         Assert.Empty(entry.Subtitles);
+    }
+
+    [Fact]
+    public void TheThenLine_NamesAnEpisodeBySeriesAndNumber_AndAnythingElseByName()
+    {
+        Assert.Equal("The Long Way Home · S2 · E5", BumperContent.ThenText(Episode()));
+        var special = new ProgramEntry(Guid.NewGuid(), "x", null, 1, "/x.mkv") { ItemKind = "Episode", SeriesName = "Show", RawName = "Making Of", SeasonNumber = 0 };
+        Assert.Equal("Show · Special", BumperContent.ThenText(special));
+        var movie = new ProgramEntry(Guid.NewGuid(), "Northbound", null, 1, "/m.mkv") { ItemKind = "Movie", IsMovie = true, RawName = "Northbound" };
+        Assert.Equal("Northbound", BumperContent.ThenText(movie));
+    }
+
+    [Fact]
+    public void TheThenLine_ShowsTheSlotStartOnTheServersClock()
+    {
+        var movie = new ProgramEntry(Guid.NewGuid(), "Northbound", null, 1, "/m.mkv") { ItemKind = "Movie", RawName = "Northbound" };
+        Assert.Equal(new BumperThen("Northbound", "9:45 PM"), BumperThen.For(movie, new DateTime(2026, 10, 27, 21, 45, 0, DateTimeKind.Utc), TimeZoneInfo.Utc));
+        Assert.Equal("10:05 AM", BumperThen.For(movie, new DateTime(2026, 10, 27, 10, 5, 0, DateTimeKind.Utc), TimeZoneInfo.Utc).Time);
+    }
+
+    [Fact]
+    public void UnderWideArtwork_TheThenLineSpansTheFrame_WithTheTimeAtItsRightEdge()
+    {
+        var then = new BumperThen("Northbound", "9:45 PM");
+        var plain = BumperLayout.Compute(BumperContent.For(Episode()), ArtShape.Landscape, 1280, 720, _fonts);
+        var layout = BumperLayout.Compute(BumperContent.For(Episode()), ArtShape.Landscape, 1280, 720, _fonts, then);
+
+        var art = layout.Art!.Value;
+        Assert.True(art.Y < plain.Art!.Value.Y); // the artwork moves up to make room, centred with the line
+        var row = layout.Rows[^1];
+        Assert.False(row.Slides);
+        Assert.Null(row.Divider);
+        Assert.Equal(2.2, row.Delay);
+        Assert.Equal(["THEN", "9:45 PM", "Northbound"], row.Texts.Select(t => t.Text));
+        Assert.Equal(art.X, row.Texts[0].X);
+        Assert.All(row.Texts, t => Assert.True(t.Baseline > art.Y + art.Height));
+        var time = row.Texts[1];
+        Assert.InRange(time.X + _fonts.Metrics(BumperFace.Regular).Measure("9:45 PM", time.Size), art.X + art.Width - 1, art.X + art.Width + 1);
+    }
+
+    [Fact]
+    public void BesideAPoster_TheThenLineClosesTheInfoColumn_BelowAHairline()
+    {
+        var then = new BumperThen("The Long Way Home · S2 · E6", "10:30 PM");
+        var layout = BumperLayout.Compute(BumperContent.For(Episode()), ArtShape.Portrait, 1280, 720, _fonts, then);
+
+        var row = layout.Rows[^1];
+        Assert.False(row.Slides);
+        var divider = row.Divider!.Value;
+        Assert.Equal(72, divider.X);
+        Assert.True(divider.Y > layout.Rows[^2].Texts[0].Baseline);
+        Assert.True(row.Texts[0].Baseline > divider.Y);
+        Assert.Equal(["THEN", "10:30 PM", "The Long Way Home · S2 · E6"], row.Texts.Select(t => t.Text));
+
+        // The time follows THEN, so the name has the rest of the column.
+        Assert.True(row.Texts[1].X < row.Texts[2].X);
+        Assert.True(row.Texts[2].X < layout.Art!.Value.X);
+    }
+
+    [Fact]
+    public void ALongName_IsCutOffWhereItsRoomEnds()
+    {
+        var then = new BumperThen("Dr. Strangelove or: How I Learned to Stop Worrying and Love the Bomb", "11:52 PM");
+        var under = BumperLayout.Compute(BumperContent.For(Episode()), ArtShape.Landscape, 1280, 720, _fonts, then).Rows[^1].Texts[2];
+        var column = BumperLayout.Compute(BumperContent.For(Episode()), ArtShape.Portrait, 1280, 720, _fonts, then).Rows[^1].Texts[2];
+
+        Assert.EndsWith("…", under.Text, StringComparison.Ordinal);
+        Assert.True(column.Text.Length > under.Text.Length); // the column has more room than the frame
+    }
+
+    [Fact]
+    public void WithoutAThenLine_TheLayoutIsUnchanged()
+    {
+        var plain = BumperLayout.Compute(BumperContent.For(Episode()), ArtShape.Portrait, 1280, 720, _fonts);
+        Assert.All(plain.Rows, r => Assert.True(r.Slides));
+        Assert.Equal(4, plain.Rows.Count);
     }
 
     private string Touch(string name)

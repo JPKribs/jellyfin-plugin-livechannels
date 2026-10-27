@@ -35,13 +35,18 @@ public sealed class BumperService : IDisposable
     public static readonly TimeSpan BumperLength = TimeSpan.FromSeconds(BumperArguments.Seconds);
 
     // Bump whenever a bumper's rendering changes, so cached bumpers regenerate.
-    private const int Revision = 1;
+    private const int Revision = 2;
 
     // The black filler runs a little past a bumper's length, so it can always cover a whole slot lead.
     private const double BlackSeconds = BumperArguments.Seconds + 1;
 
-    // A pass renders 15 seconds of video at most; anything longer is hung, not slow.
-    private static readonly TimeSpan RenderPassTimeout = TimeSpan.FromMinutes(3);
+    // A pass renders 15 seconds of video, at idle priority behind every live encode (see IntroService.RunProcessAsync), so a busy server
+    // can stretch it to minutes; only past this is it hung rather than starved.
+    private static readonly TimeSpan RenderPassTimeout = TimeSpan.FromMinutes(10);
+
+    // How long into an item the next bumper starts rendering, at most: the item's start is when its own encoder is
+    // busiest catching up, and nothing needs the bumper until the item ends.
+    private static readonly TimeSpan PrepareDelay = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(30);
 
     // Bumpers unused for this long are deleted; the sweep runs at most this often.
@@ -86,12 +91,13 @@ public sealed class BumperService : IDisposable
     /// <param name="program">The item.</param>
     /// <param name="width">The channel's output width.</param>
     /// <param name="logoPath">The channel's logo, or <c>null</c>.</param>
+    /// <param name="then">What airs after the item, for the card's Then line, or <c>null</c>.</param>
     /// <returns>The bumper's video, or <c>null</c>.</returns>
-    public string? TryGetCached(Channel channel, ProgramEntry program, int width, string? logoPath)
+    internal string? TryGetCached(Channel channel, ProgramEntry program, int width, string? logoPath, BumperThen? then = null)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(program);
-        var path = ItemPath(channel, program, width, logoPath);
+        var path = ItemPath(channel, program, width, logoPath, then);
         if (!File.Exists(path))
         {
             return null;
@@ -102,14 +108,18 @@ public sealed class BumperService : IDisposable
     }
 
     /// <summary>
-    /// Starts rendering the item's bumper in the background when it is not cached already. Renders are
-    /// single-flight per bumper and run one at a time; this never blocks and never throws.
+    /// Starts rendering the item's bumper in the background when it is not cached already, after
+    /// <paramref name="delay"/>. Renders are single-flight per bumper, run one at a time and at idle priority; this
+    /// never blocks and never throws.
     /// </summary>
     /// <param name="channel">The channel.</param>
     /// <param name="program">The item.</param>
     /// <param name="width">The channel's output width.</param>
     /// <param name="logoPath">The channel's logo, or <c>null</c>.</param>
-    public void Prepare(Channel channel, ProgramEntry program, int width, string? logoPath)
+    /// <param name="then">What airs after the item, for the card's Then line, or <c>null</c>.</param>
+    /// <param name="delay">How long to wait before rendering (see <see cref="PrepareDelayFor"/>).</param>
+    /// <param name="cancellationToken">Cancelled when the stream closes; a render still waiting out its delay is dropped.</param>
+    internal void Prepare(Channel channel, ProgramEntry program, int width, string? logoPath, BumperThen? then = null, TimeSpan delay = default, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(program);
@@ -119,7 +129,7 @@ public sealed class BumperService : IDisposable
         }
 
         MaybePrune();
-        var path = ItemPath(channel, program, width, logoPath);
+        var path = ItemPath(channel, program, width, logoPath, then);
         if (File.Exists(path))
         {
             return;
@@ -127,7 +137,7 @@ public sealed class BumperService : IDisposable
 
         // A render that completes synchronously runs its own cleanup before GetOrAdd stores it; drop it here then,
         // or it would sit in the map and block every later render of this bumper.
-        var task = _inFlight.GetOrAdd(path, _ => RenderAndForgetAsync(channel, program, width, logoPath, path));
+        var task = _inFlight.GetOrAdd(path, _ => RenderAndForgetAsync(channel, program, width, logoPath, then, path, delay, cancellationToken));
         if (task.IsCompleted)
         {
             _inFlight.TryRemove(new KeyValuePair<string, Task>(path, task));
@@ -167,7 +177,7 @@ public sealed class BumperService : IDisposable
 
             Directory.CreateDirectory(_root);
             var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp.mp4";
-            var (exit, _, error) = await IntroService.RunProcessAsync(ffmpeg, BumperArguments.BuildBlackArguments(w, h, BlackSeconds, temp), captureOutput: false, RenderPassTimeout).ConfigureAwait(false);
+            var (exit, _, error) = await IntroService.RunProcessAsync(ffmpeg, BumperArguments.BuildBlackArguments(w, h, BlackSeconds, temp), captureOutput: false, RenderPassTimeout, background: false).ConfigureAwait(false);
             if (exit != 0 || !File.Exists(temp))
             {
                 TryDelete(temp);
@@ -206,15 +216,22 @@ public sealed class BumperService : IDisposable
         };
 
     /// <summary>
-    /// The artwork a bumper shows, by the first that exists: the item's landscape image (an episode's own still or
-    /// thumbnail, else its series' thumbnail or backdrop), then its backdrop, then its poster. The frame takes the
+    /// The artwork a bumper shows, by the first that exists. A movie shows its poster, falling back to its
+    /// thumbnail or backdrop. Everything else (an episode, a music video, a home video) shows a landscape image: an
+    /// episode's own still or thumbnail, else its series' thumbnail or backdrop, then the item's backdrop, falling
+    /// back to the poster (an episode's series poster) when it has no landscape image at all. The frame takes the
     /// chosen image's own shape, so square art gets a square frame. <c>null</c> means a text-only card.
     /// </summary>
     /// <param name="program">The item.</param>
     /// <returns>The artwork's path, or <c>null</c>.</returns>
     internal static string? ChooseArt(ProgramEntry program)
-        => new[] { program.ThumbImagePath, program.BackdropImagePath, program.PrimaryImagePath }
-            .FirstOrDefault(p => !string.IsNullOrEmpty(p) && File.Exists(p));
+    {
+        var movie = program.IsMovie || string.Equals(program.ItemKind, "Movie", StringComparison.Ordinal);
+        var order = movie
+            ? new[] { program.PrimaryImagePath, program.ThumbImagePath, program.BackdropImagePath }
+            : new[] { program.ThumbImagePath, program.BackdropImagePath, program.PrimaryImagePath };
+        return order.FirstOrDefault(p => !string.IsNullOrEmpty(p) && File.Exists(p));
+    }
 
     /// <inheritdoc />
     public void Dispose()
@@ -232,8 +249,9 @@ public sealed class BumperService : IDisposable
     /// <param name="width">The channel's output width.</param>
     /// <param name="logoPath">The channel's logo, or <c>null</c>.</param>
     /// <param name="output">Where the bumper is written.</param>
+    /// <param name="then">What airs after the item, for the card's Then line, or <c>null</c>.</param>
     /// <returns>Whether the bumper was rendered.</returns>
-    internal async Task<bool> RenderAsync(Channel channel, ProgramEntry program, int width, string? logoPath, string output)
+    internal async Task<bool> RenderAsync(Channel channel, ProgramEntry program, int width, string? logoPath, string output, BumperThen? then = null)
     {
         var ffmpeg = _encoder.EncoderPath;
         var fonts = Fonts();
@@ -266,10 +284,10 @@ public sealed class BumperService : IDisposable
                 artInput = null;
             }
 
-            var layout = BumperLayout.Compute(BumperContent.For(program), shape, w, h, fonts);
+            var layout = BumperLayout.Compute(BumperContent.For(program), shape, w, h, fonts, then);
             if (BumperArguments.BuildShapeArguments(layout, shapes) is { } shapeArgs)
             {
-                var (exit, _, error) = await IntroService.RunProcessAsync(ffmpeg, shapeArgs, captureOutput: false, RenderPassTimeout).ConfigureAwait(false);
+                var (exit, _, error) = await IntroService.RunProcessAsync(ffmpeg, shapeArgs, captureOutput: false, RenderPassTimeout, background: true).ConfigureAwait(false);
                 if (exit != 0)
                 {
                     _logger.LogWarning("Live Channels: Up Next bumper shapes failed for \"{Title}\" on {Name} (exit {Exit}): {Error}", program.Title, channel.Name, exit, error.Trim());
@@ -286,7 +304,7 @@ public sealed class BumperService : IDisposable
             }
 
             var args = BumperArguments.BuildItemArguments(layout, layer, artInput, shapes, TextFile, temp);
-            var (code, _, stderr) = await IntroService.RunProcessAsync(ffmpeg, args, captureOutput: false, RenderPassTimeout).ConfigureAwait(false);
+            var (code, _, stderr) = await IntroService.RunProcessAsync(ffmpeg, args, captureOutput: false, RenderPassTimeout, background: true).ConfigureAwait(false);
             if (code != 0 || !File.Exists(temp) || new FileInfo(temp).Length == 0)
             {
                 _logger.LogWarning("Live Channels: Up Next bumper render failed for \"{Title}\" on {Name} (exit {Exit}): {Error}", program.Title, channel.Name, code, stderr.Trim());
@@ -307,16 +325,39 @@ public sealed class BumperService : IDisposable
         }
     }
 
-    private async Task RenderAndForgetAsync(Channel channel, ProgramEntry program, int width, string? logoPath, string path)
+    /// <summary>
+    /// How long into an item to wait before rendering the next item's bumper: a minute, or a quarter of what is left
+    /// of the item when that is shorter, so even a short item leaves its bumper most of its length to render.
+    /// </summary>
+    /// <param name="remaining">How much of the item is left to play.</param>
+    /// <returns>The delay.</returns>
+    internal static TimeSpan PrepareDelayFor(TimeSpan remaining)
+        => remaining <= TimeSpan.Zero ? TimeSpan.Zero : TimeSpan.FromTicks(Math.Min(PrepareDelay.Ticks, remaining.Ticks / 4));
+
+    private async Task RenderAndForgetAsync(Channel channel, ProgramEntry program, int width, string? logoPath, BumperThen? then, string path, TimeSpan delay, CancellationToken cancellationToken)
     {
         try
         {
-            await _renderGate.WaitAsync().ConfigureAwait(false);
+            // A stream that closes before its render gets going drops it: nobody is waiting for that bumper now.
+            try
+            {
+                if (delay > TimeSpan.Zero)
+                {
+                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                }
+
+                await _renderGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
             try
             {
                 if (!File.Exists(path))
                 {
-                    await RenderAsync(channel, program, width, logoPath, path).ConfigureAwait(false);
+                    await RenderAsync(channel, program, width, logoPath, path, then).ConfigureAwait(false);
                 }
             }
             finally
@@ -355,14 +396,14 @@ public sealed class BumperService : IDisposable
         var temp = prefix + ".tmp.mp4";
         try
         {
-            var (exit, _, error) = await IntroService.RunProcessAsync(ffmpeg, IntroService.BuildStripArguments(strips), captureOutput: false, RenderPassTimeout).ConfigureAwait(false);
+            var (exit, _, error) = await IntroService.RunProcessAsync(ffmpeg, IntroService.BuildStripArguments(strips), captureOutput: false, RenderPassTimeout, background: true).ConfigureAwait(false);
             if (exit != 0 || !strips.AllExist())
             {
                 _logger.LogWarning("Live Channels: Up Next layer lines failed for {Name} (exit {Exit}): {Error}", channel.Name, exit, error.Trim());
                 return null;
             }
 
-            (exit, _, error) = await IntroService.RunProcessAsync(ffmpeg, BumperArguments.BuildScrimArguments(width, height, scrim), captureOutput: false, RenderPassTimeout).ConfigureAwait(false);
+            (exit, _, error) = await IntroService.RunProcessAsync(ffmpeg, BumperArguments.BuildScrimArguments(width, height, scrim), captureOutput: false, RenderPassTimeout, background: true).ConfigureAwait(false);
             if (exit != 0 || !File.Exists(scrim))
             {
                 _logger.LogWarning("Live Channels: Up Next layer scrim failed for {Name} (exit {Exit}): {Error}", channel.Name, exit, error.Trim());
@@ -372,7 +413,7 @@ public sealed class BumperService : IDisposable
             await File.WriteAllTextAsync(caption, "Up Next").ConfigureAwait(false);
             var font = fonts.For(BumperFace.DisplaySemiBold, "Up Next").Path;
             var args = BumperArguments.BuildLayerArguments(strips, scrim, IntroService.LogoInput(logoPath, BumperArguments.Seconds), font, caption, height / 720.0, temp);
-            (exit, _, error) = await IntroService.RunProcessAsync(ffmpeg, args, captureOutput: false, RenderPassTimeout).ConfigureAwait(false);
+            (exit, _, error) = await IntroService.RunProcessAsync(ffmpeg, args, captureOutput: false, RenderPassTimeout, background: true).ConfigureAwait(false);
             if (exit != 0 || !File.Exists(temp) || new FileInfo(temp).Length == 0)
             {
                 _logger.LogWarning("Live Channels: Up Next layer render failed for {Name} (exit {Exit}): {Error}", channel.Name, exit, error.Trim());
@@ -433,8 +474,8 @@ public sealed class BumperService : IDisposable
     }
 
     // Where an item's bumper lives: per channel, named by item and by everything the card shows, so a change to
-    // the item's metadata or artwork, the channel's logo, or the frame size renders a new one.
-    private string ItemPath(Channel channel, ProgramEntry program, int width, string? logoPath)
+    // the item's metadata or artwork, the channel's logo, the frame size, or what airs after it renders a new one.
+    private string ItemPath(Channel channel, ProgramEntry program, int width, string? logoPath, BumperThen? then)
     {
         var content = BumperContent.For(program);
         var art = ChooseArt(program);
@@ -450,7 +491,9 @@ public sealed class BumperService : IDisposable
             content.Details ?? string.Empty,
             content.Score ?? string.Empty,
             content.Rating ?? string.Empty,
-            IntroService.LogoStamp(art)));
+            IntroService.LogoStamp(art),
+            then?.Text ?? string.Empty,
+            then?.Time ?? string.Empty));
         return Path.Combine(ChannelDir(channel), program.ItemId.ToString("N", CultureInfo.InvariantCulture) + "-" + key + ".mp4");
     }
 

@@ -82,9 +82,10 @@ public sealed class IntroService : IDisposable
         new(0.78, 0.06, 1.4, 1.1, 2.1, 1),
         new(0.55, 0.05, 0.6, 0.5, 0.7, -1),
     ];
-    // Bounds on each child process of a render: a pass renders a few seconds of video, so even a slow software
-    // encoder finishes well inside these; anything longer is hung, not slow.
-    private static readonly TimeSpan RenderPassTimeout = TimeSpan.FromMinutes(2);
+    // Bounds on each child process of a render. A pass renders a few seconds of video, but at idle priority (see
+    // RunProcessAsync) it waits on every live encode, so a busy server can stretch it to minutes; only past this
+    // is it hung rather than starved.
+    private static readonly TimeSpan RenderPassTimeout = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(30);
 
     // How long to wait for a killed process to actually exit before giving up on it.
@@ -251,9 +252,7 @@ public sealed class IntroService : IDisposable
 
             // Pass three: that file through the channel's real encoder and arguments, output to a file instead
             // of the segmenter. A burst longer than the card reads it flat out instead of at realtime.
-            var args = StreamArguments.Build(source, TimeSpan.Zero, TimeSpan.Zero, profile.Width, profile.Bitrate, profile.Video, profile.AudioEncoder, profile.AudioBitrate, null, initialBurstSeconds: IntroSeconds * 10);
-            args[args.Count - 1] = rendered;
-            args.Insert(0, "-y");
+            var args = BuildEncodeArguments(source, profile.Width, profile.Bitrate, profile.Video, profile.AudioEncoder, profile.AudioBitrate, rendered);
             (exit, error) = await RunAsync(ffmpeg, args).ConfigureAwait(false);
             if (exit != 0 || !File.Exists(rendered) || new FileInfo(rendered).Length == 0)
             {
@@ -337,6 +336,28 @@ public sealed class IntroService : IDisposable
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// The card's last pass: its rendered visual through the channel's real encoder and arguments, written to a
+    /// file instead of the segmenter. The card's own small H.264 file always decodes in software (it costs next to
+    /// nothing), so only the encode uses the GPU: decoding it on the GPU-resident Intel path failed outright on some
+    /// drivers, leaving the channel without a card. A burst longer than the card reads it flat out.
+    /// </summary>
+    /// <param name="source">The rendered visual.</param>
+    /// <param name="width">The channel's output width.</param>
+    /// <param name="bitrate">The channel's video bitrate.</param>
+    /// <param name="video">The channel's video encoder.</param>
+    /// <param name="audioEncoder">The channel's audio encoder.</param>
+    /// <param name="audioBitrate">The channel's audio bitrate.</param>
+    /// <param name="output">The MPEG-TS file to write.</param>
+    /// <returns>The arguments.</returns>
+    internal static List<string> BuildEncodeArguments(string source, int width, int bitrate, VideoEncoderProfile video, string audioEncoder, int audioBitrate, string output)
+    {
+        var args = StreamArguments.Build(source, TimeSpan.Zero, TimeSpan.Zero, width, bitrate, video, audioEncoder, audioBitrate, null, softwareDecode: true, initialBurstSeconds: IntroSeconds * 10);
+        args[args.Count - 1] = output;
+        args.Insert(0, "-y");
+        return args;
     }
 
     /// <summary>
@@ -543,7 +564,7 @@ public sealed class IntroService : IDisposable
 
     private static async Task<(int Exit, string Error)> RunAsync(string ffmpeg, IReadOnlyList<string> args)
     {
-        var (exit, _, error) = await RunProcessAsync(ffmpeg, args, captureOutput: false, RenderPassTimeout).ConfigureAwait(false);
+        var (exit, _, error) = await RunProcessAsync(ffmpeg, args, captureOutput: false, RenderPassTimeout, background: true).ConfigureAwait(false);
         return (exit, error);
     }
 
@@ -557,8 +578,10 @@ public sealed class IntroService : IDisposable
     /// <param name="args">Its arguments.</param>
     /// <param name="captureOutput">Whether to capture standard output (otherwise it is left to the parent).</param>
     /// <param name="timeout">How long the process may run.</param>
+    /// <param name="background">Whether the process runs at idle CPU priority: a render nobody is waiting on yields
+    /// the CPU to every live encode, so preparing cards and bumpers can never make a channel stutter.</param>
     /// <returns>The exit code (<c>-1</c> when it timed out), the captured output, and standard error.</returns>
-    internal static async Task<(int Exit, string Output, string Error)> RunProcessAsync(string fileName, IReadOnlyList<string> args, bool captureOutput, TimeSpan timeout)
+    internal static async Task<(int Exit, string Output, string Error)> RunProcessAsync(string fileName, IReadOnlyList<string> args, bool captureOutput, TimeSpan timeout, bool background = false)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -575,6 +598,17 @@ public sealed class IntroService : IDisposable
 
         using var process = new Process { StartInfo = startInfo };
         process.Start();
+        if (background)
+        {
+            try
+            {
+                process.PriorityClass = ProcessPriorityClass.Idle;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or PlatformNotSupportedException)
+            {
+                // It exited already, or the platform will not lower it: it still runs, just at normal priority.
+            }
+        }
 
         // Both pipes drain from the start so a chatty process can never block on a full pipe.
         var stderr = process.StandardError.ReadToEndAsync();

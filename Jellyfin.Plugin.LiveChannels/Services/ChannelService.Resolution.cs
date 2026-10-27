@@ -667,6 +667,8 @@ public partial class ChannelService
             DefaultAudioOrdinal = defaultAudio?.Ordinal ?? 0,
             IsVideoOnly = video is not null && !streams.Any(IsEmbeddedAudio),
             SourceVideoCodec = video?.Codec,
+            SourceBitDepth = video?.BitDepth,
+            SourcePixelFormat = video?.PixelFormat,
             SourceColorSpace = video?.ColorSpace,
             SourceRotation = NormalizeRotation(video?.Rotation),
             SourceAudioCodec = defaultAudio?.Stream.Codec,

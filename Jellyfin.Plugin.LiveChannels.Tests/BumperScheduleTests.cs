@@ -279,12 +279,15 @@ public sealed class BumperScheduleTests : IDisposable
 
         Assert.Equal(Lead, schedule.Current.Lead);
         Assert.Equal(TimeSpan.FromSeconds(3), schedule.Current.Offset);
-        Assert.Same(b, schedule.PeekNext());
+
+        // The next slots, and when each starts: A's whole slot (bumper included), then B's.
+        Assert.Equal((b, Noon.AddMinutes(10) + Lead), schedule.Following(1));
+        Assert.Equal((a, Noon.AddMinutes(30) + Lead + Lead), schedule.Following(2));
 
         schedule.Advance();
         Assert.Same(b, schedule.Current.Program);
         Assert.Equal(TimeSpan.Zero, schedule.Current.Offset);
-        Assert.Same(a, schedule.PeekNext());
+        Assert.Equal((a, Noon.AddMinutes(30) + Lead + Lead), schedule.Following(1));
     }
 
     [Fact]

@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "12.4.1.0"
+version: "12.4.1.1"
 targetAbi: "12.4.0.0"
 framework: "net10.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -16,8 +16,9 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   features:
-  - An "Up Next" card plays for 15 seconds before each item, showing its artwork, title, episode and rating (on by default, per channel)
-  - The Up Next card and the tune-in card play a soft chord that fades in and trails off
-  - Schedules and learned item lengths now live in Jellyfin's data folder, so clearing the cache no longer moves what is on air
+  - The Up Next card shows what airs after it, and when, on a smaller Then line
+  - The Up Next card shows a movie's poster, and a landscape image for episodes, music videos and home videos
+  - Hardware decoding follows Jellyfin's own settings (the codecs ticked for hardware decoding, and the 10-bit and range extension HEVC switches), so a file the GPU cannot decode goes straight to software instead of failing first
   fixed:
-  - Tune-in cards, logos, fonts and ffmpeg's working files all live in the plugin's stream folder, and nothing is written to the system temp folder
+  - Tune-in cards no longer fail to render on Intel QSV
+  - Rendering tune-in and Up Next cards no longer makes playing channels stutter

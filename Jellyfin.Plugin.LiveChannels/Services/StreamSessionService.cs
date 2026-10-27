@@ -566,11 +566,12 @@ public class StreamSessionService
             var video = _encoders.ResolveVideo(videoCodec, allowHardware: true);
             var (audioEncoder, audioBitrate) = EncoderResolver.ResolveAudio(audioCodec);
 
-            // Hardware-decode the playlist only when every item is the same resolution: the concat demuxer feeds
-            // one shared decoder, and a mid-stream resolution change fails a hardware decoder (software handles
-            // it fine). On any quick failure, drop to software decode for the rest of the session.
+            // Hardware-decode the playlist only when every item is the same resolution (the concat demuxer feeds
+            // one shared decoder, and a mid-stream resolution change fails a hardware decoder; software handles
+            // it fine) and Jellyfin's hardware decoding settings allow every item's format. On any quick failure,
+            // drop to software decode for the rest of the session.
             var programs = follower.Programs;
-            var decodeHwaccel = IsUniform(programs) ? video.DecodeHwaccel : null;
+            var decodeHwaccel = IsUniform(programs) && programs.All(_encoders.CanHardwareDecode) ? video.DecodeHwaccel : null;
 
             // One continuous ffmpeg. If it dies after producing output (a bad file mid-playlist, an encoder
             // hiccup), restart where its output ended so the channel self-heals rather than going silent. A
@@ -600,7 +601,7 @@ public class StreamSessionService
                         return new StandbyRequest(timeline, null);
                     }
 
-                    if (decodeHwaccel is not null && !IsUniform(programs))
+                    if (decodeHwaccel is not null && (!IsUniform(programs) || !programs.All(_encoders.CanHardwareDecode)))
                     {
                         decodeHwaccel = null;
                     }
@@ -918,7 +919,7 @@ public class StreamSessionService
                 var preroll = step.Lead - step.Offset;
                 if (preroll > TimeSpan.Zero)
                 {
-                    timeline = await StreamPrerollAsync(ffmpeg, channel, step, preroll, timeline, output, BurstNow, stats, cancellationToken).ConfigureAwait(false);
+                    timeline = await StreamPrerollAsync(ffmpeg, channel, step, ThenFor(schedule.Following(1)), preroll, timeline, output, BurstNow, stats, cancellationToken).ConfigureAwait(false);
                     if (cancellationToken.IsCancellationRequested)
                     {
                         break;
@@ -932,10 +933,12 @@ public class StreamSessionService
                     continue;
                 }
 
-                // The next slot's bumper renders while this item plays.
-                if (_bumpers is not null && schedule.PeekNext() is { } next)
+                // The next slot's bumper renders while this item plays, once the item has settled in rather than
+                // while its own encoder is starting up.
+                if (_bumpers is not null && schedule.Following(1) is { } next)
                 {
-                    _bumpers.Prepare(channel, next, OutputFor(stats).Width, stats?.LogoPath);
+                    var remaining = step.DurationLimit ?? (TimeSpan.FromTicks(program.DurationTicks) - step.Offset);
+                    _bumpers.Prepare(channel, next.Program, OutputFor(stats).Width, stats?.LogoPath, ThenFor(schedule.Following(2)), BumperService.PrepareDelayFor(remaining), cancellationToken);
                 }
             }
             _logger.LogDebug("Channel {Name}: item {Number} \"{Title}\"", channel.Name, itemsPlayed + 1, program.Title);
@@ -1078,6 +1081,10 @@ public class StreamSessionService
         return false;
     }
 
+    // The Then line for the slot a schedule has at some distance ahead: what airs then and when its slot starts.
+    internal static BumperThen? ThenFor((ProgramEntry Program, DateTime StartUtc)? following)
+        => following is { } f ? BumperThen.For(f.Program, f.StartUtc, TimeZoneInfo.Local) : null;
+
     // Whether a tune-in now lands in an Up Next bumper. Resolving the loop here costs the tune-in nothing extra: the
     // schedule is resolved right after the card anyway, and this leaves it in memory for that.
     private bool DuringBumper(Channel channel, DateTime nowUtc)
@@ -1100,7 +1107,7 @@ public class StreamSessionService
     // the bumper was rendered in time, otherwise black, for exactly the time left before the item starts. Returns
     // the timeline the item chains from. Should neither play, the item follows straight on (a little early, which
     // the per-item pacing absorbs) rather than the slot stalling.
-    private async Task<TimeSpan> StreamPrerollAsync(string ffmpeg, Channel channel, StreamStep step, TimeSpan length, TimeSpan timeline, Stream output, Func<double> burstSeconds, SessionStats? stats, CancellationToken cancellationToken)
+    private async Task<TimeSpan> StreamPrerollAsync(string ffmpeg, Channel channel, StreamStep step, BumperThen? then, TimeSpan length, TimeSpan timeline, Stream output, Func<double> burstSeconds, SessionStats? stats, CancellationToken cancellationToken)
     {
         if (_bumpers is null)
         {
@@ -1108,7 +1115,7 @@ public class StreamSessionService
         }
 
         var width = OutputFor(stats).Width;
-        var bumper = step.Offset <= TimeSpan.Zero ? _bumpers.TryGetCached(channel, step.Program, width, stats?.LogoPath) : null;
+        var bumper = step.Offset <= TimeSpan.Zero ? _bumpers.TryGetCached(channel, step.Program, width, stats?.LogoPath, then) : null;
         if (bumper is not null)
         {
             var (played, end, _) = await StreamItemAsync(ffmpeg, channel, BumperService.ClipEntry(bumper, "Up Next: " + step.Program.Title, width, BumperService.BumperLength.TotalSeconds), TimeSpan.Zero, timeline, output, burstSeconds, cancellationToken, stats, length, softwareDecodeOnly: true).ConfigureAwait(false);
@@ -1265,7 +1272,7 @@ public class StreamSessionService
             }
         }
 
-        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: softwareDecodeOnly || MustDecodeInSoftware(program, subtitle), program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts, SilenceFor(program, offset, durationLimit), program.SourceColorSpace, stats);
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: softwareDecodeOnly || MustDecodeInSoftware(program, subtitle) || !_encoders.CanHardwareDecode(program), program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts, SilenceFor(program, offset, durationLimit), program.SourceColorSpace, stats);
         var (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats, new SpeedTracker(timeline.TotalSeconds)).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
