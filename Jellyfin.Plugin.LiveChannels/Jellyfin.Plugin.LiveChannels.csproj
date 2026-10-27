@@ -45,7 +45,13 @@
     <!-- Material Symbols font + name-to-codepoint map, used to render symbol channel logos -->
     <EmbeddedResource Include="Assets\MaterialSymbolsOutlined.ttf" />
     <EmbeddedResource Include="Assets\MaterialSymbolsOutlined.codepoints" />
-    <EmbeddedResource Include="Assets\Fonts\*.ttf" />
+    <EmbeddedResource Include="Assets\Fonts\Inter-Medium.ttf" />
+    <EmbeddedResource Include="Assets\Fonts\Inter-MediumItalic.ttf" />
+    <EmbeddedResource Include="Assets\Fonts\Inter-Regular.ttf" />
+    <EmbeddedResource Include="Assets\Fonts\Inter-SemiBold.ttf" />
+    <EmbeddedResource Include="Assets\Fonts\Outfit-Bold.ttf" />
+    <EmbeddedResource Include="Assets\Fonts\Outfit-ExtraBold.ttf" />
+    <EmbeddedResource Include="Assets\Fonts\Outfit-SemiBold.ttf" />
   </ItemGroup>
 
 </Project>
