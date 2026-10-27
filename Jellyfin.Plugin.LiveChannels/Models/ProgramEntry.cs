@@ -51,6 +51,9 @@ public sealed class ProgramEntry
     /// <summary>Gets the item's tagline (a movie's one-line pitch), or <c>null</c>, shown on its Up Next bumper.</summary>
     public string? Tagline { get; init; }
 
+    /// <summary>Gets a music video's artists, shown under its title on its Up Next bumper; empty for anything else, and in schedules cached before they were recorded.</summary>
+    public IReadOnlyList<string> Artists { get; init; } = Array.Empty<string>();
+
     /// <summary>Gets the library item kind (e.g. <c>Episode</c>, <c>Movie</c>, <c>MusicVideo</c>, <c>Video</c>), or <c>null</c> in schedules cached before it was recorded. Chooses the Up Next bumper's layout.</summary>
     public string? ItemKind { get; init; }
 

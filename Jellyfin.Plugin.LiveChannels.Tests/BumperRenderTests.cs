@@ -45,7 +45,7 @@ public sealed class BumperRenderTests : IDisposable
     [InlineData("portrait", 1000, 1500, true)]
     [InlineData("square", 1000, 1000, false)]
     [InlineData("none", 0, 0, false)]
-    public async Task RendersAFifteenSecondBumperForEveryArtworkShape(string name, int artWidth, int artHeight, bool withLogo)
+    public async Task RendersATenSecondBumperForEveryArtworkShape(string name, int artWidth, int artHeight, bool withLogo)
     {
         if (FfmpegHarness.Instance is not { } ffmpeg)
         {
@@ -84,7 +84,7 @@ public sealed class BumperRenderTests : IDisposable
     }
 
     [Fact]
-    public async Task RendersLongTitlesAMovieAndAVideo()
+    public async Task RendersLongTitlesAMovieAVideoAndAMusicVideo()
     {
         if (FfmpegHarness.Instance is not { } ffmpeg)
         {
@@ -99,6 +99,7 @@ public sealed class BumperRenderTests : IDisposable
             ("long", Episode(art, "The Extraordinary and Mostly True Adventures of Captain Bartholomew Finch and the Lighthouse Society", "In Which Our Hero Learns the Lighthouse Keeper Was Never There at All")),
             ("movie", Movie(poster)),
             ("video", Video()),
+            ("music-video", MusicVideo(art)),
         };
 
         foreach (var (name, program) in cases)
@@ -254,6 +255,20 @@ public sealed class BumperRenderTests : IDisposable
             CommunityRating = 6.9f,
             OfficialRating = "R",
             PrimaryImagePath = poster,
+        };
+
+    private static ProgramEntry MusicVideo(string thumb)
+        => new(Guid.NewGuid(), "Neon Harbor", null, TimeSpan.FromMinutes(4).Ticks, "/media/m.mp4")
+        {
+            ItemKind = "MusicVideo",
+            RawName = "Neon Harbor",
+            Artists = ["The Midnight Coast"],
+            Year = 1987,
+            PremiereDate = new DateTime(1987, 3, 9, 0, 0, 0, DateTimeKind.Utc),
+            Genres = ["Synthpop"],
+            CommunityRating = 7.8f,
+            OfficialRating = "TV-PG",
+            ThumbImagePath = thumb,
         };
 
     private static ProgramEntry Video()

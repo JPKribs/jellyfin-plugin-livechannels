@@ -646,6 +646,7 @@ public partial class ChannelService
             OfficialRating = item.OfficialRating,
             SeriesOfficialRating = asEpisode?.Series?.OfficialRating,
             Tagline = string.IsNullOrWhiteSpace(item.Tagline) ? null : item.Tagline.Trim(),
+            Artists = (item as MusicVideo)?.Artists ?? Array.Empty<string>(),
             ItemKind = item.GetBaseItemKind().ToString(),
             ParentalRatingValue = item.InheritedParentalRatingValue,
             Genres = item.Genres ?? Array.Empty<string>(),

@@ -109,6 +109,56 @@ public sealed class BumperCardTests : IDisposable
         Assert.Null(content.Rating);
     }
 
+    [Fact]
+    public void AMusicVideo_ShowsItsArtistsUnderItsTitle()
+    {
+        var clip = new ProgramEntry(Guid.NewGuid(), "Song", null, TimeSpan.FromMinutes(4).Ticks, "/m.mp4")
+        {
+            ItemKind = "MusicVideo",
+            RawName = "Song",
+            Artists = ["The Midnight", " Nikki Flores ", "The Midnight", ""],
+        };
+
+        var content = BumperContent.For(clip);
+        Assert.Equal("Song", content.Title);
+        Assert.Equal("The Midnight, Nikki Flores", content.Subtitle);
+        Assert.False(content.SubtitleIsTagline);
+
+        // No artists recorded: just the title.
+        Assert.Null(BumperContent.For(new ProgramEntry(Guid.NewGuid(), "Song", null, clip.DurationTicks, "/m.mp4") { ItemKind = "MusicVideo" }).Subtitle);
+    }
+
+    [Fact]
+    public void AMusicVideosThenLine_NamesItsArtists()
+    {
+        var clip = new ProgramEntry(Guid.NewGuid(), "Saltwater Static", null, TimeSpan.FromMinutes(4).Ticks, "/m.mp4")
+        {
+            ItemKind = "MusicVideo",
+            RawName = "Saltwater Static",
+            Artists = ["Nikki Flores", "The Midnight"],
+        };
+
+        Assert.Equal("Saltwater Static · Nikki Flores, The Midnight", BumperContent.ThenText(clip));
+        Assert.Equal("Saltwater Static", BumperContent.ThenText(new ProgramEntry(Guid.NewGuid(), "Saltwater Static", null, clip.DurationTicks, "/m.mp4") { ItemKind = "MusicVideo", RawName = "Saltwater Static" }));
+    }
+
+    [Theory]
+    [InlineData(1987, "1987")]
+    [InlineData(null, null)]
+    public void AMusicVideo_ShowsOnlyItsYear_OrNothing(int? year, string? expected)
+    {
+        var clip = new ProgramEntry(Guid.NewGuid(), "Song", null, TimeSpan.FromMinutes(4).Ticks, "/m.mp4")
+        {
+            ItemKind = "MusicVideo",
+            RawName = "Song",
+            Year = year,
+            PremiereDate = new DateTime(1987, 3, 9, 0, 0, 0, DateTimeKind.Utc),
+            Genres = ["Rock"],
+        };
+
+        Assert.Equal(expected, BumperContent.For(clip).Details);
+    }
+
     [Theory]
     [InlineData(44, "44 min")]
     [InlineData(60, "1 h")]

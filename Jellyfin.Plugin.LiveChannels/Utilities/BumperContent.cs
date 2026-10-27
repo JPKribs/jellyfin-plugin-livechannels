@@ -26,7 +26,7 @@ internal sealed record BumperContent(string Title, string? Tag, string? Subtitle
     /// 0 is "Special"; of a range only the first episode number is kept, which is the one Jellyfin records), its
     /// own name as the second line, and its series' parental rating (its own only when the series has none). A
     /// movie shows its tagline as the second line. Anything else (a home video, a music video) shows its title and
-    /// details only.
+    /// details only; a music video adds its artists as the second line, and its details are just its year.
     /// </summary>
     /// <param name="program">The item.</param>
     /// <returns>Its card.</returns>
@@ -39,18 +39,22 @@ internal sealed record BumperContent(string Title, string? Tag, string? Subtitle
 
         var title = episode ? Clean(program.SeriesName) ?? name : name;
         var tag = episode ? EpisodeTag(program.SeasonNumber, program.EpisodeNumber) : null;
-        var subtitle = episode ? (string.Equals(name, title, StringComparison.Ordinal) ? null : name) : movie ? Clean(program.Tagline) : null;
+        var subtitle = episode ? (string.Equals(name, title, StringComparison.Ordinal) ? null : name)
+            : movie ? Clean(program.Tagline)
+            : IsMusicVideo(program) ? Artists(program)
+            : null;
         var rating = episode ? Clean(program.SeriesOfficialRating) ?? Clean(program.OfficialRating) : Clean(program.OfficialRating);
         var score = program.CommunityRating is > 0 and <= 10 and var value
             ? value.ToString("0.0", CultureInfo.InvariantCulture)
             : null;
 
-        return new BumperContent(title, tag, subtitle, !episode && subtitle is not null, DetailsLine(program, episode || movie), score, rating);
+        return new BumperContent(title, tag, subtitle, movie && !episode && subtitle is not null, DetailsLine(program, episode || movie), score, rating);
     }
 
     /// <summary>
     /// What the card's "Then" line calls an item: an episode by its series and season and episode
-    /// (<c>The Long Way Home · S2 · E6</c>, or <c>· Special</c>), anything else by its own name.
+    /// (<c>The Long Way Home · S2 · E6</c>, or <c>· Special</c>), a music video by its title and artists
+    /// (<c>Neon Harbor · The Midnight Coast</c>), anything else by its own name.
     /// </summary>
     /// <param name="program">The item that airs after the card's own.</param>
     /// <returns>The line's text.</returns>
@@ -58,6 +62,11 @@ internal sealed record BumperContent(string Title, string? Tag, string? Subtitle
     {
         ArgumentNullException.ThrowIfNull(program);
         var name = Clean(program.RawName) ?? Clean(program.Title) ?? "Untitled";
+        if (IsMusicVideo(program))
+        {
+            return Artists(program) is { } artists ? name + " · " + artists : name;
+        }
+
         if (!IsEpisode(program))
         {
             return name;
@@ -114,10 +123,25 @@ internal sealed record BumperContent(string Title, string? Tag, string? Subtitle
             ? string.Equals(kind, "Episode", StringComparison.Ordinal)
             : program.SeriesId is not null;
 
-    // Year, genres and runtime for an episode or movie; the date and runtime for anything else (a home video's
-    // year alone says little, its date says which trip it was).
+    private static bool IsMusicVideo(ProgramEntry program)
+        => string.Equals(program.ItemKind, "MusicVideo", StringComparison.Ordinal);
+
+    // A music video's artists, as one line: "The Midnight, Nikki Flores".
+    private static string? Artists(ProgramEntry program)
+    {
+        var artists = program.Artists.Select(Clean).OfType<string>().Distinct(StringComparer.Ordinal).ToList();
+        return artists.Count == 0 ? null : string.Join(", ", artists);
+    }
+
+    // Year, genres and runtime for an episode or movie; the year alone for a music video, or nothing without one;
+    // the date and runtime for anything else (a home video's year alone says little, its date says which trip it was).
     private static string? DetailsLine(ProgramEntry program, bool titled)
     {
+        if (IsMusicVideo(program))
+        {
+            return program.Year is { } released and > 0 ? released.ToString(CultureInfo.InvariantCulture) : null;
+        }
+
         var parts = new List<string>();
         if (titled)
         {
