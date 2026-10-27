@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -65,6 +66,10 @@ public sealed partial class RecordingService : IDisposable
 
     // Non-reentrancy gate for the maintenance pass: the heartbeat and the post-create kick may overlap, and a
     // long copy must not stack a second pass behind it.
+    private readonly ConcurrentDictionary<int, (long Generation, IReadOnlyList<ProgramEntry> Programs)> _passPrograms = new();
+
+    // Set only on the recording pass's own flow (see ProgramsFor).
+    private readonly AsyncLocal<bool> _inPass = new();
     private int _running;
 
     // Cancelled at shutdown so a long copy stops instead of holding the server up (its temp file is removed).
@@ -127,6 +132,8 @@ public sealed partial class RecordingService : IDisposable
     // (e.g. an unreadable livetv configuration) so a fault can never kill the heartbeat.
     private async Task RunPassAsync()
     {
+        _passPrograms.Clear();
+        _inPass.Value = true;
         try
         {
             var token = _shutdown.Token;
@@ -152,6 +159,8 @@ public sealed partial class RecordingService : IDisposable
         }
         finally
         {
+            _inPass.Value = false;
+            _passPrograms.Clear();
             Volatile.Write(ref _running, 0);
         }
     }
@@ -168,11 +177,11 @@ public sealed partial class RecordingService : IDisposable
         var byKey = new Dictionary<string, List<SeriesTimerInfo>>(StringComparer.Ordinal);
         foreach (var rule in rules)
         {
-            // Rules whose anchor no longer resolves keep their own identity rather than collapsing blindly.
-            var anchor = Resolve(rule.ProgramId);
-            var key = anchor is null
+            // Rules whose series is not known keep their own identity rather than collapsing blindly.
+            var target = RuleTarget(rule);
+            var key = target is null
                 ? "rule:" + rule.Id
-                : anchor.ChannelId + ":" + (anchor.Slot.Program.SeriesId ?? anchor.Slot.Program.ItemId).ToString("N", CultureInfo.InvariantCulture);
+                : target.Value.ChannelId + ":" + target.Value.Key.ToString("N", CultureInfo.InvariantCulture);
             if (!byKey.TryGetValue(key, out var group))
             {
                 byKey[key] = group = new List<SeriesTimerInfo>();
@@ -206,35 +215,35 @@ public sealed partial class RecordingService : IDisposable
     {
         foreach (var rule in _timers.GetSeriesTimers())
         {
-            var anchor = Resolve(rule.ProgramId);
-            if (anchor is null)
+            var target = RuleTarget(rule);
+            if (target is not { } resolved || _channels.FindChannel(resolved.ChannelId) is not { } channel)
             {
-                _logger.LogDebug("Live Channels: series rule {Id} anchor program no longer resolves; skipping expansion this pass", rule.Id);
+                _logger.LogDebug("Live Channels: series rule {Id} has no resolvable series or channel; skipping expansion this pass", rule.Id);
                 continue;
             }
 
-            var seriesKey = anchor.Slot.Program.SeriesId ?? anchor.Slot.Program.ItemId;
+            var seriesKey = resolved.Key;
             var now = DateTime.UtcNow;
-            var timeline = _channels.BuildTimeline(anchor.Channel, _channels.ResolvePrograms(anchor.Channel), now, now + SeriesLookahead);
+            var timeline = _channels.BuildTimeline(channel, ProgramsFor(channel), now, now + SeriesLookahead);
 
             var created = 0;
             var seenItems = new HashSet<Guid>();
             foreach (var slot in timeline)
             {
                 var program = slot.Program;
-                if ((program.SeriesId ?? program.ItemId) != seriesKey || !MatchesRule(rule, slot.Start) || !seenItems.Add(program.ItemId)
+                if ((program.SeriesId ?? program.ItemId) != seriesKey || !MatchesRule(rule, slot.Start) || (rule.RecordNewOnly && !program.IsNewAt(now)) || !seenItems.Add(program.ItemId)
                     || _timers.IsSeriesItemTaken(rule.Id, program.ItemId))
                 {
                     continue;
                 }
 
-                var programId = anchor.ChannelId + "_" + slot.Start.Ticks.ToString(CultureInfo.InvariantCulture);
+                var programId = resolved.ChannelId + "_" + slot.Start.Ticks.ToString(CultureInfo.InvariantCulture);
                 if (_timers.HasTimerForProgram(programId) || File.Exists(BuildTarget(_fileSystem, options, defaultRoot, program, slot.Start, SourceExtension(program)).File))
                 {
                     continue;
                 }
 
-                var child = BuildChildTimer(rule, anchor.ChannelId, programId, slot);
+                var child = BuildChildTimer(rule, resolved.ChannelId, programId, slot);
                 SetScheduledItem(child, program.ItemId);
                 _timers.SaveTimer(child);
                 if (++created >= MaxChildrenPerRulePass)
@@ -380,7 +389,9 @@ public sealed partial class RecordingService : IDisposable
         {
             // Already produced (an earlier pass crashed between the file landing and the outcome persisting,
             // or a repeat airing of the same episode): adopt it rather than duplicating.
-            _timers.CompleteTimer(timer.Id, RecordingStatus.Completed, target.File);
+            // Not this rule's own recording (it may be a one-off recording of the same episode), so it is never
+            // counted toward, or pruned by, the rule's "keep up to".
+            _timers.CompleteTimer(timer.Id, RecordingStatus.Completed, target.File, adopted: true);
             return;
         }
 
@@ -432,6 +443,38 @@ public sealed partial class RecordingService : IDisposable
 
         await EnsureRecordingLibraryAsync(target).ConfigureAwait(false);
         TriggerRefresh(target.File);
+        EnforceKeepUpTo(timer);
+    }
+
+    // Applies a series rule's "keep up to" limit after it records: its own oldest recordings beyond the limit are
+    // deleted, as Jellyfin's built-in DVR does. Only files this rule produced are touched; a recording is a link to
+    // (or copy of) a library file, so the library item itself is never affected.
+    private void EnforceKeepUpTo(TimerInfo timer)
+    {
+        if (string.IsNullOrEmpty(timer.SeriesTimerId)
+            || _timers.GetSeriesTimers().FirstOrDefault(r => string.Equals(r.Id, timer.SeriesTimerId, StringComparison.Ordinal)) is not { KeepUpTo: > 0 } rule)
+        {
+            return;
+        }
+
+        foreach (var old in _timers.TakeExcessRecordings(rule.Id, rule.KeepUpTo))
+        {
+            if (!File.Exists(old))
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Delete(old);
+                _logger.LogInformation("Live Channels: series rule \"{Name}\" keeps {Keep} recording(s); removed the oldest, {Path}", rule.Name, rule.KeepUpTo, old);
+                TriggerRefresh(old);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Live Channels: could not remove the old recording {Path} for series rule \"{Name}\"", old, rule.Name);
+            }
+        }
     }
 
     /// <summary>
@@ -439,6 +482,133 @@ public sealed partial class RecordingService : IDisposable
     /// a later reschedule (durations healed, channel edited) cannot make it record whatever now airs in its slot.
     /// </summary>
     internal const string ScheduledItemKey = "LiveChannelsItem";
+
+    // A channel's loop, read once per pass and shared by every rule and timer the pass handles. Not pinned in the
+    // channel service's memory (a channel nobody watches holds nothing between passes), and not re-read for each
+    // rule. Only the pass's own flow uses the cache: a timer or rule created from the guide meanwhile (on a request
+    // thread) reads the current loop, so it is never stamped from a loop a guide refresh has since replaced. A save
+    // that clears the schedules mid-pass also retires what the pass cached.
+    private IReadOnlyList<ProgramEntry> ProgramsFor(Channel channel)
+    {
+        if (!_inPass.Value)
+        {
+            return _channels.ResolvePrograms(channel, keepInMemory: false);
+        }
+
+        var generation = ChannelService.CacheGeneration;
+        if (_passPrograms.TryGetValue(channel.Number, out var cached) && cached.Generation == generation)
+        {
+            return cached.Programs;
+        }
+
+        var programs = _channels.ResolvePrograms(channel, keepInMemory: false);
+        _passPrograms[channel.Number] = (generation, programs);
+        return programs;
+    }
+
+    /// <summary>
+    /// Stamps a series rule with the series it records (the item itself for a movie), unless it already carries
+    /// one. Called when the rule is created, the moment the guide entry the user pressed record on is still
+    /// current. The rule's anchor program id is a past slot that a later schedule rebuild can fill with another
+    /// item, so the rule must not keep re-deriving its series from it.
+    /// </summary>
+    /// <param name="rule">The series rule to stamp.</param>
+    public void StampSeriesKey(SeriesTimerInfo rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        if (RuleKey(rule) is not null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (Resolve(rule.ProgramId) is { } resolved)
+            {
+                rule.SeriesId = KeyOf(resolved.Slot.Program).ToString("N", CultureInfo.InvariantCulture);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Unstamped, the rule is matched by name on the next pass (see RuleTarget).
+            _logger.LogDebug(ex, "Live Channels: could not resolve the series for rule \"{Name}\"", rule.Name);
+        }
+    }
+
+    /// <summary>Gets the series (or movie item) a rule is stamped with, or <c>null</c> when it carries none.</summary>
+    /// <param name="rule">The series rule.</param>
+    /// <returns>The key, or <c>null</c>.</returns>
+    internal static Guid? RuleKey(SeriesTimerInfo rule)
+        => Guid.TryParse(rule.SeriesId, out var key) && key != Guid.Empty ? key : null;
+
+    /// <summary>The key a series rule matches airings by: the series for an episode, the item itself otherwise.</summary>
+    /// <param name="program">The program.</param>
+    /// <returns>The key.</returns>
+    internal static Guid KeyOf(ProgramEntry program) => program.SeriesId ?? program.ItemId;
+
+    /// <summary>
+    /// Works out the series a rule created before rules were stamped was meant for. Its anchor slot is used only
+    /// while it still airs a show of the rule's name (the name was copied from the guide entry the user pressed);
+    /// otherwise the show of that name on the channel. <c>null</c> when the name is ambiguous or not on the channel.
+    /// </summary>
+    /// <param name="ruleName">The rule's name.</param>
+    /// <param name="anchorProgram">What the anchor slot airs now, or <c>null</c>.</param>
+    /// <param name="programs">The channel's programs.</param>
+    /// <returns>The key, or <c>null</c>.</returns>
+    internal static Guid? LegacyRuleKey(string? ruleName, ProgramEntry? anchorProgram, IReadOnlyList<ProgramEntry> programs)
+    {
+        if (string.IsNullOrWhiteSpace(ruleName))
+        {
+            return null;
+        }
+
+        bool Named(ProgramEntry p) => string.Equals(GuideName(p), ruleName, StringComparison.OrdinalIgnoreCase);
+        if (anchorProgram is not null && Named(anchorProgram))
+        {
+            return KeyOf(anchorProgram);
+        }
+
+        var keys = programs.Where(Named).Select(KeyOf).Distinct().Take(2).ToList();
+        return keys.Count == 1 ? keys[0] : null;
+    }
+
+    // The name the guide gives a program, which a rule created from it copies: the series for an episode.
+    private static string GuideName(ProgramEntry program)
+        => program.SeriesId.HasValue && !string.IsNullOrWhiteSpace(program.SeriesName) ? program.SeriesName! : program.Title;
+
+    // The channel and series a rule records. A stamped rule needs nothing but its program id's channel; an
+    // unstamped (older) one is matched once by name and then stamped, so it stops depending on its anchor slot.
+    private (string ChannelId, Guid Key)? RuleTarget(SeriesTimerInfo rule)
+    {
+        var parsed = ParseProgramId(rule.ProgramId);
+        var channelId = parsed?.ChannelId ?? rule.ChannelId;
+        if (string.IsNullOrEmpty(channelId))
+        {
+            return null;
+        }
+
+        if (RuleKey(rule) is { } key)
+        {
+            return (channelId, key);
+        }
+
+        var channel = _channels.FindChannel(channelId);
+        if (channel is null)
+        {
+            return null;
+        }
+
+        var programs = ProgramsFor(channel);
+        var anchor = Resolve(rule.ProgramId);
+        if (LegacyRuleKey(rule.Name, anchor?.Slot.Program, programs) is not { } found)
+        {
+            return null;
+        }
+
+        _timers.SetSeriesKey(rule.Id, found.ToString("N", CultureInfo.InvariantCulture));
+        _logger.LogInformation("Live Channels: series rule \"{Name}\" is now pinned to its series", rule.Name);
+        return (channelId, found);
+    }
 
     /// <summary>
     /// Stamps a timer with the library item its program airs right now, unless it already carries one. Called when
@@ -482,8 +652,9 @@ public sealed partial class RecordingService : IDisposable
         timer.ProviderIds[ScheduledItemKey] = itemId.ToString("N", CultureInfo.InvariantCulture);
     }
 
-    // Resolves a guide program id ("<channelId>_<startTicks>") back to its channel and scheduled slot. The
-    // schedule is deterministic (epoch-anchored), so past and future windows both resolve. When the timer
+    // Resolves a guide program id ("<channelId>_<startTicks>") back to its channel and the slot that time holds
+    // in the CURRENT schedule. A rebuild can put a different item into a past slot, so callers that must know
+    // what was scheduled carry their own stamp (the timer's item, the rule's series) rather than trusting it. When the timer
     // carries the item it was scheduled for, that item is what resolves, even if a reschedule since (durations
     // healed, channel edited) moved something else into the slot; see PickSlot.
     private ResolvedProgram? Resolve(string? programId, Guid? scheduledItem = null)
@@ -500,7 +671,7 @@ public sealed partial class RecordingService : IDisposable
             return null;
         }
 
-        var programs = _channels.ResolvePrograms(channel);
+        var programs = ProgramsFor(channel);
         if (programs.Count == 0)
         {
             return null;

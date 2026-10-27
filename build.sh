@@ -69,10 +69,19 @@ validate_resources() {
     log "INFO" "Validating embedded resources exist"
 
     local missing_files=()
-    local config_files=(
-        "$PROJECT_DIR/Configuration/livechannels_channels.html"
-        "$PROJECT_DIR/Configuration/livechannels_channels.js"
-    )
+    local config_files=()
+    local csproj
+    csproj=$(ls "$PROJECT_DIR"/*.csproj | head -1)
+
+    # Every EmbeddedResource the project declares (dashboard pages, scripts, fonts), not a hand-kept subset.
+    while IFS= read -r resource; do
+        config_files+=("$PROJECT_DIR/${resource//\\//}")
+    done < <(sed -nE 's/.*<EmbeddedResource Include="([^"]+)".*/\1/p' "$csproj")
+
+    if [[ ${#config_files[@]} -eq 0 ]]; then
+        log "ERROR" "No EmbeddedResource entries found in $csproj"
+        return 1
+    fi
 
     for file in "${config_files[@]}"; do
         if [[ ! -f "$file" ]]; then

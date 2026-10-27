@@ -93,7 +93,7 @@ The Channel Settings section covers playback, guide tags, episode grouping, cont
 
 | Setting | What it does | Default |
 | --- | --- | --- |
-| **Subtitle burn in** | Bakes a subtitle track into the picture for every viewer. **Never** burns nothing. **Forced only** burns the forced track, switching to the full track when the audio is not your [Default language](#playback). **Always** burns the full track on everything. Subtitles come from the same extracted file Jellyfin's own transcodes use, so the track's bold, italic, and colour markup carries into the picture and attached fonts are honoured. Appearance is styled once on the [Settings tab](#subtitle-appearance). | Never |
+| **Subtitle burn in** | Bakes a subtitle track into the picture for every viewer. **Never** burns nothing. **Forced only** burns the forced track, switching to a full track in your [Default language](#playback) when the audio is tagged with another language (untagged audio, including `und`, burns nothing extra). **Always** burns a forced track when there is one, else a track in your Default language, else the default or first track. A forced track in a language you don't read is skipped in favour of one you do. Picture subtitles (PGS, VOBSUB) are scaled to the picture, so a cropped Blu-ray encode keeps its captions on screen. Subtitles come from the same extracted file Jellyfin's own transcodes use, so the track's bold, italic, and colour markup carries into the picture and attached fonts are honoured. Appearance is styled once on the [Settings tab](#subtitle-appearance). | Never |
 | **Category** | Tags the whole channel in the guide as **News** or **Sports**. Kids is set per rating block, and the movie tag applies automatically while a movie is playing, so a channel can carry up to three tags at once. | None |
 | **Content types** | What airs: **Episodes** (on), **Movies** (on), **Specials** (season 0, off), **Music videos** (on), **Home videos** (off). | see left |
 | **Episodes per block** | Consecutive episodes of one series before moving on. 1 disables grouping. | 1 |
@@ -131,7 +131,7 @@ The Popular tab with its Channel section open.
 | **Loop order** | Shuffle, Alphabetical, or Chronological. | Shuffle |
 
 !!! warning "Privacy and parental controls"
-    The Popular channel is built from the watch history of **every user on the server**, and its guide is shared: anyone who can see Live TV sees the same channel 0 lineup, so its recently played picks reveal what other users have been watching. It also has **no per user parental filtering**: the lineup is picked once for everyone, not per viewer, so a title one user's parental controls would hide in the library can still be on air, and the only content limit the channel applies is its own **Rating limits** setting. On a server shared with children or with users who should not see each other's viewing, set a rating limit here or turn the channel off.
+    The Popular channel is built from the watch history of **every user on the server**, and its guide is shared: anyone who can see Live TV sees the same channel 0 lineup, so its recently played picks reveal what other users have been watching. Because the one lineup airs to everyone, a title only goes on it when **every user with Live TV access** may see it in the library: a title outside one user's libraries, or above their parental controls, is left off for all. On a server shared with users who should not see each other's viewing, turn the channel off.
 
 ---
 
@@ -148,6 +148,8 @@ A session's ffmpeg log goes away with the session. When an encoder fails (produc
 ## Settings tab
 
 Output and playback options that apply to every channel, including the Popular one.
+
+Saving here does not move any channel's schedule. Changing the **Default language** rebuilds the schedules (it chooses each item's audio track), and the rebuild continues from the program on air, so nothing jumps. Encoding changes (resolution, codecs, bitrate) apply to streams started after the save: a stream already playing keeps the format its viewers' players set up for.
 
 The Settings tab with every section collapsed.
 
@@ -234,3 +236,5 @@ The Stress Test section picks a test item and runs the measurement.
 ## Recording (DVR)
 
 There are no plugin settings for recording. Timers and series recordings created from the guide work like the built-in DVR: when a program's air window ends, its library file is materialized (hardlinked on the same volume, copied otherwise) into Jellyfin's Live TV recording folders, honouring the recording paths configured at **Dashboard → Live TV → DVR**.
+
+A series recording keeps the show it was created for, even after the channel's schedule changes. Its options follow the built-in DVR: **Record new episodes only** takes only items added to the library in the last 14 days (the ones the guide marks new), and **Keep up to** deletes that series recording's own oldest recordings beyond the limit (only files it produced; the library items themselves are never touched). **Keep until** and **Skip episodes in library** do not apply: every program is already a library item, and recordings stay until deleted or pruned by Keep up to.

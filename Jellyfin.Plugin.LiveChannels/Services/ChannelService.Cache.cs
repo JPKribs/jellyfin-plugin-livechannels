@@ -58,6 +58,8 @@ public partial class ChannelService
 
     private const string DurationsFileName = "durations.json";
 
+    private const string SupersededExtension = ".superseded";
+
     private readonly JsonFileStore<Dictionary<Guid, ObservedDuration>> _durationsStore;
 
     // One observation: the real playable length, plus the metadata runtime it was recorded against
@@ -185,8 +187,18 @@ public partial class ChannelService
         Interlocked.Increment(ref _cacheGeneration);
 
         // Flush the in-memory hot copies too, so a channel currently on screen does not keep serving its old
-        // schedule (with the old filters) to new tune-ins until the asynchronous guide refresh reaches it.
-        MemorySchedules.Clear();
+        // schedule (with the old filters) to new tune-ins until the asynchronous guide refresh reaches it. They are
+        // kept aside, never served, only so the rebuild can splice onto them (see SupersededLoop).
+        // Superseded copies from an earlier save whose channel was never rebuilt (deleted or disabled since) are
+        // dropped here rather than kept forever; one still owed a rebuild splices from its file on disk instead.
+        SupersededSchedules.Clear();
+        foreach (var number in MemorySchedules.Keys)
+        {
+            if (MemorySchedules.TryRemove(number, out var hot))
+            {
+                SupersededSchedules[number] = hot;
+            }
+        }
 
         var configured = ScheduleDir(paths);
         var active = Volatile.Read(ref _activeScheduleDir);
@@ -222,7 +234,13 @@ public partial class ChannelService
                     continue;
                 }
 
-                if (name.EndsWith(".json", StringComparison.Ordinal) || name.EndsWith(".tmp", StringComparison.Ordinal))
+                // A channel's schedule is set aside rather than deleted: it is no longer served, but the rebuild
+                // splices onto it so what is airing keeps its slot (see SupersededLoop).
+                if (name.EndsWith(".json", StringComparison.Ordinal))
+                {
+                    File.Move(file, Path.ChangeExtension(file, SupersededExtension), overwrite: true);
+                }
+                else if (name.EndsWith(".tmp", StringComparison.Ordinal))
                 {
                     File.Delete(file);
                 }
@@ -261,11 +279,51 @@ public partial class ChannelService
     private string ScheduleFileFor(Channel channel)
         => Path.Combine(_scheduleDir, channel.Number.ToString(CultureInfo.InvariantCulture) + ".json");
 
+    // Where a cleared schedule waits for its rebuild (e.g. .../schedule/0.superseded).
+    private string SupersededFileFor(Channel channel) => Path.ChangeExtension(ScheduleFileFor(channel), SupersededExtension);
+
+    /// <summary>
+    /// The schedule a configuration save set aside for a channel, if its rebuild has not replaced it yet. Never
+    /// served (it may hold the old filters or audio choices); a rebuild only splices onto it, so a save does not
+    /// reshuffle what is airing.
+    /// </summary>
+    /// <param name="channel">The channel.</param>
+    /// <returns>The superseded loop, or <c>null</c>.</returns>
+    internal IReadOnlyList<ProgramEntry>? SupersededLoop(Channel channel)
+    {
+        if (SupersededSchedules.TryGetValue(channel.Number, out var hot))
+        {
+            return hot;
+        }
+
+        var file = SupersededFileFor(channel);
+        return File.Exists(file) ? ReadScheduleFile(file, channel) : null;
+    }
+
+    // Drops a channel's superseded schedule once its rebuild is written.
+    private void ForgetSuperseded(Channel channel)
+    {
+        SupersededSchedules.TryRemove(channel.Number, out _);
+        try
+        {
+            File.Delete(SupersededFileFor(channel));
+        }
+        catch (Exception)
+        {
+            // Best effort: a leftover is replaced by the next clear and never served.
+        }
+    }
+
     private ProgramLoop? TryReadScheduleCache(Channel channel)
+    {
+        var file = ScheduleFileFor(channel);
+        return File.Exists(file) ? ReadScheduleFile(file, channel) : null;
+    }
+
+    private ProgramLoop? ReadScheduleFile(string file, Channel channel)
     {
         try
         {
-            var file = ScheduleFileFor(channel);
             if (!File.Exists(file))
             {
                 return null;

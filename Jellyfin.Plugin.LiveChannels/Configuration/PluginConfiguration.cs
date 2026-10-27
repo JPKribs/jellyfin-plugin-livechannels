@@ -34,7 +34,7 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Gets or sets a value indicating whether to force software encoding and decoding for channel streams, ignoring Jellyfin's hardware acceleration. Slower, but universally compatible across systems, codecs, and media types.</summary>
     public bool DisableHardwareAcceleration { get; set; }
 
-    /// <summary>Gets or sets the viewer's native language, as a three-letter ISO code (e.g. <c>eng</c>). With a channel's subtitle rule set to Forced only, content whose default audio track is not this language burns in subtitles so foreign-language content stays followable.</summary>
+    /// <summary>Gets or sets the viewer's native language, as a three-letter ISO code (e.g. <c>eng</c>). It is the audio language every channel without its own Audio language prefers when choosing an item's track, and with a channel's subtitle rule set to Forced only, content whose chosen audio track is not this language burns in subtitles so foreign-language content stays followable.</summary>
     public string DefaultSubtitleLanguage { get; set; } = "eng";
 
     /// <summary>Gets or sets the font burned-in subtitles are rendered in, by family name (e.g. <c>Arial</c>). Empty uses the subtitle file's own font, falling back to the renderer's default.</summary>

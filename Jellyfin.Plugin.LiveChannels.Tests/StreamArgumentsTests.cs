@@ -486,8 +486,10 @@ public class StreamArgumentsTests
     [Fact]
     public void BitmapSubtitle_UsesOverlayFilter()
     {
+        // The subtitle canvas is scaled to the picture first (a disc's PGS canvas can be taller than a cropped
+        // encode), then overlaid.
         var a = Build(sub: (2, false));
-        Assert.Contains(a, x => x.Contains("[0:s:2]overlay"));
+        Assert.Contains(a, x => x.Contains("[0:s:2][vref]scale=w=rw:h=rh[sub]") && x.Contains("[vmain][sub]overlay"));
     }
 
     [Fact]

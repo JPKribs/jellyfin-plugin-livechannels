@@ -30,9 +30,6 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// </summary>
 public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds, ISupportsDirectStreamProvider, IDisposable
 {
-    // Content added within this window is treated as new (not a repeat) in the guide.
-    private const int NewWindowDays = 14;
-
     // How long a session with no remaining viewers keeps encoding so a viewer surfing back gets an instant
     // re-tune (the warm session is adopted by the next open instead of a fresh encoder cold-starting). The trade
     // is at most this much tail encoding per channel a viewer leaves; the session cap and timeout still bound the total.
@@ -80,6 +77,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     private static readonly TimeSpan RestartInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan HealthyRunReset = TimeSpan.FromMinutes(10);
     private const int MaxProducerRestarts = 10;
+
+    // How long shutdown waits, in total, for every session's producer to stop before deleting its directory.
+    private static readonly TimeSpan ShutdownGrace = TimeSpan.FromSeconds(10);
 
     private readonly ChannelService _channels;
     private readonly StreamSessionService _streams;
@@ -274,6 +274,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <inheritdoc />
     public Task<IEnumerable<ProgramInfo>> GetProgramsAsync(string channelId, DateTime startDateUtc, DateTime endDateUtc, CancellationToken cancellationToken)
     {
+        // A refresh cancelled (server shutting down, the task stopped) before this channel's turn skips its
+        // rebuild instead of resolving the whole library for a result nobody will store.
+        cancellationToken.ThrowIfCancellationRequested();
         var channel = _channels.FindChannel(channelId);
         if (channel is null)
         {
@@ -289,7 +292,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
 
         var schedule = _channels.BuildTimeline(channel, programs, startDateUtc, endDateUtc);
-        var newSince = DateTime.UtcNow.AddDays(-NewWindowDays);
+        var now = DateTime.UtcNow;
 
         var list = new List<ProgramInfo>(schedule.Count);
         foreach (var slot in schedule)
@@ -299,7 +302,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             // For episodes, hand Jellyfin the series as the program name and the episode's own name as the
             // episode title, so the guide renders "Andor — Reckoning · S1E3" instead of a single blurred string.
             var isEpisode = p.SeriesId.HasValue && !string.IsNullOrWhiteSpace(p.SeriesName);
-            var isNew = p.DateAdded >= newSince;
+            var isNew = p.IsNewAt(now);
             list.Add(new ProgramInfo
             {
                 Id = channelId + "_" + slot.Start.Ticks.ToString(CultureInfo.InvariantCulture),
@@ -606,6 +609,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         {
             // Closed by the player or by CloseLiveStream; expected.
         }
+        catch (OutputClosedException ex)
+        {
+            // The segmenter went away under the producer; the session's recovery restarts both if anyone watches.
+            _logger.LogWarning("Live channel {Name}: the stream output closed ({Reason}); the producer stopped", channelName, ex.InnerException?.Message ?? ex.Message);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Live channel {Name}: stream producer failed", channelName);
@@ -621,7 +629,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         // then tear down if nobody returned.
         if (ReleaseConsumer(id, out var session) && session is not null)
         {
-            _ = LingerTeardownAsync(session);
+            _ = LingerTeardownAsync(session, session.LingeringSinceUtc);
         }
 
         return Task.CompletedTask;
@@ -655,7 +663,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     // it succeeds, a viewer adopts the session, or the reaper's over-linger threshold arrives and its sweep takes
     // over as the backstop. One refused attempt must never be the end of it: that left viewerless encoders
     // running for minutes past their countdown.
-    private async Task LingerTeardownAsync(LiveSession session)
+    // Each linger belongs to one "last viewer left" moment: a viewer who came back and left again started a newer
+    // linger with its own full grace, so this older one stands down instead of cutting that grace short.
+    private async Task LingerTeardownAsync(LiveSession session, DateTime? lingeringSince)
     {
         await Task.Delay(LingerGrace).ConfigureAwait(false);
         var handOff = DateTime.UtcNow + (LingerGrace * 2);
@@ -663,7 +673,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         while (true)
         {
             // A re-tune within the grace re-attached a consumer: leave the session running for them.
-            if (session.HasConsumers || session.IsTornDown)
+            if (session.HasConsumers || session.IsTornDown || !LingerIsCurrent(session.LingeringSinceUtc, lingeringSince))
             {
                 return;
             }
@@ -688,6 +698,16 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             await Task.Delay(LingerRetryInterval).ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// Whether a linger started at <paramref name="startedAt"/> is still the session's current one, so it may tear
+    /// the session down. A linger with no recorded start (none was in progress when it began) defers to nothing.
+    /// </summary>
+    /// <param name="current">When the session's current linger began, or <c>null</c> while someone watches.</param>
+    /// <param name="startedAt">When this linger began.</param>
+    /// <returns>Whether this linger is the current one.</returns>
+    internal static bool LingerIsCurrent(DateTime? current, DateTime? startedAt)
+        => startedAt is null || current == startedAt;
 
     /// <summary>
     /// Snapshots every active channel stream for the configuration page's Sessions tab: its id, channel number
@@ -732,7 +752,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     {
         _reaper.Dispose();
 
-        // Stop and clean up every live session still open at shutdown.
+        // Stop and clean up every live session still open at shutdown. Every session is cancelled first, then their
+        // producers are given a bounded moment to wind down (each closes its segmenter and kills its ffmpeg in its
+        // own cleanup) before their directories go: deleting first left ffmpeg writing into a deleted directory, or
+        // orphaned if the host exited before the cleanup ran.
+        var stopping = new List<LiveSession>();
         foreach (var session in DistinctSessions())
         {
             if (!session.MarkTornDown())
@@ -750,6 +774,20 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 // Already finished.
             }
 
+            stopping.Add(session);
+        }
+
+        try
+        {
+            Task.WaitAll(stopping.Select(s => s.Worker).ToArray(), ShutdownGrace);
+        }
+        catch (AggregateException)
+        {
+            // A producer that failed has stopped all the same; its failure was already logged.
+        }
+
+        foreach (var session in stopping)
+        {
             DisposeSession(session);
         }
     }
@@ -957,9 +995,18 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 () => RunProducerAsync(
                     () => _streams.StreamToHlsAsync(channel, session.Path, token, session.Stats, nextSegment, timeline),
                     channel.Name),
-                CancellationToken.None));
+                CancellationToken.None),
+            out var retryAfter);
         if (!restarted)
         {
+            // Refused only for coming too soon after the last attempt: come back then rather than leaving the
+            // viewer on a stalled picture until the next reaper sweep a minute away.
+            if (retryAfter > TimeSpan.Zero)
+            {
+                _ = Task.Delay(retryAfter + TimeSpan.FromMilliseconds(100), CancellationToken.None)
+                    .ContinueWith(_ => TryRestartProducer(session), TaskScheduler.Default);
+            }
+
             return false;
         }
 
@@ -1065,7 +1112,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
 
             if (ReleaseConsumer(id, out var session) && session is not null)
             {
-                _ = LingerTeardownAsync(session);
+                _ = LingerTeardownAsync(session, session.LingeringSinceUtc);
             }
         }
     }
@@ -1545,6 +1592,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <inheritdoc />
     public Task CreateSeriesTimerAsync(SeriesTimerInfo info, CancellationToken cancellationToken)
     {
+        _recordings.StampSeriesKey(info);
         _timers.SaveSeriesTimer(info);
 
         // Expand the rule into its child timers right away (not just on the next heartbeat), so the client
@@ -1563,6 +1611,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <inheritdoc />
     Task<string> ISupportsNewTimerIds.CreateSeriesTimer(SeriesTimerInfo info, CancellationToken cancellationToken)
     {
+        _recordings.StampSeriesKey(info);
         var id = _timers.SaveSeriesTimer(info);
         _recordings.Kick();
         return Task.FromResult(id);
@@ -1907,6 +1956,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         private int _tornDown;
         private long _lastDataTicks;
         private DateTime _lastRestartUtc = DateTime.MinValue;
+        private DateTime? _workerEndedUtc;
 
         public LiveSession(string id, CancellationTokenSource cts, Task worker, string path, string channelName, string channelId, int number, DateTime startedUtc, SessionStats stats)
         {
@@ -2003,29 +2053,59 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
 
         // Starts a replacement producer and attaches it, refusing when the session is gone, when its current
         // producer is still running, when replacements are coming too fast, or when it has already had too many in
-        // a row. A previous replacement that ran for at least healthyRun before dying was a success, so the count
-        // starts over. Done under the lock MarkTornDown takes: the session's token is read and the new worker
-        // attached before any teardown can claim the session, so teardown always waits on (and cancels) the worker
-        // that is actually running. The start delegate must only schedule work, not block.
-        public bool TryRestart(TimeSpan minimumInterval, int maxRestarts, TimeSpan healthyRun, Func<CancellationToken, Task> start, DateTime? nowUtc = null)
+        // a row. A replacement that RAN for at least healthyRun before dying was a success, so the count starts
+        // over; time merely passing since the last attempt is not (a broken pipeline whose viewer stays tuned in
+        // must not earn a fresh budget every few minutes). Done under the lock MarkTornDown takes: the session's
+        // token is read and the new worker attached before any teardown can claim the session, so teardown always
+        // waits on (and cancels) the worker that is actually running. The start delegate must only schedule work,
+        // not block. retryAfter is set when the only reason for refusing is the minimum interval, so the caller can
+        // come back then instead of waiting for the next sweep.
+        public bool TryRestart(TimeSpan minimumInterval, int maxRestarts, TimeSpan healthyRun, Func<CancellationToken, Task> start, out TimeSpan retryAfter, DateTime? nowUtc = null)
         {
             lock (_gate)
             {
                 var now = nowUtc ?? DateTime.UtcNow;
-                if (Restarts > 0 && now - _lastRestartUtc >= healthyRun)
+                retryAfter = TimeSpan.Zero;
+
+                // The worker's end is stamped by its continuation; one that completed but whose continuation has
+                // not run yet ended just now.
+                if (Restarts > 0 && Worker.IsCompleted && (_workerEndedUtc ?? now) - _lastRestartUtc >= healthyRun)
                 {
                     Restarts = 0;
                 }
 
-                if (IsTornDown || !Worker.IsCompleted || Restarts >= maxRestarts || now - _lastRestartUtc < minimumInterval)
+                if (IsTornDown || !Worker.IsCompleted || Restarts >= maxRestarts)
                 {
                     return false;
                 }
 
+                if (now - _lastRestartUtc < minimumInterval)
+                {
+                    retryAfter = minimumInterval - (now - _lastRestartUtc);
+                    return false;
+                }
+
                 _lastRestartUtc = now;
+                _workerEndedUtc = null;
                 Restarts++;
-                Worker = start(Cts.Token);
+                var worker = start(Cts.Token);
+                Worker = worker;
+                var injected = nowUtc.HasValue;
+                _ = worker.ContinueWith(_ => MarkWorkerEnded(worker, injected ? now : DateTime.UtcNow), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                 return true;
+            }
+        }
+
+        // Records when a replacement producer stopped, which TryRestart compares with when it started to tell a
+        // healthy run from a quick failure. Ignored for a worker that has since been replaced.
+        internal void MarkWorkerEnded(Task worker, DateTime endedUtc)
+        {
+            lock (_gate)
+            {
+                if (ReferenceEquals(worker, Worker))
+                {
+                    _workerEndedUtc = endedUtc;
+                }
             }
         }
 

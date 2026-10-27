@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using Jellyfin.Data;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
@@ -115,6 +116,12 @@ public partial class ChannelService
         // the random picks rotate over time. Includes the day so the rotation is stable within a refresh cycle.
         var seed = PopularChannelId + ":" + DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
 
+        // The one lineup airs to everyone who can watch Live TV, so a title goes on it only if every one of them
+        // may see it in the library: IsVisibleStandalone checks the user's parental controls AND that the title's
+        // library is one they can open (IsVisible alone checks only the parental controls), so nobody learns of a
+        // title, through the guide, that their own account hides from them.
+        var viewers = users.Where(u => u.HasPermission(PermissionKind.EnableLiveTvAccess)).ToList();
+
         // Keep only the candidates the channel's rating band allows, so the rating cap applies to the bucket
         // selection itself. The queries over-fetch so a tight cap still leaves enough to fill the quotas.
         List<Guid> Ids(IReadOnlyList<BaseItem> found)
@@ -122,7 +129,8 @@ public partial class ChannelService
             var ids = new List<Guid>();
             foreach (var item in found)
             {
-                if (!RatingSchedule.AllowedByAnyWindow(ratingBlocks, item.InheritedParentalRatingValue))
+                if (!RatingSchedule.AllowedByAnyWindow(ratingBlocks, item.InheritedParentalRatingValue)
+                    || !viewers.All(u => item.IsVisibleStandalone(u)))
                 {
                     continue;
                 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Jellyfin.Plugin.LiveChannels.Configuration;
 using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Services;
 using MediaBrowser.Common.Configuration;
@@ -67,7 +68,78 @@ public sealed class ScheduleCacheInvalidationTests : IDisposable
         Assert.False(File.Exists(stale));
         Assert.False(File.Exists(strayTemp));
         Assert.True(File.Exists(durations));
+        Assert.True(File.Exists(Path.ChangeExtension(stale, ".superseded")));
     }
+
+    [Fact]
+    public void ASave_SetsTheScheduleAside_SoTheRebuildKeepsWhatIsAiring()
+    {
+        // A save used to delete the cached loop, so the rebuild had nothing to splice onto and the guide (and every
+        // live viewer) jumped to an unrelated programme. The loop is now set aside, never served, and the rebuild
+        // continues from the programme on air.
+        var paths = PathsAt(Path.Combine(_root, "splice"));
+        var service = Create(paths);
+        var channel = new Channel { Number = 4, Name = "Four" };
+        var epoch = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var a = Entry("A");
+        var b = Entry("B");
+        var c = Entry("C");
+        Assert.True(service.WriteScheduleCache(channel, new ProgramLoop(new List<ProgramEntry> { a, b, c }, epoch), ChannelService.CacheGeneration));
+
+        ChannelService.ClearScheduleCache(paths);
+        Assert.False(File.Exists(Path.Combine(ChannelService.ScheduleDir(paths), "4.json")));
+
+        var setAside = service.SupersededLoop(channel);
+        Assert.NotNull(setAside);
+
+        // 01:30 into the loop B is on air (started 01:00). The rebuild reorders the loop; B must keep its slot.
+        var now = epoch.AddHours(1.5);
+        var rebuilt = service.Splice(channel, setAside, new List<ProgramEntry> { c, a, b }, now);
+        var airing = service.BuildTimeline(channel, rebuilt, now, now.AddTicks(1))[0];
+        Assert.Equal(b.ItemId, airing.Program.ItemId);
+        Assert.Equal(epoch.AddHours(1), airing.Start);
+    }
+
+    [Fact]
+    public void WithoutASave_NothingIsSetAside()
+    {
+        var paths = PathsAt(Path.Combine(_root, "none"));
+        var service = Create(paths);
+        Assert.Null(service.SupersededLoop(new Channel { Number = 9, Name = "Nine" }));
+    }
+
+    [Fact]
+    public void PluginWideSettings_DoNotInvalidateSchedules()
+    {
+        var stored = new PluginConfiguration { Channels = { new Channel { Id = "a", Name = "A", Number = 1 } } };
+        var incoming = new PluginConfiguration { Channels = { new Channel { Id = "a", Name = "A", Number = 1 } }, TranscodeVideoBitrateKbps = 8000, SubtitleBold = true };
+        Assert.False(Plugin.InvalidatesSchedules(incoming, stored));
+    }
+
+    [Fact]
+    public void ChannelLanguageAndDirectoryChanges_InvalidateSchedules()
+    {
+        PluginConfiguration Base() => new() { Channels = { new Channel { Id = "a", Name = "A", Number = 1 } }, DefaultSubtitleLanguage = "eng" };
+
+        var language = Base();
+        language.DefaultSubtitleLanguage = "jpn";
+        Assert.True(Plugin.InvalidatesSchedules(language, Base()));
+
+        var sameLanguage = Base();
+        sameLanguage.DefaultSubtitleLanguage = "ENG ";
+        Assert.False(Plugin.InvalidatesSchedules(sameLanguage, Base()));
+
+        var directory = Base();
+        directory.StreamDirectory = "/srv/streams";
+        Assert.True(Plugin.InvalidatesSchedules(directory, Base()));
+
+        var edited = Base();
+        edited.Channels[0].Name = "B";
+        Assert.True(Plugin.InvalidatesSchedules(edited, Base()));
+    }
+
+    private static ProgramEntry Entry(string title)
+        => new(Guid.NewGuid(), title, null, TimeSpan.FromHours(1).Ticks, "/" + title + ".mkv");
 
     private static ProgramLoop Loop()
         => new(new List<ProgramEntry> { new(Guid.NewGuid(), "m", null, TimeSpan.FromHours(1).Ticks, "/m.mkv") }, null);

@@ -79,17 +79,26 @@ public class EncoderResolverTests
         => Assert.Null(Resolver("nvenc").ResolveVideo(VideoCodec.H264, true).DecodeHwaccel);
 
     [Fact]
-    public void ResolveVideo_Qsv_HardwareDecodes_WithDownload_Allowing10Bit()
+    public void ResolveVideo_Qsv_NeverAsksForQsvHwaccelDecoding()
     {
-        // QSV keeps decoded frames on the GPU, so it must set an output format and a leading hwdownload that
-        // brings them back for the software scale (the per-item and continuous paths fall back to software). The
-        // download must accept p010le so a 10-bit source (most HEVC, all 4K HDR) keeps hardware-decoding instead
-        // of collapsing to a software decode that cannot hold realtime.
+        // "-hwaccel qsv" does not make ffmpeg's built-in decoders decode on the GPU, so it decoded in software and
+        // the leading hwdownload then failed every item before a software retry. Without a render node (Windows,
+        // macOS) the profile decodes in software outright; with one (Linux) it decodes on VAAPI like the
+        // GPU-resident pipeline, keeping p010le so 10-bit sources stay on the GPU.
         var profile = Resolver("qsv").ResolveVideo(VideoCodec.H264, true);
-        Assert.Equal("qsv", profile.DecodeHwaccel);
-        Assert.Equal("qsv", profile.DecodeOutputFormat);
-        Assert.Contains("hwdownload", profile.DecodeDownload, StringComparison.Ordinal);
-        Assert.Contains("p010le", profile.DecodeDownload, StringComparison.Ordinal);
+        Assert.NotEqual("qsv", profile.DecodeHwaccel);
+        if (OperatingSystem.IsLinux())
+        {
+            Assert.Equal("vaapi", profile.DecodeHwaccel);
+            Assert.Equal("vaapi", profile.DecodeOutputFormat);
+            Assert.Contains("p010le", profile.DecodeDownload, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Null(profile.DecodeHwaccel);
+            Assert.Null(profile.DecodeOutputFormat);
+            Assert.Equal(string.Empty, profile.DecodeDownload);
+        }
     }
 
     [Fact]

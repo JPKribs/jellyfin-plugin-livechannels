@@ -22,8 +22,12 @@ public sealed class SegmentConcatStream : Stream
     private readonly Func<int> _holdBehind;
     private readonly Action<string>? _log;
     private readonly Action? _onData;
+    // How many read errors in a row on one segment are retried before it is given up on.
+    private const int MaxReadErrors = 3;
+
     private FileStream? _segment;
     private long _number = -1;
+    private int _readErrors;
     private long _firstNumber = -1;
     private long _lastServed = -1;
     private long _bytesServed;
@@ -87,6 +91,12 @@ public sealed class SegmentConcatStream : Stream
     /// <inheritdoc />
     public override int Read(Span<byte> buffer)
     {
+        // An empty request reads nothing; treating its zero as end of segment would skip the rest of the segment.
+        if (buffer.IsEmpty)
+        {
+            return 0;
+        }
+
         while (true)
         {
             if (_segment is not null)
@@ -95,6 +105,14 @@ public sealed class SegmentConcatStream : Stream
                 try
                 {
                     read = _segment.Read(buffer);
+                    _readErrors = 0;
+                }
+                catch (IOException) when (++_readErrors < MaxReadErrors)
+                {
+                    // A transient read error (a busy disk, a network share hiccup) keeps the segment and its position:
+                    // the caller retries, so the reader resumes mid-segment instead of jumping past the rest of it and
+                    // cutting a packet in half. Only a segment that keeps failing is given up on below.
+                    return 0;
                 }
                 catch (IOException)
                 {
@@ -108,6 +126,8 @@ public sealed class SegmentConcatStream : Stream
                     _onData?.Invoke();
                     return read;
                 }
+
+                _readErrors = 0;
 
                 // The segmenter's temp_file flag renames each segment into place only when complete, so a
                 // visible segment never grows: end of file here is final, move on to the next segment.

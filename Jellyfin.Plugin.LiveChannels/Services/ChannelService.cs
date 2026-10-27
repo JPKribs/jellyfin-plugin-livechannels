@@ -49,6 +49,15 @@ public partial class ChannelService
     // that happens to be on screen.
     private static readonly ConcurrentDictionary<int, IReadOnlyList<ProgramEntry>> MemorySchedules = new();
 
+    // Hot copies a configuration save took out of service, kept only until each channel's rebuild splices onto it.
+    private static readonly ConcurrentDictionary<int, IReadOnlyList<ProgramEntry>> SupersededSchedules = new();
+
+    // Per channel, how many loops a refresh has written, so a disk read that started before a refresh cannot pin
+    // the loop it read over the one the refresh just wrote.
+    private static readonly ConcurrentDictionary<int, long> ScheduleVersions = new();
+
+    private static long ScheduleVersion(int channelNumber) => ScheduleVersions.TryGetValue(channelNumber, out var v) ? v : 0;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="ChannelService"/> class.
     /// </summary>
@@ -127,8 +136,11 @@ public partial class ChannelService
     /// <see cref="ReleaseFromMemory"/>), so repeat tune-ins skip even the disk read and JSON parse.
     /// </summary>
     /// <param name="channel">The channel to resolve.</param>
+    /// <param name="keepInMemory">Whether a loop read from disk stays in memory. Background readers (the recording
+    /// heartbeat) pass <c>false</c>, so a channel nobody watches holds nothing in memory just because a series rule
+    /// looks at it every minute.</param>
     /// <returns>The ordered program loop.</returns>
-    public IReadOnlyList<ProgramEntry> ResolvePrograms(Channel channel)
+    public IReadOnlyList<ProgramEntry> ResolvePrograms(Channel channel, bool keepInMemory = true)
     {
         ArgumentNullException.ThrowIfNull(channel);
         if (MemorySchedules.TryGetValue(channel.Number, out var hot))
@@ -136,7 +148,10 @@ public partial class ChannelService
             return hot;
         }
 
+        // Captured before the read: a guide refresh that writes a newer loop while this read is under way bumps the
+        // channel's version, and this (older) loop is then returned but not pinned over the refreshed one.
         var generation = CacheGeneration;
+        var version = ScheduleVersion(channel.Number);
         var stopwatch = Stopwatch.StartNew();
         var cached = TryReadScheduleCache(channel);
         var programs = (IReadOnlyList<ProgramEntry>?)cached ?? RefreshPrograms(channel);
@@ -158,7 +173,7 @@ public partial class ChannelService
 
         // A configuration save that landed during the load has already cleared the cache; pinning this pre-save
         // schedule would serve it to every later tune-in until the next guide refresh.
-        if (CacheGeneration == generation)
+        if (keepInMemory && CacheGeneration == generation && (cached is null || ScheduleVersion(channel.Number) == version))
         {
             MemorySchedules[channel.Number] = programs;
         }
@@ -179,9 +194,20 @@ public partial class ChannelService
     {
         ArgumentNullException.ThrowIfNull(channel);
         var generation = CacheGeneration;
+
+        // Build from the configuration as it stands now, after the generation was captured: a caller's copy of the
+        // channel may predate a save, and a loop built from it would otherwise be cached under the new generation.
+        // A save landing after this point changes the generation, and the result is then not cached.
+        if (Plugin.Instance is not null && FindChannel(channel.Id) is { } current)
+        {
+            channel = current;
+        }
+
+        // The loop to splice onto: the one in service, else the one a configuration save set aside, so a save
+        // (a channel edit, a language change) does not move what is airing either.
         IReadOnlyList<ProgramEntry>? previous = MemorySchedules.TryGetValue(channel.Number, out var hotPrevious)
             ? hotPrevious
-            : TryReadScheduleCache(channel);
+            : (IReadOnlyList<ProgramEntry>?)TryReadScheduleCache(channel) ?? SupersededLoop(channel);
         var programs = Splice(channel, previous, BuildPrograms(channel), DateTime.UtcNow);
 
         // A build takes seconds (tens of seconds on a large channel); a configuration save during it means this loop
@@ -190,6 +216,9 @@ public partial class ChannelService
         {
             return programs;
         }
+
+        ForgetSuperseded(channel);
+        ScheduleVersions.AddOrUpdate(channel.Number, 1, (_, v) => v + 1);
 
         // Update the hot copy only for a channel that is already hot (someone is watching it, or it was tuned
         // recently), so its live viewers see the fresh schedule without a disk round-trip. A channel that is

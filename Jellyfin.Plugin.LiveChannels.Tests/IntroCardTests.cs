@@ -67,6 +67,7 @@ public class IntroCardTests
         // With a logo and a font, the caption is drawn onto the logo line and fades in with it; without a font
         // the logo still renders, just uncaptioned.
         var logo = Path.GetTempFileName();
+        File.WriteAllBytes(logo, new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A }); // the card only draws a real image
         var font = Path.GetTempFileName();
         try
         {
@@ -85,5 +86,58 @@ public class IntroCardTests
             File.Delete(font);
         }
         Assert.Contains("-t " + IntroService.IntroSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture), joined, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("png")]
+    [InlineData("jpeg")]
+    [InlineData("webp")]
+    [InlineData("gif")]
+    public void EveryLogoType_OpensWithTheCardsInputOptions(string extension)
+    {
+        var ff = FfmpegHarness.Instance;
+        if (ff is null)
+        {
+            return;
+        }
+
+        var dir = Path.Combine(Path.GetTempPath(), "lc-logo-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var logo = Path.Combine(dir, "logo." + extension);
+            ff.Exec("-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=256x256:d=0.1", "-frames:v", "1", logo);
+
+            // The logo's own input options, exactly as the card render passes them, decoding one second of it.
+            var args = IntroService.BuildSourceArguments(logo, new LineStrips(Path.Combine(dir, "strip"), 1280, 720), Path.Combine(dir, "out.mp4"));
+            var end = args.IndexOf(logo) + 1;
+            var start = args.IndexOf("-y") + 1;
+            var input = args.Skip(start).Take(end - start).Concat(new[] { "-t", "1", "-f", "null", "-" }).ToList();
+            var (exit, _, err) = FfmpegHarness.Run(ff.Ffmpeg, new[] { "-v", "error" }.Concat(input), timeoutSeconds: 30);
+            Assert.True(exit == 0, extension + " logo failed to open: " + err);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AFileThatIsNotAnImage_IsNeverHandedToFfmpegAsTheLogo()
+    {
+        // A logo stored before logos were checked could be anything; one that is not a real image is left off the
+        // card rather than given to ffmpeg to guess at (a playlist ffmpeg would fetch, for one).
+        var logo = Path.GetTempFileName();
+        File.WriteAllText(logo, "#EXTM3U\nhttp://127.0.0.1:9/x.ts\n");
+        try
+        {
+            var joined = string.Join(" ", IntroService.BuildSourceArguments(logo, new LineStrips(Path.Combine(Path.GetTempPath(), "lc-card"), 1280, 720), "/tmp/out.mp4", null));
+            Assert.DoesNotContain(logo, joined, StringComparison.Ordinal);
+            Assert.DoesNotContain("[logo]", joined, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(logo);
+        }
     }
 }

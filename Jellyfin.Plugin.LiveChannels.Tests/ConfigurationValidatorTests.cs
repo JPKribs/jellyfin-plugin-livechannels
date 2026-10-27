@@ -79,11 +79,48 @@ public class ConfigurationValidatorTests
     }
 
     [Fact]
-    public void ValidBase64Logo_DoesNotThrow()
+    public void APngLogo_IsAccepted_AndTypedFromItsBytes()
     {
         var channel = Ch(1);
-        channel.LogoData = Convert.ToBase64String(new byte[] { 1, 2, 3, 4 });
+        channel.LogoData = Convert.ToBase64String(new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13 });
+        channel.LogoContentType = "image/jpeg"; // wrong: the bytes decide
         ConfigurationValidator.Validate(WithChannels(channel));
+        Assert.Equal("image/png", channel.LogoContentType);
+    }
+
+    [Theory]
+    [InlineData(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 }, "image/jpeg")]
+    [InlineData(new byte[] { (byte)'R', (byte)'I', (byte)'F', (byte)'F', 0, 0, 0, 0, (byte)'W', (byte)'E', (byte)'B', (byte)'P' }, "image/webp")]
+    [InlineData(new byte[] { (byte)'G', (byte)'I', (byte)'F', (byte)'8', (byte)'9', (byte)'a' }, "image/gif")]
+    public void OtherImageLogos_AreTypedFromTheirBytes(byte[] bytes, string type)
+        => Assert.Equal(type, ConfigurationValidator.ImageContentType(bytes));
+
+    [Theory]
+    [InlineData("#EXTM3U\nhttp://example.com/x.ts\n")] // a playlist ffmpeg would fetch
+    [InlineData("ffconcat version 1.0\nfile '/etc/passwd'\n")]
+    [InlineData("\u0001\u0002\u0003\u0004")]
+    public void ALogoThatIsNotAnImage_IsRefused(string content)
+    {
+        var channel = Ch(1);
+        channel.LogoData = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(content));
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(WithChannels(channel)));
+    }
+
+    [Fact]
+    public void AnOlderLogoOfAnotherType_DoesNotBlockAnUnrelatedSave()
+    {
+        // A BMP logo saved by an earlier version stays as it is; only a newly set logo must be a known image.
+        var bmp = Convert.ToBase64String(new byte[] { (byte)'B', (byte)'M', 0, 0, 0, 0 });
+        var stored = WithChannels(Ch(1));
+        stored.Channels[0].LogoData = bmp;
+        var incoming = WithChannels(Ch(1));
+        incoming.Channels[0].LogoData = bmp;
+        incoming.TranscodeVideoBitrateKbps = 6000;
+        ConfigurationValidator.Validate(incoming, stored);
+
+        var replaced = WithChannels(Ch(1));
+        replaced.Channels[0].LogoData = Convert.ToBase64String(new byte[] { (byte)'B', (byte)'M', 1, 1, 1, 1 });
+        Assert.Throws<ArgumentException>(() => ConfigurationValidator.Validate(replaced, stored));
     }
 
     [Fact]

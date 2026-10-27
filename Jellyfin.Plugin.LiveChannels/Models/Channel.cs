@@ -36,7 +36,7 @@ public class Channel
     /// <summary>Gets or sets the libraries (with optional genre or item filters) the channel pulls from. Content is the union of all sources.</summary>
     public List<LibrarySource> Sources { get; set; } = new();
 
-    /// <summary>Gets or sets the required default-audio-track language, as a three-letter ISO code (e.g. <c>eng</c>, <c>jpn</c>). Empty means all languages are allowed; otherwise only content whose default audio track is this language is included.</summary>
+    /// <summary>Gets or sets the channel's audio language, as a three-letter ISO code (e.g. <c>eng</c>, <c>jpn</c>). Empty means all languages are allowed and the plugin-wide default language is preferred; otherwise each item plays its track in this language (the default one in it, else the first) and items with no track in it are left out.</summary>
     public string AudioLanguage { get; set; } = string.Empty;
 
     /// <summary>Gets or sets the minimum official/parental rating allowed, by name (e.g. <c>TV-MA</c>). Empty means no floor. Legacy single-band field; superseded by <see cref="RatingBlocks"/> and migrated into an all-day block when no blocks are set.</summary>

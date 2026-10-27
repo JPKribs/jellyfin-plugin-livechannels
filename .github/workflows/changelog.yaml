@@ -5,7 +5,6 @@ on:
     branches:
       - master
     paths-ignore:
-      - build.yaml
       - '**/*.md'
       - 'docs/**'
       - 'mkdocs.yml'
@@ -14,9 +13,6 @@ on:
       - '.github/**'
       - '.gitignore'
   workflow_dispatch:
-  repository_dispatch:
-    types:
-      - update-prep-command
 
 permissions:
   contents: write
@@ -27,12 +23,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: 10.0.x
 
@@ -122,6 +118,9 @@ jobs:
                   if isinstance(items, list):
                       output.append(f"\n## {category.capitalize()}")
                       for item in items:
+                          # An entry containing ": " parses as a one-key mapping; print it as the text it was.
+                          if isinstance(item, dict):
+                              item = "; ".join(f"{k}: {v}" for k, v in item.items())
                           output.append(f"- {item}")
 
           print('\n'.join(output))

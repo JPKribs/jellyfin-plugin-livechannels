@@ -21,7 +21,10 @@ public class RestartBudgetTests
         => new("lc_test", new CancellationTokenSource(), Task.CompletedTask, "/tmp/lc_test", "Test", "chan", 1, T0, new SessionStats());
 
     private static bool Restart(LiveChannelsTvService.LiveSession session, DateTime now)
-        => session.TryRestart(Interval, 3, Healthy, _ => Task.CompletedTask, now);
+        => session.TryRestart(Interval, 3, Healthy, _ => Task.CompletedTask, out _, now);
+
+    // Stamps when the session's current (already completed) replacement stopped, as its continuation does live.
+    private static void Ended(LiveChannelsTvService.LiveSession session, DateTime at) => session.MarkWorkerEnded(session.Worker, at);
 
     [Fact]
     public void QuickFailures_StopAtTheCap()
@@ -44,6 +47,47 @@ public class RestartBudgetTests
     }
 
     [Fact]
+    public void ARefusalForComingTooSoon_SaysWhenToComeBack()
+    {
+        var session = DeadSession();
+        Assert.True(Restart(session, T0));
+        Assert.False(session.TryRestart(Interval, 3, Healthy, _ => Task.CompletedTask, out var retryAfter, T0.AddSeconds(2)));
+        Assert.Equal(TimeSpan.FromSeconds(3), retryAfter);
+    }
+
+    [Fact]
+    public void AnExhaustedBudget_SaysNothingAboutComingBack()
+    {
+        var session = DeadSession();
+        Assert.True(Restart(session, T0));
+        Assert.True(Restart(session, T0.AddSeconds(6)));
+        Assert.True(Restart(session, T0.AddSeconds(12)));
+        Assert.False(session.TryRestart(Interval, 3, Healthy, _ => Task.CompletedTask, out var retryAfter, T0.AddSeconds(14)));
+        Assert.Equal(TimeSpan.Zero, retryAfter);
+    }
+
+    [Fact]
+    public void TimePassing_DoesNotRefillTheBudget()
+    {
+        // Every replacement died at once; the viewer stayed tuned in and the reaper keeps asking. However long it
+        // waits, quick failures never count as a healthy run, so the session is never restarted again.
+        var session = DeadSession();
+        Assert.True(Restart(session, T0));
+        Ended(session, T0.AddSeconds(1));
+        Assert.True(Restart(session, T0.AddSeconds(6)));
+        Ended(session, T0.AddSeconds(7));
+        Assert.True(Restart(session, T0.AddSeconds(12)));
+        Ended(session, T0.AddSeconds(13));
+
+        for (var minutes = 1; minutes <= 120; minutes++)
+        {
+            Assert.False(Restart(session, T0.AddMinutes(minutes)));
+        }
+
+        Assert.Equal(3, session.Restarts);
+    }
+
+    [Fact]
     public void AHealthyRun_ClearsTheCount()
     {
         var session = DeadSession();
@@ -53,6 +97,7 @@ public class RestartBudgetTests
 
         // The third replacement ran for eleven minutes before dying: a success, so the budget starts over.
         var later = T0.AddSeconds(12) + Healthy + TimeSpan.FromMinutes(1);
+        Ended(session, later);
         Assert.True(Restart(session, later));
         Assert.Equal(1, session.Restarts);
         Assert.True(Restart(session, later.AddSeconds(6)));

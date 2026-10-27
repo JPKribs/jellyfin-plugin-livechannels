@@ -79,7 +79,10 @@ public partial class ChannelService
     /// <returns>The chosen track and its ordinal, or <c>null</c>.</returns>
     internal static (int Ordinal, MediaStream Stream)? ChooseAudio(IReadOnlyList<MediaStream> streams, string? preferredLanguage)
     {
-        var audio = streams.Where(s => s.Type == MediaStreamType.Audio).OrderBy(s => s.Index).ToList();
+        // Only tracks inside the item's own file: an external audio file (a sidecar dub) is listed among the
+        // item's streams too, but the producer maps audio from the main file alone, so choosing one would map
+        // nothing and play the item silent.
+        var audio = streams.Where(IsEmbeddedAudio).OrderBy(s => s.Index).ToList();
         if (audio.Count == 0)
         {
             return null;
@@ -123,11 +126,21 @@ public partial class ChannelService
         return x.Length > 0 && string.Equals(x, y, StringComparison.OrdinalIgnoreCase);
     }
 
-    // A language tag as an ISO 639-2 terminology code where one is known, else the tag itself, lower case.
+    /// <summary>
+    /// Whether a language tag names an actual language. Empty, and the ISO 639-2 codes that say there is none to
+    /// name (<c>und</c> undetermined, which ffprobe reports for untagged tracks; <c>zxx</c> no linguistic content;
+    /// <c>mul</c> multiple; <c>mis</c> uncoded), do not.
+    /// </summary>
+    /// <param name="tag">The tag.</param>
+    /// <returns>Whether it names a language.</returns>
+    internal static bool IsTaggedLanguage(string? tag) => NormalizeLanguage(tag).Length > 0;
+
+    // A language tag as an ISO 639-2 terminology code where one is known, else the tag itself, lower case. Empty
+    // for a tag that names no language (see IsTaggedLanguage), so such a tag never matches anything.
     private static string NormalizeLanguage(string? tag)
     {
         var code = (tag ?? string.Empty).Trim().Split('-', '_')[0].ToLowerInvariant();
-        if (code.Length == 0)
+        if (code.Length == 0 || code is "und" or "zxx" or "mul" or "mis" or "unknown")
         {
             return string.Empty;
         }
@@ -181,12 +194,22 @@ public partial class ChannelService
                 IsForced = s.IsForced,
                 IsDefault = s.IsDefault,
                 IsText = s.IsTextSubtitleStream,
-                IsExternal = s.IsExternal
+                IsExternal = s.IsExternal,
+                Language = s.Language
             };
         }
 
         return infos;
     }
+
+    /// <summary>A display rotation as 0, 90, 180 or 270 degrees (negative and over-full turns folded in).</summary>
+    /// <param name="degrees">The rotation Jellyfin probed, or <c>null</c>.</param>
+    /// <returns>The normalised rotation.</returns>
+    internal static int NormalizeRotation(int? degrees)
+        => degrees is { } d ? (((d % 360) + 360) % 360 + 45) / 90 % 4 * 90 : 0;
+
+    // An audio track inside the item's own file, the only kind the producer can map.
+    private static bool IsEmbeddedAudio(MediaStream stream) => stream.Type == MediaStreamType.Audio && !stream.IsExternal;
 
     // Whether an item has audio in the channel's required language (an ISO 639 code): the track it would play,
     // chosen with that language preferred (see ChooseAudio), is in it. An empty language allows everything. An item
@@ -639,9 +662,10 @@ public partial class ChannelService
             PremiereDate = item.PremiereDate,
             IsHdr = ComputeIsHdr(video),
             DefaultAudioOrdinal = defaultAudio?.Ordinal ?? 0,
-            IsVideoOnly = video is not null && !streams.Any(s => s.Type == MediaStreamType.Audio),
+            IsVideoOnly = video is not null && !streams.Any(IsEmbeddedAudio),
             SourceVideoCodec = video?.Codec,
             SourceColorSpace = video?.ColorSpace,
+            SourceRotation = NormalizeRotation(video?.Rotation),
             SourceAudioCodec = defaultAudio?.Stream.Codec,
             SourceAudioChannels = defaultAudio?.Stream.Channels,
             DefaultAudioLanguage = defaultAudio?.Stream.Language,

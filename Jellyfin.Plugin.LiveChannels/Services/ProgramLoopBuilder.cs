@@ -37,10 +37,12 @@ public readonly record struct ChannelLoopOptions(
 /// </summary>
 public static class ProgramLoopBuilder
 {
-    // Trailing part markers: "Title (2)", "Title [2]", "Title - Part 2", "Title Pt. 2".
+    // Trailing part markers: "Title (2)", "Title [2]", "Title - Part 2", "Title Pt. 2". Non-backtracking, so the
+    // match runs in time linear in the title however it is written (a backtracking match of this pattern grows with
+    // the square of the title's length).
     private static readonly Regex PartSuffix = new(
         @"^(?<base>.*?)[\s:\-]*(?:\((?<n1>\d{1,2})\)|\[(?<n2>\d{1,2})\]|(?:part|pt\.?)\s*(?<n3>\d{1,2}))\s*$",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        RegexOptions.IgnoreCase | RegexOptions.NonBacktracking);
 
     /// <summary>
     /// Builds the ordered program loop.
@@ -255,7 +257,7 @@ public static class ProgramLoopBuilder
 
     // Splits a title into its base and trailing part number (e.g. "The Trap (1)" -> "The Trap", 1). False when the
     // name has no part marker. A short, non-empty base guards against false matches.
-    private static bool TryParsePart(string? name, out string baseTitle, out int part)
+    internal static bool TryParsePart(string? name, out string baseTitle, out int part)
     {
         baseTitle = string.Empty;
         part = 0;

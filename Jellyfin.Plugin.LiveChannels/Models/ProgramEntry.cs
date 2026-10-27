@@ -87,6 +87,17 @@ public sealed class ProgramEntry
     /// <summary>Gets the date the item was added to the library, used to flag recently-added content as new in the guide.</summary>
     public DateTime DateAdded { get; init; }
 
+    /// <summary>
+    /// How recently an item must have been added to the library for the guide to call it new (a premiere rather
+    /// than a repeat), and for a "new episodes only" series recording to take it.
+    /// </summary>
+    public static readonly TimeSpan NewWindow = TimeSpan.FromDays(14);
+
+    /// <summary>Whether the item counts as new at the given time (see <see cref="NewWindow"/>).</summary>
+    /// <param name="nowUtc">The time.</param>
+    /// <returns>Whether it is new.</returns>
+    public bool IsNewAt(DateTime nowUtc) => DateAdded >= nowUtc - NewWindow;
+
     /// <summary>Gets the community/critic rating (0-10), surfaced as the guide's star rating. <c>null</c> when unrated.</summary>
     public float? CommunityRating { get; init; }
 
@@ -104,6 +115,9 @@ public sealed class ProgramEntry
 
     /// <summary>Gets the source video's tagged colour space (e.g. <c>bt709</c>, <c>smpte170m</c>), or <c>null</c> when untagged or unknown, so the stream pipeline converts the item from the right matrix into the channel's bt709. Probed once at guide refresh and cached here.</summary>
     public string? SourceColorSpace { get; init; }
+
+    /// <summary>Gets how far the source video is rotated for display, in degrees (0, 90, 180 or 270; a phone held upright records 90). ffmpeg turns such a picture upright only when it decodes in software, so these items never decode on a GPU that keeps frames in VRAM. Probed once at guide refresh and cached here; zero in schedules cached before this was recorded.</summary>
+    public int SourceRotation { get; init; }
 
     /// <summary>Gets the codec of the default audio track (e.g. <c>aac</c>, <c>ac3</c>), or <c>null</c> when unknown or the item has no audio. Probed once at guide refresh and cached here.</summary>
     public string? SourceAudioCodec { get; init; }
@@ -144,6 +158,9 @@ public sealed class SubtitleStreamInfo
 
     /// <summary>Gets a value indicating whether the subtitle is a separate file beside the media rather than a track inside it. An external subtitle has no stream index within the media file, so it can only be burned from the file Jellyfin resolves for it.</summary>
     public bool IsExternal { get; init; }
+
+    /// <summary>Gets the subtitle's language tag (e.g. <c>eng</c>), or <c>null</c> when untagged (or cached before languages were recorded).</summary>
+    public string? Language { get; init; }
 }
 
 /// <summary>

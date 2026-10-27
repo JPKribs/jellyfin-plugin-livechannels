@@ -67,7 +67,7 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
     /// <param name="stored">The configuration currently in effect.</param>
     protected override void OnConfigurationSaving(PluginConfiguration incoming, PluginConfiguration stored)
     {
-        ConfigurationValidator.Validate(incoming);
+        ConfigurationValidator.Validate(incoming, stored);
 
         // A save that changes the channels re-anchors the time-of-day schedule chain (the cache below is dropped
         // anyway, so the reshuffle this causes coincides with the rebuild the user already expects from saving).
@@ -77,12 +77,29 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
             ? DateTime.UtcNow
             : stored.ScheduleAnchorUtc;
 
-        // A channel edit must not be served from a stale schedule, so drop every cached schedule; the next guide
-        // refresh or tune-in rebuilds it from the new configuration. This runs before the save on purpose: the
-        // cache lives under the stream directory, so the one cleared is the directory the old schedules were
-        // written to.
-        ChannelService.ClearScheduleCache(_applicationPaths);
+        // A save that changes what the schedules hold must not be served from them, so take every cached schedule
+        // out of service; the next guide refresh or tune-in rebuilds it from the new configuration, spliced onto
+        // the old one so what is airing keeps its slot. A save that changes nothing they hold (bitrate, codec,
+        // subtitle look) leaves them alone. This runs before the save on purpose: the cache lives under the stream
+        // directory, so the one cleared is the directory the old schedules were written to.
+        if (InvalidatesSchedules(incoming, stored))
+        {
+            ChannelService.ClearScheduleCache(_applicationPaths);
+        }
     }
+
+    /// <summary>
+    /// Whether a save changes anything a cached schedule holds: the channels themselves (see
+    /// <see cref="AffectsSchedule"/>), the default language (it picks each item's audio track for channels without
+    /// their own), or the stream directory the cache lives under.
+    /// </summary>
+    /// <param name="incoming">The configuration about to be saved.</param>
+    /// <param name="stored">The configuration currently in effect.</param>
+    /// <returns>Whether the cached schedules must be rebuilt.</returns>
+    internal static bool InvalidatesSchedules(PluginConfiguration incoming, PluginConfiguration stored)
+        => AffectsSchedule(incoming, stored)
+            || !string.Equals(incoming.DefaultSubtitleLanguage?.Trim(), stored.DefaultSubtitleLanguage?.Trim(), StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(incoming.StreamDirectory?.Trim(), stored.StreamDirectory?.Trim(), StringComparison.Ordinal);
 
     /// <summary>
     /// Whether a save changes what the channels schedule: any channel's definition (its sources, filters, order,

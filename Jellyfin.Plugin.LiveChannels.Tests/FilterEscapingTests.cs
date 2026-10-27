@@ -72,7 +72,7 @@ public class FilterEscapingTests
         var font = Path.Combine(dir, "a.ttf");
         var logo = Path.Combine(dir, "logo.png");
         File.WriteAllBytes(font, new byte[] { 0 });
-        File.WriteAllBytes(logo, new byte[] { 0 });
+        File.WriteAllBytes(logo, new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A });
         try
         {
             var strips = new LineStrips(Path.Combine(Path.GetTempPath(), "lc-card"), 1280, 720);
@@ -154,6 +154,12 @@ public class FilterEscapingTests
 
     private static string? FindFfmpeg()
     {
+        // jellyfin-ffmpeg first: it is what production runs, and what CI provides (where a missing one fails).
+        if (FfmpegHarness.Instance is { } harness)
+        {
+            return harness.Ffmpeg;
+        }
+
         var candidates = new List<string> { "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg" };
         foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {

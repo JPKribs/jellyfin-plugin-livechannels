@@ -93,9 +93,13 @@ public class EncoderResolver
                 var qsvInit = qsvDevice is null
                     ? QsvInit
                     : new[] { "-init_hw_device", "vaapi=va:" + qsvDevice, "-init_hw_device", "qsv=hw@va", "-filter_hw_device", "hw" };
+                // "-hwaccel qsv" does not make ffmpeg's own decoders decode on the GPU (that takes an explicit
+                // *_qsv decoder), so it decoded in software and the hwdownload below then failed every item before
+                // a software retry. With a render node the GPU-resident pipeline decodes on VAAPI, so this profile's
+                // separate decode does the same; without one (Windows) it decodes in software from the start.
                 return new VideoEncoderProfile(family + "_qsv", label + " (QSV)", true,
                     qsvInit, Empty, "format=nv12,hwupload=extra_hw_frames=64", false,
-                    DecodeHwaccel: "qsv", DecodeOutputFormat: "qsv", DecodeDownload: "hwdownload,format=nv12|p010le,",
+                    DecodeHwaccel: qsvDevice is null ? null : "vaapi", DecodeOutputFormat: qsvDevice is null ? null : "vaapi", DecodeDownload: qsvDevice is null ? string.Empty : "hwdownload,format=nv12|p010le,",
                     GpuDevice: qsvDevice, VppBrightness: VppBrightness(options), VppContrast: VppContrast(options));
             case "vaapi":
                 var device = FirstDevice(options.VaapiDevice, options.QsvDevice);

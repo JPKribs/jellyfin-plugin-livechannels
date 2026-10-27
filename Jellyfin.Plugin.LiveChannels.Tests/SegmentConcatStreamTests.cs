@@ -230,4 +230,17 @@ public sealed class SegmentConcatStreamTests : IDisposable
         Assert.Throws<NotSupportedException>(() => stream.SetLength(0));
         Assert.Throws<NotSupportedException>(() => stream.Write(Array.Empty<byte>(), 0, 0));
     }
+
+    [Fact]
+    public void AnEmptyRead_DoesNotSkipTheRestOfTheSegment()
+    {
+        WriteSegment(0, "AAAAAA");
+        WriteSegment(1, "BBB");
+
+        using var stream = new SegmentConcatStream(_dir);
+        var buffer = new byte[3];
+        Assert.Equal(3, stream.Read(buffer, 0, 3));
+        Assert.Equal(0, stream.Read(Array.Empty<byte>(), 0, 0));
+        Assert.Equal("AAABBB", ReadAll(stream));
+    }
 }

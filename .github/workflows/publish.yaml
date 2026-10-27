@@ -5,6 +5,10 @@ on:
     types:
       - released
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Published release tag to add to the manifest (e.g. v12.4.0.0)'
+        required: true
 
 permissions:
   contents: write
@@ -13,77 +17,85 @@ jobs:
   update-manifest:
     runs-on: ubuntu-latest
     steps:
+      # The manifest lives on master, so update it there (not on the tag, which master may have moved past).
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          dotnet-version: 10.0.x
+          ref: master
+          fetch-depth: 0
 
-      - name: Get Release Info
-        id: release_info
+      # Release text and tag names reach the script only through the environment, never pasted into it, so
+      # quotes, backticks or $(...) in release notes are data, not shell.
+      - name: Update Manifest
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
-          # Extract version and targetAbi from build.yaml
-          BUILD_VERSION=$(grep '^version:' build.yaml | sed 's/version: *"\?\([^"]*\)"\?.*/\1/' | tr -d '"')
-          TARGET_ABI=$(grep '^targetAbi:' build.yaml | sed 's/targetAbi: *"\?\([^"]*\)"\?.*/\1/' | tr -d '"')
+          set -euo pipefail
 
-          # Try to download the checksum file from the release assets
-          ASSET_URL="https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/${{ github.event.release.tag_name }}/jellyfin-plugin-livechannels-${BUILD_VERSION}.zip.md5"
-          echo "Trying to download checksum from: ${ASSET_URL}"
+          if [ -z "${TAG}" ]; then
+            echo "::error::No release tag given"
+            exit 1
+          fi
 
-          CHECKSUM=$(curl -sfL "${ASSET_URL}" 2>/dev/null || echo "")
+          # The release must exist and be published; its notes are the manifest changelog.
+          RELEASE=$(gh release view "${TAG}" --repo "${REPO}" --json tagName,isDraft,body)
+          if [ "$(echo "${RELEASE}" | jq -r '.isDraft')" = "true" ]; then
+            echo "::error::${TAG} is still a draft"
+            exit 1
+          fi
+          CHANGELOG=$(echo "${RELEASE}" | jq -r '.body' | tr -d '`')
 
-          # If curl failed or returned empty, calculate checksum ourselves
-          if [ -z "$CHECKSUM" ]; then
-            echo "Checksum download failed, calculating from ZIP file..."
-            ZIP_URL="https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/${{ github.event.release.tag_name }}/jellyfin-plugin-livechannels-${BUILD_VERSION}.zip"
-            curl -L -o temp_plugin.zip "${ZIP_URL}"
-            CHECKSUM=$(md5sum temp_plugin.zip | cut -d' ' -f1)
-            rm temp_plugin.zip
+          # Version and ABI come from build.yaml as it was at the tag.
+          git fetch --tags --force
+          BUILD_YAML=$(git show "${TAG}:build.yaml")
+          VERSION=$(echo "${BUILD_YAML}" | sed -nE 's/^version: *"?([^"]*)"?.*/\1/p')
+          TARGET_ABI=$(echo "${BUILD_YAML}" | sed -nE 's/^targetAbi: *"?([^"]*)"?.*/\1/p')
+          if [ "v${VERSION}" != "${TAG}" ]; then
+            echo "::error::Tag ${TAG} does not match build.yaml version ${VERSION}"
+            exit 1
+          fi
+
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+          ZIP="jellyfin-plugin-livechannels-${VERSION}.zip"
+
+          # Always checksum the zip actually being published; -f makes a missing asset fail the job instead of
+          # checksumming a 404 page. A published .md5 must agree with it.
+          curl -fsSL -o "${RUNNER_TEMP}/${ZIP}" "${BASE}/${ZIP}"
+          CHECKSUM=$(md5sum "${RUNNER_TEMP}/${ZIP}" | cut -d' ' -f1)
+          if PUBLISHED=$(curl -fsSL "${BASE}/${ZIP}.md5" 2>/dev/null); then
+            PUBLISHED=$(echo "${PUBLISHED}" | awk '{print $1}')
+            if [ "${PUBLISHED}" != "${CHECKSUM}" ]; then
+              echo "::error::${ZIP}.md5 (${PUBLISHED}) does not match the zip (${CHECKSUM})"
+              exit 1
+            fi
           fi
 
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "Version ${VERSION}, ABI ${TARGET_ABI}, checksum ${CHECKSUM}"
 
-          echo "Build Version: ${BUILD_VERSION}"
-          echo "Target ABI: ${TARGET_ABI}"
-          echo "Checksum: ${CHECKSUM}"
-
-          echo "build_version=${BUILD_VERSION}" >> $GITHUB_OUTPUT
-          echo "target_abi=${TARGET_ABI}" >> $GITHUB_OUTPUT
-          echo "checksum=${CHECKSUM}" >> $GITHUB_OUTPUT
-          echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
-
-      - name: Update Manifest
-        run: |
-          # Sanitize changelog by removing backticks
-          SANITIZED_CHANGELOG=$(echo "${{ github.event.release.body }}" | tr -d '\`')
-
-          # Use jq to safely construct the JSON object
           NEW_VERSION=$(jq -n \
-            --arg version "${{ steps.release_info.outputs.build_version }}" \
-            --arg changelog "$SANITIZED_CHANGELOG" \
-            --arg targetAbi "${{ steps.release_info.outputs.target_abi }}" \
-            --arg sourceUrl "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/${{ github.event.release.tag_name }}/jellyfin-plugin-livechannels-${{ steps.release_info.outputs.build_version }}.zip" \
-            --arg checksum "${{ steps.release_info.outputs.checksum }}" \
-            --arg timestamp "${{ steps.release_info.outputs.timestamp }}" \
-            '{
-              version: $version,
-              changelog: $changelog,
-              targetAbi: $targetAbi,
-              sourceUrl: $sourceUrl,
-              checksum: $checksum,
-              timestamp: $timestamp
-            }')
+            --arg version "${VERSION}" \
+            --arg changelog "${CHANGELOG}" \
+            --arg targetAbi "${TARGET_ABI}" \
+            --arg sourceUrl "${BASE}/${ZIP}" \
+            --arg checksum "${CHECKSUM}" \
+            --arg timestamp "${TIMESTAMP}" \
+            '{version: $version, changelog: $changelog, targetAbi: $targetAbi, sourceUrl: $sourceUrl, checksum: $checksum, timestamp: $timestamp}')
 
-          # Add new version to the beginning of versions array
-          jq --argjson newVersion "$NEW_VERSION" '.[0].versions = [$newVersion] + .[0].versions' manifest.json > manifest_temp.json
+          # Re-running for a version already listed replaces its entry rather than adding a duplicate.
+          jq --argjson entry "${NEW_VERSION}" \
+            '.[0].versions = [$entry] + (.[0].versions | map(select(.version != $entry.version)))' \
+            manifest.json > manifest_temp.json
           mv manifest_temp.json manifest.json
 
       - name: Commit Changes
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add manifest.json
-          git commit -m "Update manifest for release ${{ github.event.release.tag_name }}" || exit 0
+          git commit -m "Update manifest for release ${TAG}" || exit 0
           git push origin HEAD:master

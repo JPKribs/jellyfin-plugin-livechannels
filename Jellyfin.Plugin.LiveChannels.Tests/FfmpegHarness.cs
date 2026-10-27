@@ -390,6 +390,13 @@ internal sealed class FfmpegHarness
             }
         }
 
+        // CI sets this so the integration tests can never pass by quietly finding no ffmpeg: every one of them
+        // fails instead (the exception is rethrown on each access to Instance).
+        if (Environment.GetEnvironmentVariable("LIVECHANNELS_REQUIRE_FFMPEG") == "1")
+        {
+            throw new InvalidOperationException("LIVECHANNELS_REQUIRE_FFMPEG is set but no jellyfin-ffmpeg was found (tried " + string.Join(", ", candidates) + ")");
+        }
+
         return null;
     }
 }
@@ -511,6 +518,32 @@ public sealed class MediaFixtures : IDisposable
                 "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:s", "srt"
             };
         });
+        // A Blu-ray rip cropped to 1920x800 that keeps the disc's PGS track: the subtitle canvas is the disc's
+        // 1920x1080 frame, with a white caption box low in it (y 950-1010, x 760-1160), shown from 0.1s to 3s.
+        Define("pgs_cropped.mkv", path =>
+        {
+            var sup = Path.ChangeExtension(path, ".sup");
+            File.WriteAllBytes(sup, PgsCaption(1920, 1080, 760, 950, 400, 60, 0.1, 3.0));
+            return new[]
+            {
+                "-f", "lavfi", "-i", "color=c=black:s=1920x800:r=24:d=4", "-f", "lavfi", "-i", Sine + ":d=4", "-i", sup,
+                "-map", "0:v", "-map", "1:a", "-map", "2:s",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-c:s", "copy"
+            };
+        });
+        // A phone video held upright: 1280x720 coded, with a 90-degree display rotation, so it shows 720 wide by
+        // 1280 tall.
+        Define("rotated_phone.mp4", _ => new[]
+        {
+            "-display_rotation:v:0", "90", "-f", "lavfi", "-i", "testsrc2=s=1280x720:r=30:d=4", "-f", "lavfi", "-i", Sine + ":d=4",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"
+        });
+        // A full-frame cut every 1.3 seconds, where an encoder free to place keyframes at scene cuts would.
+        Define("scene_cuts.mkv", _ => new[]
+        {
+            "-f", "lavfi", "-i", "testsrc2=s=640x360:r=30:d=8,drawbox=c=white:t=fill:enable='lt(mod(t\\,2.6)\\,1.3)'", "-f", "lavfi", "-i", Sine + ":d=8",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"
+        });
         // A second stereo AAC H.264 item at a different picture size and sample rate, which the concat path can
         // follow (only codec and channel changes break it).
         Define("stereo_44k.mkv", _ => new[]
@@ -590,6 +623,86 @@ public sealed class MediaFixtures : IDisposable
     }
 
     public string Root { get; }
+
+    // A minimal PGS (.sup) stream: one display set showing a solid white box on a WxH canvas at the given
+    // position from `show` seconds, and one clearing it at `hide` seconds.
+    private static byte[] PgsCaption(int canvasW, int canvasH, int x, int y, int boxW, int boxH, double show, double hide)
+    {
+        var output = new List<byte>();
+
+        void Segment(uint pts, byte type, byte[] data)
+        {
+            output.AddRange(new byte[] { (byte)'P', (byte)'G' });
+            output.AddRange(BigEndian(pts, 4));
+            output.AddRange(BigEndian(0, 4));
+            output.Add(type);
+            output.AddRange(BigEndian((uint)data.Length, 2));
+            output.AddRange(data);
+        }
+
+        void DisplaySet(double seconds, bool visible, ushort number)
+        {
+            var pts = (uint)(seconds * 90000);
+            var pcs = new List<byte>();
+            pcs.AddRange(BigEndian((uint)canvasW, 2));
+            pcs.AddRange(BigEndian((uint)canvasH, 2));
+            pcs.Add(0x10);
+            pcs.AddRange(BigEndian(number, 2));
+            pcs.AddRange(new byte[] { 0x80, 0, 0, (byte)(visible ? 1 : 0) });
+            if (visible)
+            {
+                pcs.AddRange(new byte[] { 0, 0, 0, 0 });
+                pcs.AddRange(BigEndian((uint)x, 2));
+                pcs.AddRange(BigEndian((uint)y, 2));
+            }
+
+            Segment(pts, 0x16, pcs.ToArray());
+            var wds = new List<byte> { 1, 0 };
+            wds.AddRange(BigEndian((uint)x, 2));
+            wds.AddRange(BigEndian((uint)y, 2));
+            wds.AddRange(BigEndian((uint)boxW, 2));
+            wds.AddRange(BigEndian((uint)boxH, 2));
+            Segment(pts, 0x17, wds.ToArray());
+            if (visible)
+            {
+                // Palette entry 1: white (Y 235, Cr/Cb 128), opaque.
+                Segment(pts, 0x14, new byte[] { 0, 0, 1, 235, 128, 128, 255 });
+
+                // Each line: a run of boxW pixels of colour 1, then end of line.
+                var line = new byte[] { 0, (byte)(0xC0 | (boxW >> 8)), (byte)(boxW & 0xFF), 1, 0, 0 };
+                var body = new List<byte>();
+                body.AddRange(BigEndian((uint)boxW, 2));
+                body.AddRange(BigEndian((uint)boxH, 2));
+                for (var i = 0; i < boxH; i++)
+                {
+                    body.AddRange(line);
+                }
+
+                var ods = new List<byte> { 0, 0, 0, 0xC0 };
+                ods.AddRange(BigEndian((uint)body.Count, 3));
+                ods.AddRange(body);
+                Segment(pts, 0x15, ods.ToArray());
+            }
+
+            Segment(pts, 0x80, Array.Empty<byte>());
+        }
+
+        DisplaySet(show, true, 0);
+        DisplaySet(hide, false, 1);
+        return output.ToArray();
+    }
+
+    private static byte[] BigEndian(uint value, int bytes)
+    {
+        var result = new byte[bytes];
+        for (var i = bytes - 1; i >= 0; i--)
+        {
+            result[i] = (byte)(value & 0xFF);
+            value >>= 8;
+        }
+
+        return result;
+    }
 
     /// <summary>Gets (generating on first use) the fixture file with the given name.</summary>
     public string this[string name] => _files[name].Value;

@@ -23,6 +23,7 @@ public sealed class SessionStats
     private long _speedBits;
     private long _timelineBits;
     private long _anchorTicks;
+    private Models.OutputSettings? _output;
 
     /// <summary>
     /// Gets or sets the most recent encode speed as a realtime multiple, parsed from the producer ffmpeg's
@@ -74,6 +75,18 @@ public sealed class SessionStats
     {
         Interlocked.CompareExchange(ref _anchorTicks, anchorUtc.ToUniversalTime().Ticks, 0);
         return ContentAnchorUtc ?? anchorUtc;
+    }
+
+    /// <summary>
+    /// The output settings this session encodes with: the first call's reading, kept for the session's life, so
+    /// every producer it runs (later items, a restarted encoder, standby) matches what its viewers set up for.
+    /// </summary>
+    /// <param name="current">Reads the current settings; called only while none is pinned.</param>
+    /// <returns>The pinned settings.</returns>
+    public Models.OutputSettings PinOutput(Func<Models.OutputSettings> current)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        return Volatile.Read(ref _output) ?? Interlocked.CompareExchange(ref _output, current(), null) ?? _output!;
     }
 
     /// <summary>

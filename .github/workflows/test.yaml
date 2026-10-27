@@ -15,10 +15,15 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
-  call:
-    uses: jellyfin/jellyfin-meta-plugins/.github/workflows/test.yaml@master
-    with:
-      dotnet-version: 10.0.x
+  # The full suite, ffmpeg integration tests included, inside the Jellyfin image the plugin targets, so the tests
+  # run against that release's jellyfin-ffmpeg. A missing ffmpeg fails the job instead of passing it silently.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Test against Jellyfin 12.4's ffmpeg
+        run: .github/scripts/test-in-jellyfin.sh jellyfin/jellyfin:12.4

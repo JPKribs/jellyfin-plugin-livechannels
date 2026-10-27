@@ -721,6 +721,14 @@ public static class StreamArguments
             Add(args, "-preset", "veryfast", "-sc_threshold", "0");
         }
 
+        // libx265 ignores -sc_threshold: left to itself it puts a keyframe at every scene cut and restarts its GOP
+        // there, so segments stretch toward twice their length and stop lining up with the 3-second cuts. Its own
+        // scene-cut switch turns that off, and the fixed GOP below then holds as it does for libx264.
+        if (string.Equals(video.Name, "libx265", StringComparison.Ordinal))
+        {
+            Add(args, "-x265-params", "scenecut=0:open-gop=0");
+        }
+
         foreach (var extra in video.ExtraEncoderArgs)
         {
             args.Add(extra);
@@ -773,8 +781,12 @@ public static class StreamArguments
         if (!forced.IsText)
         {
             // Bitmap subtitle (PGS/VOBSUB): composite the mapped, already-seeked subtitle stream. It is a picture,
-            // so neither the style override nor a font directory applies.
-            filter = "[0:v][0:s:" + index + "]overlay," + scale + "[v]";
+            // so neither the style override nor a font directory applies. Its canvas is the disc's frame (a PGS
+            // track is 1920x1080 even on an encode cropped to 1920x800), so it is first scaled to the picture it
+            // lands on, as Jellyfin's own burn-in does; overlaid as-is, the bottom of the canvas, where subtitles
+            // sit, hung below the picture and was cut off. eof_action=pass keeps the video flowing once the
+            // subtitle track runs dry.
+            filter = "[0:v]split[vmain][vref];[0:s:" + index + "][vref]scale=w=rw:h=rh[sub];[vmain][sub]overlay=eof_action=pass," + scale + "[v]";
         }
         else if (!string.IsNullOrEmpty(externalSubtitlePath))
         {

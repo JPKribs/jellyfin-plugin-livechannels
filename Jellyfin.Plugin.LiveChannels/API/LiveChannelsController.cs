@@ -193,6 +193,11 @@ public class LiveChannelsController : ControllerBase
             return "image/webp";
         }
 
+        if (ext.Equals(".gif", StringComparison.OrdinalIgnoreCase))
+        {
+            return "image/gif";
+        }
+
         return "image/png";
     }
 }

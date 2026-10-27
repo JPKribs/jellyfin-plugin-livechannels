@@ -321,6 +321,22 @@ public sealed class IntroService : IDisposable
         return args;
     }
 
+    // The image type a file's leading bytes identify, or null when it is not a PNG, JPEG, WebP or GIF (or unreadable).
+    private static string? ImageTypeOf(string path)
+    {
+        try
+        {
+            Span<byte> head = stackalloc byte[16];
+            using var file = File.OpenRead(path);
+            var read = file.Read(head);
+            return ConfigurationValidator.ImageContentType(head[..read]);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     // Renders the card's visual as a plain 8-bit progressive video at the channel's frame size and rate with a
     // silent stereo track. Any codec would do here since the next pass re-encodes it; x264 is universally
     // present. Inputs: the logo (when present), the gradient backdrop, the four strips, the mask, and silence.
@@ -338,13 +354,26 @@ public sealed class IntroService : IDisposable
         var seconds = IntroSeconds.ToString(CultureInfo.InvariantCulture);
         var fadeOutAt = (IntroSeconds - FadeOutSeconds).ToString(CultureInfo.InvariantCulture);
 
-        var hasLogo = !string.IsNullOrEmpty(logoPath) && File.Exists(logoPath);
+        // Only a file whose own bytes say it is a PNG, JPEG, WebP or GIF is drawn: it is read with that image
+        // format named outright (below), never one ffmpeg would pick from the file's content.
+        var logoType = !string.IsNullOrEmpty(logoPath) && File.Exists(logoPath) ? ImageTypeOf(logoPath) : null;
+        var hasLogo = logoType is not null;
         var args = new List<string> { "-hide_banner", "-loglevel", "error", "-y" };
         var next = 0;
         var logo = -1;
         if (hasLogo)
         {
-            args.AddRange(["-loop", "1", "-framerate", fps, "-i", logoPath!]);
+            // Read strictly as an image, never with a demuxer ffmpeg picks from the file's content. A GIF has its
+            // own demuxer, which takes the generic input loop (image2's -loop is not an option there, so GIF logos
+            // used to fail the whole card).
+            if (logoType == "image/gif")
+            {
+                args.AddRange(["-f", "gif", "-stream_loop", "-1", "-i", logoPath!]);
+            }
+            else
+            {
+                args.AddRange(["-f", "image2", "-loop", "1", "-framerate", fps, "-i", logoPath!]);
+            }
             logo = next++;
         }
 

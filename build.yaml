@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "12.4.0.0"
+version: "12.4.0.1"
 targetAbi: "12.4.0.0"
 framework: "net10.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -9,26 +9,29 @@ description: >
   Live Channels turns your own library into looping virtual TV channels that play natively in
   Jellyfin's Live TV. The channels, their guide, and their streams are all served inside Jellyfin
   itself, so they appear automatically with no tuner to add, no URLs to paste, and no exposed endpoints.
-category: "Live TV"
+category: "LiveTV"
 imageUrl: "https://raw.githubusercontent.com/JPKribs/jellyfin-plugin-livechannels/refs/heads/master/Jellyfin.Plugin.LiveChannels/Assets/Logo.png"
 owner: "JPKribs"
 artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   features:
-  - Built for Jellyfin 12.4
-  - Every channel now delivers one consistent picture format, so DVDs, untagged rips, and full-range phone or screen recordings show their true colours instead of shifted hues or crushed blacks and clipped whites
-  - HDR is tone-mapped after scaling down, about three to five times faster, and uses Jellyfin's own tone mapper and tone-mapping settings when available
-  - Standby is now temporary, so a channel that cannot play shows standby for a minute and then tries its schedule again, backing off to five minutes while the problem lasts
-  - Each item plays its audio in your language when it has one, choosing the default track in the channel's audio language (or your default language), else the first track in it, else the item's own default track
-  - The standby card says why the channel is on standby
-  - A stuck encoder is detected within 15 seconds and replaced, so the channel recovers instead of freezing
-  - Every encoder failure leaves a report in Jellyfin's log folder with the exact ffmpeg command and its error
+  - Series recordings honour Keep up to (removing only their own oldest recordings) and Record new episodes only
+  - An item whose encoder fails partway resumes where it stopped instead of skipping to the next item
+  - Burned-in subtitles follow your default language, and audio tagged as undetermined no longer counts as foreign
+  - The Popular channel only airs titles that every Live TV user is allowed to see
   fixed:
-  - Widescreen DVDs and other anamorphic sources no longer play squeezed
-  - Channels mixing audio formats (stereo and 5.1, AAC and AC3) or video codecs no longer have silent or broken stretches
-  - Channels that stream continuously no longer slide out of lip sync over time (audio drifted up to about 90 ms early before snapping back)
-  - Items no longer overlap by a few frames where one ends and the next begins
-  - Items with no audio track now carry silence instead of no audio at all
-  - A channel left on for days keeps recovering from occasional encoder crashes instead of giving up after ten
-  - ffmpeg's real error is no longer pushed out of the logs by progress noise
+  - Items with an external audio file (a separate dub) no longer play silent
+  - A channel whose encoder keeps failing no longer restarts it forever while a viewer stays tuned in
+  - Series recordings keep recording the show they were created for after the schedule changes
+  - Saving plugin settings no longer reshuffles every channel's guide, and saves that do rebuild it keep the program on air
+  - Changing the codec or resolution while someone is watching no longer breaks their stream
+  - Picture subtitles (PGS) on cropped Blu-ray encodes are no longer cut off
+  - Phone videos recorded upright no longer play sideways with Intel hardware decoding
+  - Software HEVC keeps its segments evenly sized
+  - Intel QSV on Windows no longer fails every item before retrying in software
+  - Storage that stops answering now shows standby instead of a frozen picture
+  - A stream whose output closes now stops cleanly instead of filling the failure reports
+  - Removing stale guide programs is much lighter on Jellyfin's database
+  - GIF channel logos now appear on the tune-in card
+  - Several smaller fixes to timing, cleanup and shutdown

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO;
@@ -20,14 +21,26 @@ public partial class ChannelService
 
     /// <summary>
     /// Picks the subtitle track to burn into an item for the given mode. <see cref="SubtitleBurnInMode.Forced"/>
-    /// burns only the forced track, except when the default audio track is in a known non-English language, where
-    /// it behaves like <see cref="SubtitleBurnInMode.Always"/> so foreign-language content stays followable.
-    /// <see cref="SubtitleBurnInMode.Always"/> burns the forced track when present, otherwise the default or first.
+    /// burns only a forced track, except when the audio that plays is tagged with a language other than the
+    /// configured default language, where it burns a subtitle in that default language so foreign-language content
+    /// stays followable. <see cref="SubtitleBurnInMode.Always"/> burns a forced track when present, otherwise a
+    /// subtitle in the default language, otherwise the default or first subtitle.
     /// </summary>
-    /// <param name="program">The program, carrying its subtitle streams and default-audio language probed at refresh.</param>
+    /// <param name="program">The program, carrying its subtitle streams and the language of the audio it plays.</param>
     /// <param name="mode">The channel's subtitle burn-in mode.</param>
     /// <returns>The chosen subtitle's index among the item's subtitle streams and whether it is text-based, or <c>null</c> when nothing should be burned in.</returns>
     public static (int RelativeIndex, bool IsText)? FindBurnInSubtitle(ProgramEntry program, SubtitleBurnInMode mode)
+        => FindBurnInSubtitle(program, mode, Plugin.Instance?.ReadConfiguration(c => c.DefaultSubtitleLanguage) ?? string.Empty);
+
+    /// <summary>
+    /// Picks the subtitle track to burn in for a viewer whose language is <paramref name="defaultLanguage"/> (see
+    /// the overload without it).
+    /// </summary>
+    /// <param name="program">The program.</param>
+    /// <param name="mode">The channel's subtitle burn-in mode.</param>
+    /// <param name="defaultLanguage">The configured default language (ISO 639), or empty.</param>
+    /// <returns>The chosen subtitle, or <c>null</c>.</returns>
+    internal static (int RelativeIndex, bool IsText)? FindBurnInSubtitle(ProgramEntry program, SubtitleBurnInMode mode, string defaultLanguage)
     {
         ArgumentNullException.ThrowIfNull(program);
         if (mode == SubtitleBurnInMode.Never)
@@ -39,42 +52,46 @@ public partial class ChannelService
         // so it has to be composited from a mapped stream, and being external it has no stream inside the media
         // file to map. Dropping it here lets another track be chosen instead of the channel silently showing none.
         var subtitles = program.Subtitles.Where(s => s.IsText || !s.IsExternal).ToList();
+        var hasLanguage = IsTaggedLanguage(defaultLanguage);
 
-        // Forced always wins when present, in either mode.
-        for (var i = 0; i < subtitles.Count; i++)
+        // A track the viewer can read: in their language, or untagged (most often it is, and nothing says
+        // otherwise). With no language configured, every track qualifies.
+        bool Readable(SubtitleStreamInfo s) => !hasLanguage || !IsTaggedLanguage(s.Language) || LanguageMatches(s.Language, defaultLanguage);
+
+        // A forced track wins in either mode: it carries the lines the audio leaves untranslated. One in the
+        // viewer's language is preferred, then an untagged one; a forced track in another language (a Japanese
+        // sign track over Japanese audio for an English viewer) is no use to them.
+        var forced = subtitles.Where(s => s.IsForced).ToList();
+        var forcedPick = forced.FirstOrDefault(s => hasLanguage && LanguageMatches(s.Language, defaultLanguage))
+            ?? forced.FirstOrDefault(Readable);
+        if (forcedPick is not null)
         {
-            if (subtitles[i].IsForced)
-            {
-                return (subtitles[i].RelativeIndex, subtitles[i].IsText);
-            }
+            return (forcedPick.RelativeIndex, forcedPick.IsText);
         }
 
-        // "Forced only" also burns subtitles when the audio we play is not in the configured default language, so
-        // foreign-language content stays followable. Languages match across code forms (eng/en, deu/ger), the same
-        // way the audio track was chosen, so a track picked for being in your language is never subtitled over. Audio in the default language, or untagged audio, shows
-        // nothing without a forced track, so ordinary content is never subtitled by surprise.
-        var defaultLanguage = Plugin.Instance?.ReadConfiguration(c => c.DefaultSubtitleLanguage) ?? string.Empty;
-        var audioLanguage = program.DefaultAudioLanguage;
+        // "Forced only" also burns subtitles when the audio that plays is tagged with a language other than the
+        // default one, so foreign-language content stays followable. Languages match across code forms (eng/en,
+        // deu/ger), the same way the audio track was chosen, so a track picked for being in your language is never
+        // subtitled over. Untagged audio ("und" included) shows nothing without a forced track, so ordinary
+        // content is never subtitled by surprise.
         var forcedForForeignAudio = mode == SubtitleBurnInMode.Forced
-            && !string.IsNullOrEmpty(audioLanguage)
-            && !string.IsNullOrEmpty(defaultLanguage)
-            && !LanguageMatches(audioLanguage, defaultLanguage);
+            && hasLanguage
+            && IsTaggedLanguage(program.DefaultAudioLanguage)
+            && !LanguageMatches(program.DefaultAudioLanguage, defaultLanguage);
 
-        if ((mode == SubtitleBurnInMode.Always || forcedForForeignAudio) && subtitles.Count > 0)
+        if (mode == SubtitleBurnInMode.Always || forcedForForeignAudio)
         {
-            // Both "Always" and non-English-audio "Forced only" burn the same track "Always" picks: the default
-            // subtitle, or the first one when none is flagged default.
-            var chosen = 0;
-            for (var i = 0; i < subtitles.Count; i++)
+            // The default track in the viewer's language, else the first in it, else (only for "Always", which
+            // burns something whenever a track exists) the default track, else the first.
+            var inLanguage = hasLanguage ? subtitles.Where(s => LanguageMatches(s.Language, defaultLanguage)).ToList() : new List<SubtitleStreamInfo>();
+            var pick = inLanguage.FirstOrDefault(s => s.IsDefault) ?? inLanguage.FirstOrDefault();
+            if (pick is null)
             {
-                if (subtitles[i].IsDefault)
-                {
-                    chosen = i;
-                    break;
-                }
+                var candidates = mode == SubtitleBurnInMode.Always ? subtitles : subtitles.Where(Readable).ToList();
+                pick = candidates.FirstOrDefault(s => s.IsDefault) ?? candidates.FirstOrDefault();
             }
 
-            return (subtitles[chosen].RelativeIndex, subtitles[chosen].IsText);
+            return pick is null ? null : (pick.RelativeIndex, pick.IsText);
         }
 
         return null;

@@ -51,13 +51,13 @@ public partial class ChannelService
                 .Where(p => p.ExternalId is null || !keep.Contains(p.ExternalId))
                 .ToList();
 
-            foreach (var program in stale)
-            {
-                _libraryManager.DeleteItem(program, new DeleteOptions { DeleteFileLocation = false, DeleteFromExternalProvider = false }, false);
-            }
-
+            // One batch, not a write per programme: every rebuild moves the slots after the item airing, so most of
+            // a channel's stored guide goes stale each day, and tens of thousands of single-row deletes interleaved
+            // with Jellyfin's own guide writes held the database lock for minutes. Guide programmes have no
+            // children and no files, which is exactly what the fast batch delete is for.
             if (stale.Count > 0)
             {
+                _libraryManager.DeleteItemsUnsafeFast(stale, false);
                 _logger.LogInformation("Live Channels: removed {Count} stale guide program(s) from channel {Name}", stale.Count, channel.Name);
             }
         }

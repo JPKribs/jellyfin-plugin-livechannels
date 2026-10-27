@@ -23,12 +23,35 @@ public static class ConfigurationValidator
     /// </summary>
     /// <param name="config">The incoming configuration.</param>
     /// <exception cref="ArgumentException">When an enabled channel is missing a number or sources, a number is duplicated, or a logo is invalid.</exception>
-    public static void Validate(PluginConfiguration config)
+    public static void Validate(PluginConfiguration config) => Validate(config, null);
+
+    /// <summary>
+    /// Validates a configuration about to replace <paramref name="stored"/> (see the overload without it). A logo
+    /// that is unchanged from the stored one is not re-checked for its image type, so a logo saved by an earlier
+    /// version (when other image types were accepted) never blocks an unrelated save.
+    /// </summary>
+    /// <param name="config">The configuration to validate (normalized in place).</param>
+    /// <param name="stored">The configuration currently in effect, or <c>null</c>.</param>
+    /// <exception cref="ArgumentException">As for <see cref="Validate(PluginConfiguration)"/>.</exception>
+    public static void Validate(PluginConfiguration config, PluginConfiguration? stored)
     {
         ArgumentNullException.ThrowIfNull(config);
 
         Normalize(config);
         ValidatePlayback(config);
+        var storedLogos = new HashSet<string>(StringComparer.Ordinal);
+        if (stored is not null)
+        {
+            foreach (var logo in stored.Channels.Select(c => c.LogoData).Append(stored.PopularChannel?.LogoData))
+            {
+                if (!string.IsNullOrEmpty(logo))
+                {
+                    storedLogos.Add(logo);
+                }
+            }
+        }
+
+        void ValidateLogo(Channel channel) => ConfigurationValidator.ValidateLogo(channel, storedLogos.Contains(channel.LogoData ?? string.Empty));
 
         // The Popular channel takes the same per-channel checks as every configured channel (its number and
         // sources are fixed by the plugin, so only its editable surface is validated).
@@ -307,7 +330,7 @@ public static class ConfigurationValidator
     private static string Describe(Channel channel)
         => string.IsNullOrWhiteSpace(channel.Name) ? "channel " + channel.Number : channel.Name;
 
-    private static void ValidateLogo(Channel channel)
+    private static void ValidateLogo(Channel channel, bool unchanged)
     {
         if (string.IsNullOrEmpty(channel.LogoData))
         {
@@ -335,5 +358,46 @@ public static class ConfigurationValidator
         {
             throw new ArgumentException("Channel logo exceeds the 4 MB limit: " + channel.Name);
         }
+
+        // The logo is handed to ffmpeg (the tune-in card) and served to clients, so it must be an image in fact,
+        // not just in name: its type is taken from its own bytes, which also keeps the stored content type (and so
+        // the file extension and the type it is served as) honest.
+        var type = ImageContentType(bytes);
+        if (type is not null)
+        {
+            channel.LogoContentType = type;
+        }
+        else if (!unchanged)
+        {
+            throw new ArgumentException("Channel logo is not a PNG, JPEG, WebP or GIF image: " + channel.Name);
+        }
+    }
+
+    /// <summary>The image type a file's leading bytes identify (PNG, JPEG, WebP or GIF), or <c>null</c> for anything else.</summary>
+    /// <param name="bytes">The file's bytes.</param>
+    /// <returns>The content type, or <c>null</c>.</returns>
+    internal static string? ImageContentType(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.StartsWith((ReadOnlySpan<byte>)[0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A]))
+        {
+            return "image/png";
+        }
+
+        if (bytes.StartsWith((ReadOnlySpan<byte>)[0xFF, 0xD8, 0xFF]))
+        {
+            return "image/jpeg";
+        }
+
+        if (bytes.Length >= 12 && bytes[..4].SequenceEqual("RIFF"u8) && bytes[8..12].SequenceEqual("WEBP"u8))
+        {
+            return "image/webp";
+        }
+
+        if (bytes.StartsWith("GIF87a"u8) || bytes.StartsWith("GIF89a"u8))
+        {
+            return "image/gif";
+        }
+
+        return null;
     }
 }

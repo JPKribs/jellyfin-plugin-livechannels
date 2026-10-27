@@ -37,6 +37,11 @@ public sealed class TimerService
     // numbering), so without this a rule re-records it at every airing and a cancelled child simply moves to the
     // next one. Keyed by rule id; item ids in "N" form.
     private Dictionary<string, HashSet<string>> _seriesHandled = new(StringComparer.Ordinal);
+
+    // Per series rule, the recording files it produced, oldest first, so "keep up to N" can prune its own oldest
+    // recordings (and nothing else) once the rule has more. Completed timers age out of the store, so this is the
+    // only lasting record of which files a rule made.
+    private Dictionary<string, List<RecordedFile>> _seriesRecordings = new(StringComparer.Ordinal);
     private bool _loaded;
 
     /// <summary>
@@ -127,6 +132,19 @@ public sealed class TimerService
     /// <param name="recordingPath">The materialized recording file, or <c>null</c> when none was produced.</param>
     /// <returns>Whether the outcome was recorded (false for an unknown or cancelled timer).</returns>
     public bool CompleteTimer(string timerId, RecordingStatus status, string? recordingPath)
+        => CompleteTimer(timerId, status, recordingPath, adopted: false);
+
+    /// <summary>
+    /// Records a timer's final outcome (see the overload without <paramref name="adopted"/>). An adopted recording
+    /// (the file already existed, so this timer did not make it) is never counted as its series rule's own, so
+    /// "keep up to" can never delete it.
+    /// </summary>
+    /// <param name="timerId">The timer id.</param>
+    /// <param name="status">The terminal status.</param>
+    /// <param name="recordingPath">The recording file, or <c>null</c> when none was produced.</param>
+    /// <param name="adopted">Whether the file already existed rather than being produced for this timer.</param>
+    /// <returns>Whether the outcome was recorded (false for an unknown or cancelled timer).</returns>
+    public bool CompleteTimer(string timerId, RecordingStatus status, string? recordingPath, bool adopted)
     {
         lock (_gate)
         {
@@ -142,10 +160,38 @@ public sealed class TimerService
             if (status == RecordingStatus.Completed)
             {
                 MarkSeriesItemHandled(timer);
+                if (!adopted)
+                {
+                    AddSeriesRecording(timer.SeriesTimerId, recordingPath, DateTime.UtcNow);
+                }
             }
 
             Persist();
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Takes the oldest recordings a series rule made beyond the newest <paramref name="keepUpTo"/>, forgetting them,
+    /// so the caller can delete them. Only files the rule itself produced are ever returned.
+    /// </summary>
+    /// <param name="ruleId">The series rule id.</param>
+    /// <param name="keepUpTo">How many recordings to keep; zero or less keeps them all.</param>
+    /// <returns>The recordings to remove, oldest first.</returns>
+    public IReadOnlyList<string> TakeExcessRecordings(string ruleId, int keepUpTo)
+    {
+        lock (_gate)
+        {
+            EnsureLoaded();
+            if (keepUpTo <= 0 || !_seriesRecordings.TryGetValue(ruleId, out var files) || files.Count <= keepUpTo)
+            {
+                return Array.Empty<string>();
+            }
+
+            var excess = files.OrderBy(f => f.RecordedUtc).Take(files.Count - keepUpTo).ToList();
+            files.RemoveAll(excess.Contains);
+            Persist();
+            return excess.Select(f => f.Path).ToList();
         }
     }
 
@@ -264,6 +310,13 @@ public sealed class TimerService
             // is an orphan no client can ever cancel (Jellyfin 404s resolving the dead rule id).
             var replaced = _seriesTimers.Where(t => string.Equals(t.Id, info.Id, StringComparison.Ordinal)
                 || (!string.IsNullOrEmpty(info.ProgramId) && string.Equals(t.ProgramId, info.ProgramId, StringComparison.Ordinal))).Select(t => t.Id).ToList();
+            // A client edit sends the rule back without the series it was stamped with; keep it.
+            if (RecordingService.RuleKey(info) is null
+                && _seriesTimers.FirstOrDefault(t => replaced.Contains(t.Id) && RecordingService.RuleKey(t) is not null) is { } stamped)
+            {
+                info.SeriesId = stamped.SeriesId;
+            }
+
             _seriesTimers.RemoveAll(t => replaced.Contains(t.Id));
             foreach (var timer in _timers.Where(t => t.SeriesTimerId is not null && replaced.Contains(t.SeriesTimerId)))
             {
@@ -281,6 +334,22 @@ public sealed class TimerService
         }
     }
 
+    /// <summary>Stamps a stored series rule with the series it records (see <see cref="RecordingService.StampSeriesKey"/>).</summary>
+    /// <param name="ruleId">The series rule id.</param>
+    /// <param name="seriesKey">The series (or movie item) id, as <c>N</c>-format text.</param>
+    public void SetSeriesKey(string ruleId, string seriesKey)
+    {
+        lock (_gate)
+        {
+            EnsureLoaded();
+            if (_seriesTimers.FirstOrDefault(t => string.Equals(t.Id, ruleId, StringComparison.Ordinal)) is { } rule)
+            {
+                rule.SeriesId = seriesKey;
+                Persist();
+            }
+        }
+    }
+
     /// <summary>
     /// Removes a series rule WITHOUT touching its children. Used by rule consolidation, which re-links the
     /// children (and the items already handled) to the surviving rule first; <see cref="CancelSeriesTimer"/> is
@@ -294,6 +363,7 @@ public sealed class TimerService
             EnsureLoaded();
             var removed = _seriesTimers.RemoveAll(t => string.Equals(t.Id, ruleId, StringComparison.Ordinal)) > 0;
             removed |= _seriesHandled.Remove(ruleId);
+            removed |= _seriesRecordings.Remove(ruleId);
             if (removed)
             {
                 Persist();
@@ -341,6 +411,11 @@ public sealed class TimerService
             foreach (var ruleId in _seriesHandled.Keys.Where(k => !liveRuleIds.Contains(k)).ToList())
             {
                 removed |= _seriesHandled.Remove(ruleId);
+            }
+
+            foreach (var ruleId in _seriesRecordings.Keys.Where(k => !liveRuleIds.Contains(k)).ToList())
+            {
+                removed |= _seriesRecordings.Remove(ruleId);
             }
 
             if (removed)
@@ -391,6 +466,7 @@ public sealed class TimerService
             var removed = _seriesTimers.RemoveAll(t => string.Equals(t.Id, timerId, StringComparison.Ordinal));
             removed += _timers.RemoveAll(t => string.Equals(t.SeriesTimerId, timerId, StringComparison.Ordinal));
             removed += _seriesHandled.Remove(timerId) ? 1 : 0;
+            removed += _seriesRecordings.Remove(timerId) ? 1 : 0;
             if (removed > 0)
             {
                 Persist();
@@ -460,11 +536,43 @@ public sealed class TimerService
     }
 
     // Moves one rule's handled items onto another. Caller holds _gate and persists. Returns whether anything moved.
+    // Records a recording a series child produced, once per file (a repeat airing adopts the same file).
+    private void AddSeriesRecording(string? ruleId, string? path, DateTime recordedUtc)
+    {
+        if (string.IsNullOrEmpty(ruleId) || string.IsNullOrEmpty(path))
+        {
+            return;
+        }
+
+        if (!_seriesRecordings.TryGetValue(ruleId, out var files))
+        {
+            _seriesRecordings[ruleId] = files = new List<RecordedFile>();
+        }
+
+        if (!files.Any(f => string.Equals(f.Path, path, StringComparison.Ordinal)))
+        {
+            files.Add(new RecordedFile(path, recordedUtc));
+        }
+    }
+
     private bool MergeSeriesHandled(string fromRuleId, string toRuleId)
     {
-        if (string.Equals(fromRuleId, toRuleId, StringComparison.Ordinal) || !_seriesHandled.Remove(fromRuleId, out var moved))
+        if (string.Equals(fromRuleId, toRuleId, StringComparison.Ordinal))
         {
             return false;
+        }
+
+        if (_seriesRecordings.Remove(fromRuleId, out var recordings))
+        {
+            foreach (var file in recordings)
+            {
+                AddSeriesRecording(toRuleId, file.Path, file.RecordedUtc);
+            }
+        }
+
+        if (!_seriesHandled.Remove(fromRuleId, out var moved))
+        {
+            return recordings is not null;
         }
 
         if (_seriesHandled.TryGetValue(toRuleId, out var target))
@@ -501,6 +609,8 @@ public sealed class TimerService
             _seriesTimers = loaded.SeriesTimers ?? new List<SeriesTimerInfo>();
             _seriesHandled = (loaded.SeriesHandledItems ?? new Dictionary<string, List<string>>())
                 .ToDictionary(kv => kv.Key, kv => new HashSet<string>(kv.Value ?? new List<string>(), StringComparer.Ordinal), StringComparer.Ordinal);
+            _seriesRecordings = (loaded.SeriesRecordings ?? new Dictionary<string, List<RecordedFile>>())
+                .ToDictionary(kv => kv.Key, kv => (kv.Value ?? new List<RecordedFile>()).Where(f => !string.IsNullOrEmpty(f.Path)).ToList(), StringComparer.Ordinal);
         }
         catch (Exception ex)
         {
@@ -521,7 +631,8 @@ public sealed class TimerService
             {
                 Timers = _timers,
                 SeriesTimers = _seriesTimers,
-                SeriesHandledItems = _seriesHandled.ToDictionary(kv => kv.Key, kv => kv.Value.ToList(), StringComparer.Ordinal)
+                SeriesHandledItems = _seriesHandled.ToDictionary(kv => kv.Key, kv => kv.Value.ToList(), StringComparer.Ordinal),
+                SeriesRecordings = _seriesRecordings.ToDictionary(kv => kv.Key, kv => kv.Value.ToList(), StringComparer.Ordinal)
             });
         }
         catch (Exception ex)
@@ -540,5 +651,12 @@ public sealed class TimerService
         // Rule id -> library item ids the rule has recorded or had excluded. Absent in stores written before
         // items were tracked, which load as empty.
         public Dictionary<string, List<string>> SeriesHandledItems { get; set; } = new();
+
+        // Rule id -> the recording files the rule produced. Absent in older stores, which load as empty (their
+        // earlier recordings are then never pruned: only files known to be the rule's own are ever deleted).
+        public Dictionary<string, List<RecordedFile>> SeriesRecordings { get; set; } = new();
     }
+
+    // One recording a series rule produced.
+    private sealed record RecordedFile(string Path, DateTime RecordedUtc);
 }

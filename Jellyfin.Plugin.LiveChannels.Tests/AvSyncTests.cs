@@ -152,6 +152,46 @@ public class AvSyncTests : IClassFixture<MediaFixtures>
     }
 
     [Theory]
+    [InlineData(2.5)]
+    [InlineData(4.2)]
+    public void BurnInTuneIn_ChainsIntoTheNextItem_WithoutOverlapOrDrift(double seek)
+    {
+        if (_ff is null || !_ff.HasFilter("subtitles"))
+        {
+            return;
+        }
+
+        // A burn-in channel's first item after a tune-in seeks under -copyts; the next item chains from where its
+        // output actually ended. Sound and picture must stay together across that seam, and neither may run
+        // backwards into the previous item.
+        var joined = _media.Output("burn-chain.ts");
+        var timeline = TimeSpan.FromSeconds(100);
+        using (var outStream = File.Create(joined))
+        {
+            foreach (var (fixture, offset, subtitle) in new[] { ("sync_subs.mkv", seek, ((int, bool)?)(0, true)), ("sync_subs.mkv", 0.0, (0, true)), ("sync_30.mkv", 0.0, null) })
+            {
+                var part = _media.Output("burn-part.ts");
+                var args = StreamArguments.Build(_media[fixture], TimeSpan.FromSeconds(offset), timeline, 1280, 4000, Software, "aac", 128, subtitle, softwareDecode: true, initialBurstSeconds: 600);
+                var stderr = _ff.RunProducer(args, part);
+                timeline = StreamSessionService.NextTimeline(timeline, TimeSpan.FromSeconds(10 - offset), ProductionEnd(stderr, part, timeline));
+                using var inStream = File.OpenRead(part);
+                inStream.CopyTo(outStream);
+            }
+        }
+
+        foreach (var selector in new[] { "v:0", "a:0" })
+        {
+            var packets = _ff.Packets(joined, selector);
+            for (var i = 1; i < packets.Count; i++)
+            {
+                Assert.True(packets[i].Dts > packets[i - 1].Dts, $"{selector} DTS went backwards at packet {i}: {packets[i - 1].Dts:0.000} -> {packets[i].Dts:0.000}");
+            }
+        }
+
+        AssertInSync(joined, "burn-in tune-in chain", expectedEvents: 12);
+    }
+
+    [Theory]
     [InlineData("sync_30.mkv")]
     [InlineData("sync_2398.mkv")]
     public void VideoToolbox_StaysInSync(string fixture)
