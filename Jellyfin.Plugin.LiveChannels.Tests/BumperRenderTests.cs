@@ -177,12 +177,20 @@ public sealed class BumperRenderTests : IDisposable
         string[] Layers() => Directory.GetFiles(Path.Combine(_dir, "cache"), "layer-*", SearchOption.AllDirectories);
         Assert.True(await service.PrepareLayerAsync(Channel(), 1280, null));
         var layer = Assert.Single(Layers());
-        var rendered = File.GetCreationTimeUtc(layer);
+
+        // Mark the layer (an mp4 ignores trailing bytes): a re-render would replace the file and lose the mark, which
+        // timestamps cannot show, since a reused layer is touched and Linux keeps no reliable creation time.
+        var mark = "livechannels-layer-mark"u8.ToArray();
+        await using (var file = new FileStream(layer, FileMode.Append))
+        {
+            await file.WriteAsync(mark);
+        }
 
         // A card built afterwards reuses the layer rather than rendering it again.
         var output = Path.Combine(_dir, "after-layer.mp4");
         Assert.True(await service.RenderAsync(Channel(), Episode(null, "Series", "Pilot"), 1280, null, output));
-        Assert.Equal(rendered, File.GetCreationTimeUtc(Assert.Single(Layers())));
+        Assert.Equal(layer, Assert.Single(Layers()));
+        Assert.True(File.ReadAllBytes(layer).AsSpan().EndsWith(mark));
 
         // Reset clears the layers so the task renders them afresh.
         service.ClearLayers();

@@ -99,7 +99,7 @@ public class IntroCardTests
 
     [Fact]
     public void TheCardIsTenSeconds_TheSameAsAnUpNextCard()
-        => Assert.Equal(BumperService.BumperLength.TotalSeconds, IntroService.IntroSeconds);
+        => Assert.Equal(IntroService.IntroSeconds, BumperService.BumperLength.TotalSeconds);
 
     [Fact]
     public void CardCoversJellyfinsFirstThreeDeliverySegments()
