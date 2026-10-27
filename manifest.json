@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "12.4.1.3",
+        "changelog": "## Features\r\n- Up Next cards for music videos show the artist under the title, and the Then line names the next music video's artist (after the next guide refresh)\r\n- Up Next cards for music videos show only the year, or no details line when the year is missing",
+        "targetAbi": "12.4.0.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v12.4.1.3/jellyfin-plugin-livechannels-12.4.1.3.zip",
+        "checksum": "2b607d18bdb459015db1827cb7f52a5e",
+        "timestamp": "2026-10-27T23:00:40Z"
+      },
+      {
         "version": "12.4.1.2",
         "changelog": "## Features\r\n- Tune-in and Up Next cards are 10 seconds, and the tune-in card counts down to the channel\r\n- New Generate Buffer Cards scheduled task (Live TV) renders every channel's tune-in card and the shared part of its Up Next cards ahead of time, at start-up and after Reset schedule, so tuning in never waits on a render\r\n- Reset schedule rebuilds the guide and every channel's buffer cards from scratch\r\n- Encoding follows more of Jellyfin's settings (encoder preset, thread count, deinterlacing method and Intel low-power encoding)\r\n- The next item is prepared ahead of each boundary, so slow or sleeping storage no longer stalls the transition\r\n\r\n## Fixed\r\n- Up Next cards render about twice as fast, and no longer need ffprobe\r\n- An Up Next card whose following item is unknown leaves its Then line empty instead of showing black",
         "targetAbi": "12.4.0.0",
