@@ -43,8 +43,10 @@ public sealed class IntroService : IDisposable
     /// </summary>
     public const double IntroSeconds = (3 * StreamArguments.SegmentSeconds) + 0.5;
 
-    // Bump whenever the card's rendering or the sidecar's shape changes, so stale caches regenerate.
-    private const int Revision = 5;
+    // Bump whenever the card's rendering or the sidecar's shape changes, so stale caches regenerate. 6: cards are
+    // rendered in the channel's tagged bt709 limited-range format, which matters doubly for the card because it is
+    // the first thing Jellyfin probes on tune-in and the colour description it reads there is kept for the stream.
+    private const int Revision = 6;
 
     // The look: the logo sits top-leading inside a thin bordered frame with an inner gutter, over a slowly
     // drifting dark gradient on which two pairs of coloured lines draw in from the left and keep flowing.

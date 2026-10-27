@@ -1,8 +1,10 @@
 using System;
+using System.Globalization;
 using Jellyfin.Plugin.LiveChannels.Models;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Model.Configuration;
+using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
 
 // Encoder-specific argument runs, hoisted to static fields (the analyzer rejects inline constant arrays).
@@ -105,6 +107,41 @@ public class EncoderResolver
             default:
                 return Software(codec);
         }
+    }
+
+    /// <summary>
+    /// The software tone-map stage for HDR items, built from the server's own tone-mapping settings (Dashboard >
+    /// Playback > Transcoding) so a channel renders HDR exactly as Jellyfin's own playback does. Only for an ffmpeg
+    /// that has jellyfin-ffmpeg's tonemapx; the caller checks that.
+    /// </summary>
+    /// <returns>The tonemapx filter, ending in 8-bit bt709 4:2:0.</returns>
+    public string SoftwareToneMap()
+    {
+        var options = ReadOptions();
+        return ToneMapX(options?.TonemappingAlgorithm ?? TonemappingAlgorithm.bt2390, options?.TonemappingDesat ?? 0, options?.TonemappingPeak ?? 100, options?.TonemappingParam ?? 0);
+    }
+
+    /// <summary>
+    /// Builds a tonemapx stage. A "none" algorithm would pass the PQ signal through as if it were SDR (a washed
+    /// out picture), so it falls back to bt2390, Jellyfin's default; an unset peak falls back to 100 nits.
+    /// </summary>
+    /// <param name="algorithm">The tone-mapping curve.</param>
+    /// <param name="desat">The highlight desaturation strength.</param>
+    /// <param name="peak">The signal peak override in nits, or 0 for the default.</param>
+    /// <param name="param">The curve's tuning parameter, or 0 for its default.</param>
+    /// <returns>The tonemapx filter.</returns>
+    internal static string ToneMapX(TonemappingAlgorithm algorithm, double desat, double peak, double param)
+    {
+        var curve = algorithm == TonemappingAlgorithm.none ? TonemappingAlgorithm.bt2390 : algorithm;
+        var stage = "tonemapx=tonemap=" + curve.ToString().ToLowerInvariant()
+            + ":desat=" + Math.Max(0, desat).ToString("0.###", CultureInfo.InvariantCulture)
+            + ":peak=" + (peak > 0 ? peak : 100).ToString("0.###", CultureInfo.InvariantCulture);
+        if (param > 0)
+        {
+            stage += ":param=" + param.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        return stage + ":t=bt709:m=bt709:p=bt709:r=tv:format=yuv420p";
     }
 
     /// <summary>

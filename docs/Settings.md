@@ -83,7 +83,7 @@ Where two blocks overlap, the lowest minimum and the lowest maximum win. A chann
 | **Minimum critic rating** | Only content with at least this critic score, on a 0 to 100 scale. Content with no critic rating is dropped when set. | 0 (off) |
 | **Studios** | Only content from these studios or networks (an HBO channel). For shows this also matches the series' studio. | all studios |
 | **People** | Only content featuring these actors or directors, matched by person. | everyone |
-| **Audio language** | Only content whose default audio track is this language. | all languages |
+| **Audio language** | Only content with an audio track in this language, and that track is the one that plays. Leave it on all languages and each item plays its audio in your [Default language](#playback) when it has it. | all languages |
 
 ### Channel settings
 
@@ -141,6 +141,8 @@ Lists every channel currently encoding, one row per encoder (not per viewer): lo
 
 **Kill** stops the stream and frees its encoder immediately, even if someone is watching. It is the only thing that will: the caps and timers below never close a stream Jellyfin reports as playing.
 
+A session's ffmpeg log goes away with the session. When an encoder fails (produces nothing, stops writing for 15 seconds, or exits with an error), a report is also written to Jellyfin's log folder as `livechannels-failure-<time>-<item>.log`, holding the exact ffmpeg command, what happened, and ffmpeg's error. The newest 25 are kept.
+
 ---
 
 ## Settings tab
@@ -184,7 +186,7 @@ The Playback section.
 
 | Setting | What it does | Default |
 | --- | --- | --- |
-| **Default language** | Your native language. A channel set to **Forced only** burns full subtitles when content's audio is in another language, so foreign content stays followable. | English |
+| **Default language** | Your native language. Each item plays its audio in it when it has it (the default track in that language, else the first one, else the item's own default track); a channel's **Audio language** overrides it. A channel set to **Forced only** burns full subtitles when content's audio is in another language, so foreign content stays followable. | English |
 
 ### Subtitle appearance
 

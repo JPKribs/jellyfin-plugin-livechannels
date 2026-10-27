@@ -208,7 +208,7 @@ public partial class ChannelService
                 continue;
             }
 
-            var entry = ToEntry(item, streams, seriesArtwork);
+            var entry = ToEntry(item, streams, seriesArtwork, PreferredAudioLanguage(channel));
             if (entry is not null)
             {
                 entries.Add(entry);

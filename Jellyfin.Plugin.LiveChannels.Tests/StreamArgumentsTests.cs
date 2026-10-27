@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Jellyfin.Plugin.LiveChannels.Models;
+using Jellyfin.Plugin.LiveChannels.Services;
 using Jellyfin.Plugin.LiveChannels.Utilities;
 using Xunit;
 
@@ -128,7 +129,7 @@ public class StreamArgumentsTests
         Assert.True(Pair(a, "-hwaccel_output_format", "vaapi"));
         var vf = a[a.IndexOf("-vf") + 1];
         Assert.Contains("deinterlace_vaapi=rate=frame:auto=1", vf, StringComparison.Ordinal);
-        Assert.Contains("scale_vaapi=w=1920:h=1080:force_original_aspect_ratio=decrease:format=nv12", vf, StringComparison.Ordinal);
+        Assert.Contains("scale_vaapi=" + StreamArguments.FitSize(1920, 1080) + ":format=nv12", vf, StringComparison.Ordinal);
         Assert.Contains("hwmap=derive_device=qsv,format=qsv", vf, StringComparison.Ordinal);
         Assert.DoesNotContain("hwdownload", vf, StringComparison.Ordinal);
         Assert.DoesNotContain("hwupload", vf, StringComparison.Ordinal);
@@ -142,7 +143,7 @@ public class StreamArgumentsTests
         // painted before the tone map sit in PQ/bt2020 space and the LUT renders them green instead of black.
         var a = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, null, null, false, isHdr: true);
         var vf = a[a.IndexOf("-vf") + 1];
-        Assert.Contains("scale_vaapi=w=1920:h=1080:force_original_aspect_ratio=decrease:format=p010", vf, StringComparison.Ordinal);
+        Assert.Contains("scale_vaapi=" + StreamArguments.FitSize(1920, 1080) + ":format=p010", vf, StringComparison.Ordinal);
         Assert.Contains("tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709", vf, StringComparison.Ordinal);
         Assert.True(vf.IndexOf("scale_vaapi", StringComparison.Ordinal) < vf.IndexOf("tonemap_vaapi", StringComparison.Ordinal));
         Assert.True(vf.IndexOf("tonemap_vaapi", StringComparison.Ordinal) < vf.IndexOf("pad_vaapi", StringComparison.Ordinal));
@@ -190,7 +191,7 @@ public class StreamArgumentsTests
         var a = StreamArguments.Build("/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, (1, true));
         Assert.True(Pair(a, "-filter_hw_device", "va"));
         var fc = a[a.IndexOf("-filter_complex") + 1];
-        Assert.Contains("scale_vaapi=w=1920:h=1080", fc, StringComparison.Ordinal);
+        Assert.Contains("scale_vaapi=" + StreamArguments.FitSize(1920, 1080), fc, StringComparison.Ordinal);
         Assert.Contains("alphasrc=s=1920x1080:r=10:start=0", fc, StringComparison.Ordinal);
         Assert.Contains("subtitles=filename='/m.mkv':si=1:alpha=1", fc, StringComparison.Ordinal);
         Assert.Contains("hwupload[sub]", fc, StringComparison.Ordinal);
@@ -274,7 +275,7 @@ public class StreamArgumentsTests
         Assert.True(Pair(a, "-hwaccel", "qsv"));
         Assert.True(Pair(a, "-hwaccel_output_format", "qsv"));
         Assert.True(a.IndexOf("-hwaccel") < a.IndexOf("-i"));
-        Assert.Contains(a, x => x.StartsWith("hwdownload,format=nv12,", StringComparison.Ordinal) && x.Contains("scale=1280:720", StringComparison.Ordinal));
+        Assert.Contains(a, x => x.StartsWith("hwdownload,format=nv12,", StringComparison.Ordinal) && x.Contains("scale=" + StreamArguments.FitSize(1280, 720), StringComparison.Ordinal));
     }
 
     [Fact]
@@ -323,7 +324,7 @@ public class StreamArgumentsTests
         var a = Build();
         Assert.True(Pair(a, "-c:v", "libx264"));
         Assert.False(Pair(a, "-c:v", "copy"));
-        Assert.Contains(a, x => x.Contains("scale=1280:720") && x.Contains("fps=30") && x.Contains("format=yuv420p"));
+        Assert.Contains(a, x => x.Contains("scale=" + StreamArguments.FitSize(1280, 720)) && x.Contains("fps=30") && x.Contains("format=yuv420p"));
         Assert.True(Pair(a, "-preset", "veryfast")); // software encoder uses a preset
     }
 
@@ -363,7 +364,7 @@ public class StreamArgumentsTests
         Assert.True(Pair(a, "-f", "concat"));
         Assert.True(Pair(a, "-i", "/tmp/list.txt"));
         Assert.True(Pair(a, "-ss", "30.000"));
-        Assert.Contains(a, x => x.Contains("scale=1280:720") && x.Contains("fps=30"));
+        Assert.Contains(a, x => x.Contains("scale=" + StreamArguments.FitSize(1280, 720)) && x.Contains("fps=30"));
         Assert.True(Pair(a, "-c:v", "libx264"));
         Assert.DoesNotContain("-hwaccel", a);            // software decode for the concat pipeline
         Assert.DoesNotContain("-output_ts_offset", a);   // one continuous encoder, no per-item offset
@@ -372,18 +373,90 @@ public class StreamArgumentsTests
     }
 
     [Fact]
+    public void Scale_SizesFromTheDisplayAspectRatio_NotStoredPixels()
+    {
+        // force_original_aspect_ratio fits the stored pixels and ignores the SAR, squeezing anamorphic sources;
+        // every scale (software, concat, and the VAAPI chains) sizes from dar instead. Proven against real
+        // ffmpeg in StreamPipelineIntegrationTests.Geometry_KeepsTheDisplayAspectRatio.
+        Assert.Equal(
+            "w='if(gte(dar,1.772778),1280,min(1280,trunc(720*dar/2+0.5)*2))':h='if(gte(dar,1.772778),min(720,trunc(1280/dar/2+0.5)*2),720)'",
+            StreamArguments.FitSize(1280, 720));
+        var all = new[]
+        {
+            Build(),
+            StreamArguments.BuildConcat("/tmp/list.txt", default, 1280, 4000, SoftwareH264, "aac", 192),
+            StreamArguments.Build("/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, null),
+            StreamArguments.Build("/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, null, null, false, isHdr: true),
+            StreamArguments.Build("/m.mkv", default, default, 1920, 16000, QsvLinux, "aac", 192, (1, true)),
+        };
+        foreach (var args in all)
+        {
+            Assert.DoesNotContain(args, x => x.Contains("force_original_aspect_ratio", StringComparison.Ordinal));
+            Assert.Contains(args, x => x.Contains("dar", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void Slate_ShowsTheStandbyReason_WithUnsafeCharactersRemoved()
+    {
+        var vf = string.Join(" ", StreamArguments.BuildSlate(1280, 4000, 10, TimeSpan.Zero, "/fonts/Sans.ttf", message: "The media for this channel cannot be reached"));
+        Assert.Contains("text='The media for this channel cannot be reached'", vf, StringComparison.Ordinal);
+
+        // A quote or colon would end the drawtext value early and break the filter graph.
+        var unsafeText = string.Join(" ", StreamArguments.BuildSlate(1280, 4000, 10, TimeSpan.Zero, "/fonts/Sans.ttf", message: "Bob's: feed"));
+        Assert.Contains("text='Bobs feed'", unsafeText, StringComparison.Ordinal);
+
+        // Without a reason the generic line stays.
+        Assert.Contains("text='Channel content is unavailable'", string.Join(" ", StreamArguments.BuildSlate(1280, 4000, 10, TimeSpan.Zero, "/fonts/Sans.ttf")), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(0, "This channel has nothing to play right now")]
+    [InlineData(1, "The media for this channel cannot be reached")]
+    [InlineData(2, "The media for this channel cannot be played right now")]
+    [InlineData(3, "The encoder for this channel keeps failing")]
+    public void StandbyMessage_NamesTheReason(int reason, string expected)
+        => Assert.Equal(expected, StreamSessionService.StandbyMessage((StreamSessionService.StandbyReason)reason));
+
+    [Fact]
     public void Hdr_InsertsTonemapChain_OnlyWhenHdr()
     {
         // SDR: no tone-map. HDR: the zscale->tonemap->zscale chain is inserted after deinterlace, before scale.
         var sdr = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, false);
         Assert.DoesNotContain(sdr, x => x.Contains("tonemap", StringComparison.Ordinal));
 
+        // HDR: the picture is scaled to the output size FIRST, then tone-mapped (a 4K source tone-mapped at 4K
+        // costs four times the work), then padded, so the bars land on the finished SDR frame.
         var hdr = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, isHdr: true);
-        Assert.Contains(hdr, x => x.Contains("yadif=deint=1,zscale=t=linear", StringComparison.Ordinal)
-            && x.Contains("tonemap=tonemap=hable", StringComparison.Ordinal)
-            && x.Contains("zscale=t=bt709", StringComparison.Ordinal)
-            && x.IndexOf("tonemap", StringComparison.Ordinal) < x.IndexOf("scale=1280:720", StringComparison.Ordinal));
+        var vf = hdr[hdr.IndexOf("-vf") + 1];
+        var scale = vf.IndexOf("scale=" + StreamArguments.FitSize(1280, 720), StringComparison.Ordinal);
+        var tonemap = vf.IndexOf("zscale=t=linear", StringComparison.Ordinal);
+        Assert.Contains("tonemap=tonemap=hable", vf, StringComparison.Ordinal);
+        Assert.True(scale >= 0 && scale < tonemap, vf);
+        Assert.True(tonemap < vf.IndexOf("pad=", StringComparison.Ordinal), vf);
     }
+
+    [Fact]
+    public void Hdr_UsesTheGivenToneMapStage_InPlaceOfZscale()
+    {
+        var stage = "tonemapx=tonemap=bt2390:desat=0:peak=100:t=bt709:m=bt709:p=bt709:r=tv:format=yuv420p";
+        var hdr = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, null, false, isHdr: true, toneMapStage: stage);
+        var vf = hdr[hdr.IndexOf("-vf") + 1];
+        Assert.Contains("," + stage + ",pad=", vf, StringComparison.Ordinal);
+        Assert.DoesNotContain("zscale", vf, StringComparison.Ordinal);
+
+        // SDR never tone-maps, whatever stage is offered.
+        var sdr = StreamArguments.Build("/m.mkv", default, default, 1280, 4000, SoftwareH264, "aac", 192, null, toneMapStage: stage);
+        Assert.DoesNotContain(sdr, x => x.Contains("tonemap", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(MediaBrowser.Model.Entities.TonemappingAlgorithm.bt2390, 0, 100, 0, "tonemapx=tonemap=bt2390:desat=0:peak=100:t=bt709:m=bt709:p=bt709:r=tv:format=yuv420p")]
+    [InlineData(MediaBrowser.Model.Entities.TonemappingAlgorithm.hable, 0.5, 400, 0, "tonemapx=tonemap=hable:desat=0.5:peak=400:t=bt709:m=bt709:p=bt709:r=tv:format=yuv420p")]
+    [InlineData(MediaBrowser.Model.Entities.TonemappingAlgorithm.reinhard, 0, 0, 0.3, "tonemapx=tonemap=reinhard:desat=0:peak=100:param=0.3:t=bt709:m=bt709:p=bt709:r=tv:format=yuv420p")]
+    [InlineData(MediaBrowser.Model.Entities.TonemappingAlgorithm.none, 0, 100, 0, "tonemapx=tonemap=bt2390:desat=0:peak=100:t=bt709:m=bt709:p=bt709:r=tv:format=yuv420p")]
+    public void ToneMapX_FollowsTheServerSettings(MediaBrowser.Model.Entities.TonemappingAlgorithm algorithm, double desat, double peak, double param, string expected)
+        => Assert.Equal(expected, Jellyfin.Plugin.LiveChannels.Services.EncoderResolver.ToneMapX(algorithm, desat, peak, param));
 
     [Fact]
     public void AudioEncoder_AndBitrate_AreUsed()

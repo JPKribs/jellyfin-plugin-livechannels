@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.LiveChannels.Models;
@@ -59,9 +60,24 @@ public partial class ChannelService
         }
     }
 
-    // The default audio track (the one Jellyfin would play) and its ordinal among the item's audio streams, or
-    // null when the item has no audio.
-    private static (int Ordinal, MediaStream Stream)? DefaultAudio(IReadOnlyList<MediaStream> streams)
+    // ISO 639-2 bibliographic codes and their terminology twins (ger/deu, fre/fra, ...). Media is tagged with
+    // either, and .NET's cultures only know the terminology form.
+    private static readonly Dictionary<string, string> BibliographicLanguages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["alb"] = "sqi", ["arm"] = "hye", ["baq"] = "eus", ["bur"] = "mya", ["chi"] = "zho", ["cze"] = "ces", ["dut"] = "nld",
+        ["fre"] = "fra", ["geo"] = "kat", ["ger"] = "deu", ["gre"] = "ell", ["ice"] = "isl", ["mac"] = "mkd", ["mao"] = "mri",
+        ["may"] = "msa", ["per"] = "fas", ["rum"] = "ron", ["slo"] = "slk", ["tib"] = "bod", ["wel"] = "cym"
+    };
+
+    /// <summary>
+    /// The audio track a channel plays for an item, and its ordinal among the item's audio streams: the default
+    /// track in the preferred language, else the first track in that language, else the default track, else the
+    /// first track. <c>null</c> when the item has no audio.
+    /// </summary>
+    /// <param name="streams">The item's media streams.</param>
+    /// <param name="preferredLanguage">The language to prefer (ISO 639 code), or empty for none.</param>
+    /// <returns>The chosen track and its ordinal, or <c>null</c>.</returns>
+    internal static (int Ordinal, MediaStream Stream)? ChooseAudio(IReadOnlyList<MediaStream> streams, string? preferredLanguage)
     {
         var audio = streams.Where(s => s.Type == MediaStreamType.Audio).OrderBy(s => s.Index).ToList();
         if (audio.Count == 0)
@@ -69,10 +85,80 @@ public partial class ChannelService
             return null;
         }
 
-        var defaultIndex = audio.FindIndex(s => s.IsDefault);
-        var ordinal = defaultIndex >= 0 ? defaultIndex : 0;
+        int Pick(Func<MediaStream, bool> match) => audio.FindIndex(s => match(s));
+        var ordinal = -1;
+        if (!string.IsNullOrWhiteSpace(preferredLanguage))
+        {
+            ordinal = Pick(s => s.IsDefault && LanguageMatches(s.Language, preferredLanguage));
+            if (ordinal < 0)
+            {
+                ordinal = Pick(s => LanguageMatches(s.Language, preferredLanguage));
+            }
+        }
+
+        if (ordinal < 0)
+        {
+            ordinal = Pick(s => s.IsDefault);
+        }
+
+        if (ordinal < 0)
+        {
+            ordinal = 0;
+        }
+
         return (ordinal, audio[ordinal]);
     }
+
+    /// <summary>
+    /// Whether two language tags name the same language, across ISO 639-1 (<c>en</c>), 639-2 terminology
+    /// (<c>eng</c>, <c>deu</c>), and 639-2 bibliographic (<c>ger</c>) forms. Region suffixes are ignored.
+    /// </summary>
+    /// <param name="a">One tag.</param>
+    /// <param name="b">The other tag.</param>
+    /// <returns>Whether they match.</returns>
+    internal static bool LanguageMatches(string? a, string? b)
+    {
+        var x = NormalizeLanguage(a);
+        var y = NormalizeLanguage(b);
+        return x.Length > 0 && string.Equals(x, y, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // A language tag as an ISO 639-2 terminology code where one is known, else the tag itself, lower case.
+    private static string NormalizeLanguage(string? tag)
+    {
+        var code = (tag ?? string.Empty).Trim().Split('-', '_')[0].ToLowerInvariant();
+        if (code.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (BibliographicLanguages.TryGetValue(code, out var terminology))
+        {
+            return terminology;
+        }
+
+        if (code.Length == 2)
+        {
+            try
+            {
+                var three = CultureInfo.GetCultureInfo(code).ThreeLetterISOLanguageName;
+                return string.IsNullOrEmpty(three) ? code : three.ToLowerInvariant();
+            }
+            catch (CultureNotFoundException)
+            {
+                return code;
+            }
+        }
+
+        return code;
+    }
+
+    // The language a channel prefers its audio in: the channel's own audio language when set, else the plugin's
+    // default language (the viewer's native language).
+    private static string PreferredAudioLanguage(Channel channel)
+        => !string.IsNullOrWhiteSpace(channel.AudioLanguage)
+            ? channel.AudioLanguage
+            : Plugin.Instance?.ReadConfiguration(c => c.DefaultSubtitleLanguage) ?? string.Empty;
 
     // The item's subtitle streams (ordered by absolute index) as the minimal burn-in descriptors cached on the
     // schedule, so the live stream picks a burn-in track without re-reading the media streams.
@@ -102,9 +188,9 @@ public partial class ChannelService
         return infos;
     }
 
-    // Whether the default audio track is in the channel's required language (a three-letter ISO code). An empty
-    // language allows everything. Strict by design ("MUST be this language"): an item whose default track is
-    // another language, is untagged, or cannot be read is excluded. Operates on the already-read streams.
+    // Whether an item has audio in the channel's required language (an ISO 639 code): the track it would play,
+    // chosen with that language preferred (see ChooseAudio), is in it. An empty language allows everything. An item
+    // with no track in the language, untagged audio, or unreadable streams is excluded.
     private static bool AudioLanguageAllows(string language, IReadOnlyList<MediaStream> streams)
     {
         if (string.IsNullOrWhiteSpace(language))
@@ -112,8 +198,8 @@ public partial class ChannelService
             return true;
         }
 
-        var def = DefaultAudio(streams);
-        return def is not null && string.Equals(def.Value.Stream.Language, language, StringComparison.OrdinalIgnoreCase);
+        var chosen = ChooseAudio(streams, language);
+        return chosen is not null && LanguageMatches(chosen.Value.Stream.Language, language);
     }
 
     /// <summary>
@@ -219,7 +305,7 @@ public partial class ChannelService
                 continue;
             }
 
-            var entry = ToEntry(item, streams, seriesArtwork);
+            var entry = ToEntry(item, streams, seriesArtwork, PreferredAudioLanguage(channel));
             if (entry is not null)
             {
                 entries.Add(entry);
@@ -494,7 +580,7 @@ public partial class ChannelService
         return allowed;
     }
 
-    private ProgramEntry? ToEntry(BaseItem? item, IReadOnlyList<MediaStream> streams, Dictionary<Guid, ArtworkSet> seriesArtwork)
+    private ProgramEntry? ToEntry(BaseItem? item, IReadOnlyList<MediaStream> streams, Dictionary<Guid, ArtworkSet> seriesArtwork, string preferredLanguage)
     {
         if (item is null)
         {
@@ -528,7 +614,7 @@ public partial class ChannelService
             return null;
         }
 
-        var defaultAudio = DefaultAudio(streams);
+        var defaultAudio = ChooseAudio(streams, preferredLanguage);
         var images = ResolveGuideImages(item, seriesArtwork);
 
         return new ProgramEntry(item.Id, title, item.Overview, ticks, item.Path)
@@ -553,6 +639,11 @@ public partial class ChannelService
             PremiereDate = item.PremiereDate,
             IsHdr = ComputeIsHdr(video),
             DefaultAudioOrdinal = defaultAudio?.Ordinal ?? 0,
+            IsVideoOnly = video is not null && !streams.Any(s => s.Type == MediaStreamType.Audio),
+            SourceVideoCodec = video?.Codec,
+            SourceColorSpace = video?.ColorSpace,
+            SourceAudioCodec = defaultAudio?.Stream.Codec,
+            SourceAudioChannels = defaultAudio?.Stream.Channels,
             DefaultAudioLanguage = defaultAudio?.Stream.Language,
             Subtitles = BuildSubtitleInfos(streams)
         };

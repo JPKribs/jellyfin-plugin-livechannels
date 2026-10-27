@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Configuration;
 using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Utilities;
+using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Logging;
 
@@ -29,11 +30,29 @@ public class StreamSessionService
     // unreachable — and then quickly (~5s), instead of walking every item of a large playlist first.
     private const int MaxConsecutiveFailures = 25;
 
+    // How long a producer may go without writing a byte before it is judged hung and killed. A paced producer
+    // writes continuously, so a long silence means a wedged hardware encoder or a stalled network read: left
+    // alone, the session stays "healthy" while viewers watch a frozen channel, because nothing completes for the
+    // self-heal paths to react to. Killing the run hands it to them (the next item, or a resumed concat run).
+    // The first byte gets more room than the rest: opening a file on a slow mount, seeking deep into a large
+    // item, and reading a text subtitle track out of the file all happen before any output. Once output is
+    // flowing the limit has to beat Jellyfin: its delivery ends the viewer's stream about 28 seconds after the
+    // producer goes silent (measured on 12.4, segment reserve included), so a hung producer must be killed with
+    // enough of that left for its replacement to write the next segments.
+    private static readonly TimeSpan FirstOutputTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(15);
+
+    // Standby holds for StandbyHoldFirst, doubling per hold up to StandbyHoldCeiling, before the schedule is tried
+    // again. The doubling starts over once the schedule has played for StandbyBackoffReset.
+    private static readonly TimeSpan StandbyHoldCeiling = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan StandbyBackoffReset = TimeSpan.FromMinutes(10);
+
     private readonly IMediaEncoder _encoder;
     private readonly ChannelService _channels;
     private readonly EncoderResolver _encoders;
     private readonly IntroService _intros;
     private readonly ILogger<StreamSessionService> _logger;
+    private readonly FailureReports _reports;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StreamSessionService"/> class.
@@ -42,14 +61,17 @@ public class StreamSessionService
     /// <param name="channels">The channel service, used to resolve and schedule the channel's items.</param>
     /// <param name="encoders">The encoder resolver, used to pick software/hardware encoders.</param>
     /// <param name="intros">The tune-in card cache, played ahead of the first item of a fresh session.</param>
+    /// <param name="appPaths">The server paths; failure reports are written to its log directory.</param>
     /// <param name="logger">The logger.</param>
-    public StreamSessionService(IMediaEncoder encoder, ChannelService channels, EncoderResolver encoders, IntroService intros, ILogger<StreamSessionService> logger)
+    public StreamSessionService(IMediaEncoder encoder, ChannelService channels, EncoderResolver encoders, IntroService intros, IApplicationPaths appPaths, ILogger<StreamSessionService> logger)
     {
+        ArgumentNullException.ThrowIfNull(appPaths);
         _encoder = encoder;
         _channels = channels;
         _encoders = encoders;
         _intros = intros;
         _logger = logger;
+        _reports = new FailureReports(appPaths.LogDirectoryPath);
     }
 
     /// <summary>
@@ -112,10 +134,96 @@ public class StreamSessionService
             }
         }
 
+        // The channel plays its schedule until it has nothing it can play (no items resolve, or the library is
+        // unreachable), then shows standby for a while and tries the schedule again, rejoining it at the wall
+        // clock exactly as a restarted producer does. The hold doubles while the outage lasts (see StandbyHold), so
+        // a long outage retries every few minutes instead of every few seconds, and a brief one (a storage blip)
+        // costs a viewer a minute of standby instead of the rest of the session.
+        var openedOnCard = card is not null;
+        var standbyRound = 0;
+        while (true)
+        {
+            var scheduleStarted = DateTime.UtcNow;
+            var standby = await StreamScheduleAsync(ffmpeg, channel, output, stats, timelineBase, lead, openedOnCard, cancellationToken).ConfigureAwait(false);
+            if (standby is null || cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (standby.Reason is not { } reason)
+            {
+                // Not a failure: the path chosen at tune-in no longer suits the schedule, so plan again from
+                // where the output reached, with no standby in between, on the channel's current settings.
+                timelineBase = standby.At;
+                lead = TimeSpan.Zero;
+                openedOnCard = false;
+                channel = _channels.FindChannel(channel.Id) ?? channel;
+                continue;
+            }
+
+            if (DateTime.UtcNow - scheduleStarted >= StandbyBackoffReset)
+            {
+                standbyRound = 0;
+            }
+
+            var hold = StandbyHold(standbyRound++, StandbyHoldFirst);
+            _logger.LogWarning("Live Channels: {Name}: showing standby for {Seconds:F0}s, then retrying the schedule", channel.Name, hold.TotalSeconds);
+            stats?.AppendLog("standby for " + hold.TotalSeconds.ToString("F0", CultureInfo.InvariantCulture) + "s, then retrying the schedule");
+            var resumeAt = await StreamSlateAsync(ffmpeg, standby.At, output, cancellationToken, stats, hold, StandbyMessage(reason)).ConfigureAwait(false);
+            if (resumeAt is null || cancellationToken.IsCancellationRequested)
+            {
+                // The slate itself could not run: end this producer so the session's own recovery takes over.
+                return;
+            }
+
+            // Retry on the channel's current settings: an outage is often fixed by editing the channel.
+            timelineBase = resumeAt.Value;
+            lead = TimeSpan.Zero;
+            openedOnCard = false;
+            channel = _channels.FindChannel(channel.Id) ?? channel;
+        }
+    }
+
+    /// <summary>
+    /// The line the standby card shows under "Standby", saying why the channel is off its schedule, so a viewer
+    /// (or the admin they ask) can tell a storage problem from an encoding one. Plain words only: the text goes
+    /// into a drawtext filter.
+    /// </summary>
+    /// <param name="reason">Why the channel is on standby.</param>
+    /// <returns>The message.</returns>
+    internal static string StandbyMessage(StandbyReason reason) => reason switch
+    {
+        StandbyReason.NothingToPlay => "This channel has nothing to play right now",
+        StandbyReason.MediaUnreachable => "The media for this channel cannot be reached",
+        StandbyReason.ItemsFailing => "The media for this channel cannot be played right now",
+        StandbyReason.EncoderFailing => "The encoder for this channel keeps failing",
+        _ => "Channel content is unavailable"
+    };
+
+    /// <summary>
+    /// Gets the first standby hold of an outage (one minute). Settable only so tests can shorten it.
+    /// </summary>
+    internal TimeSpan StandbyHoldFirst { get; init; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// How long standby holds before the schedule is tried again, by how many standby holds in a row this session
+    /// has had: the first hold, doubling to a five-minute ceiling.
+    /// </summary>
+    /// <param name="round">The number of standby holds before this one since the channel last played for a while.</param>
+    /// <param name="first">The first hold.</param>
+    /// <returns>The standby hold.</returns>
+    internal static TimeSpan StandbyHold(int round, TimeSpan first)
+        => TimeSpan.FromSeconds(Math.Min(StandbyHoldCeiling.TotalSeconds, first.TotalSeconds * Math.Pow(2, Math.Clamp(round, 0, 16))));
+
+    // Plays the channel's schedule from the timeline position given (where the tune-in card or a previous standby
+    // left off) until the session is cancelled, returning null, or until nothing on the schedule can be played,
+    // returning the timeline position standby should start from.
+    private async Task<StandbyRequest?> StreamScheduleAsync(string ffmpeg, Channel channel, Stream output, SessionStats? stats, TimeSpan timelineBase, TimeSpan lead, bool openedOnCard, CancellationToken cancellationToken)
+    {
         // A restarted producer continues under a viewer, and the producer it replaces had run ahead of the wall
         // clock by up to its head start. Resume the schedule where that output actually ended (the session's
         // anchor plus the timeline it reached) rather than at plain "now", which would replay that lead.
-        var restarted = timelineBase > TimeSpan.Zero && card is null;
+        var restarted = timelineBase > TimeSpan.Zero && !openedOnCard;
         if (restarted && stats?.ContentAnchorUtc is { } sessionAnchor)
         {
             var ahead = sessionAnchor + timelineBase - DateTime.UtcNow;
@@ -133,8 +241,7 @@ public class StreamSessionService
         if (programs.Count == 0)
         {
             _logger.LogWarning("Live channel {Name} resolved to no playable items; showing standby", channel.Name);
-            await StreamSlateAsync(ffmpeg, timelineBase, output, cancellationToken, stats).ConfigureAwait(false);
-            return;
+            return new StandbyRequest(timelineBase, StandbyReason.NothingToPlay);
         }
 
         // Follows the loop if it is rebuilt while this session plays (the daily guide refresh, or a configuration
@@ -169,7 +276,21 @@ public class StreamSessionService
         // already per-item for another reason (burn-in, a >1080p item, or a GPU-upload encoder).
         var alreadyPerItem = channel.SubtitleBurnIn != Models.SubtitleBurnInMode.Never || highRes || usesHwUpload;
         var hasHdr = !alreadyPerItem && programs.Any(p => p.IsHdr);
-        var perItem = alreadyPerItem || hasHdr || timeOfDay;
+
+        // A video-only item has no audio packets to feed the concat demuxer's shared audio stream; only the
+        // per-item path can give it a silent track of its own.
+        var hasVideoOnly = !alreadyPerItem && !hasHdr && programs.Any(p => p.IsVideoOnly);
+
+        // The concat demuxer sets up one video and one audio decoder from the FIRST file and feeds every later
+        // file through them, so it can only play a playlist whose items all share their formats (see
+        // ConcatCompatible); anything else airs with broken or silent stretches. Those channels stream per item.
+        var mixedFormats = !alreadyPerItem && !hasHdr && !hasVideoOnly && !timeOfDay && !ConcatCompatible(programs);
+        if (mixedFormats)
+        {
+            _logger.LogInformation("Live Channels: {Name}: its items differ in video codec, audio codec, audio channels, default audio track, or colour matrix (or were scanned before these were recorded), so it streams item by item", channel.Name);
+        }
+
+        var perItem = alreadyPerItem || hasHdr || hasVideoOnly || mixedFormats || timeOfDay;
         var uniform = IsUniform(programs);
 
         // A fresh session bursts the full head start; a restart only tops up whatever lead it has lost, so the
@@ -180,8 +301,7 @@ public class StreamSessionService
         {
             var (concatIndex, _) = ScheduleCalculator.CurrentProgram(programs, startUtc, ScheduleCalculator.AnchorFor(programs));
             LogEncodePlan(channel, programs.Count, concatIndex, perItem, uniform, hasHdr);
-            await StreamConcatAsync(ffmpeg, channel, follower, output, cancellationToken, stats, timelineBase, anchor, headCredit).ConfigureAwait(false);
-            return;
+            return await StreamConcatAsync(ffmpeg, channel, follower, output, cancellationToken, stats, timelineBase, anchor, headCredit).ConfigureAwait(false);
         }
 
         IStreamSchedule schedule;
@@ -199,8 +319,60 @@ public class StreamSessionService
         }
 
         LogEncodePlan(channel, programs.Count, planIndex, perItem, uniform, hasHdr);
-        await StreamPerItemLoopAsync(ffmpeg, channel, schedule, output, cancellationToken, stats, timelineBase, headCredit).ConfigureAwait(false);
+        return await StreamPerItemLoopAsync(ffmpeg, channel, schedule, output, cancellationToken, stats, timelineBase, headCredit).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Whether every item can share the continuous concat pipeline's single pair of decoders: the same video
+    /// codec, the same audio codec and channel count on the track each plays, that track being at the same position
+    /// in every file (the one concat input maps a single track number for all of them), and the same colour matrix
+    /// (the one scale pass converts every item from a single input matrix). Measured on jellyfin-ffmpeg: AAC 5.1 after AAC
+    /// stereo, AC-3 after AAC, and HEVC after H.264 all fail to decode, leaving silent or broken stretches with no
+    /// error surfacing anywhere; a sample rate change alone decodes fine. An item whose formats were not recorded
+    /// (a schedule cached before they were) counts as incompatible, so it takes the per-item path, which reopens
+    /// the decoders for every item, until the next guide refresh records them.
+    /// </summary>
+    /// <param name="programs">The channel's items.</param>
+    /// <returns>Whether the concat pipeline can play them all.</returns>
+    internal static bool ConcatCompatible(IReadOnlyList<ProgramEntry> programs)
+    {
+        ArgumentNullException.ThrowIfNull(programs);
+        if (programs.Count == 0)
+        {
+            return true;
+        }
+
+        var first = programs[0];
+        if (string.IsNullOrEmpty(first.SourceVideoCodec) || string.IsNullOrEmpty(first.SourceAudioCodec) || first.SourceAudioChannels is null)
+        {
+            return false;
+        }
+
+        foreach (var p in programs)
+        {
+            if (!string.Equals(p.SourceVideoCodec, first.SourceVideoCodec, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(p.SourceAudioCodec, first.SourceAudioCodec, StringComparison.OrdinalIgnoreCase)
+                || p.SourceAudioChannels != first.SourceAudioChannels
+                || (p.DefaultAudioOrdinal ?? 0) != (first.DefaultAudioOrdinal ?? 0)
+                || StreamArguments.InputMatrix(p.SourceColorSpace, p.SourceHeight) != StreamArguments.InputMatrix(first.SourceColorSpace, first.SourceHeight))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Whether the continuous concat pipeline can play these items at all: none above 1080p (software decode cannot
+    /// keep up), none HDR (only the per-item path tone-maps), none without audio (concat has no track to give
+    /// them), and all sharing their formats (see <see cref="ConcatCompatible"/>). Channel-level reasons for the
+    /// per-item path (burn-in, time-of-day ratings, a GPU-upload encoder) do not change with the schedule.
+    /// </summary>
+    /// <param name="programs">The channel's items.</param>
+    /// <returns>Whether the concat pipeline suits them.</returns>
+    internal static bool ConcatSuits(IReadOnlyList<ProgramEntry> programs)
+        => !programs.Any(p => p.SourceHeight > 1080 || p.IsHdr || p.IsVideoOnly) && ConcatCompatible(programs);
 
     // Whether every item shares one known source height, which lets the continuous pipeline hardware-decode (the
     // concat demuxer feeds one shared decoder, and a hardware decoder cannot follow a mid-stream resolution change).
@@ -304,7 +476,9 @@ public class StreamSessionService
     // Streams the channel as ONE continuous ffmpeg using the concat demuxer, so item boundaries are seamless
     // (no timestamp or continuity reset). Software decode unless every item shares one resolution (a hardware
     // decoder cannot follow a mid-playlist resolution change), with the hardware encoder.
-    private async Task StreamConcatAsync(string ffmpeg, Channel channel, ProgramsFollower follower, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan timelineBase = default, DateTime anchorUtc = default, TimeSpan headCredit = default)
+    // Returns null once the session is cancelled, or the timeline position standby should start from when the
+    // playlist cannot be played.
+    private async Task<StandbyRequest?> StreamConcatAsync(string ffmpeg, Channel channel, ProgramsFollower follower, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan timelineBase = default, DateTime anchorUtc = default, TimeSpan headCredit = default)
     {
         // The position is computed against the FULL program cycle, exactly as the guide computes it, so the stream
         // airs what the guide says is on. Missing files are not filtered out up front (that would both shift every
@@ -345,6 +519,16 @@ public class StreamSessionService
                 if (!ReferenceEquals(programs, follower.Programs))
                 {
                     programs = follower.Programs;
+
+                    // The pipeline was chosen for the items at tune-in. A rebuild (the daily guide refresh, a save)
+                    // can bring in an item this path cannot play (another format, HDR, 4K, no audio), so it hands
+                    // back to the planner, which picks the path again from here.
+                    if (!ConcatSuits(programs))
+                    {
+                        _logger.LogInformation("Live Channels: {Name}: the rebuilt schedule cannot stream continuously; switching to item by item", channel.Name);
+                        return new StandbyRequest(timeline, null);
+                    }
+
                     if (decodeHwaccel is not null && !IsUniform(programs))
                     {
                         decodeHwaccel = null;
@@ -385,8 +569,7 @@ public class StreamSessionService
                 if (index < 0)
                 {
                     _logger.LogWarning("Every item on channel {Name} is unreachable; showing standby", channel.Name);
-                    await StreamSlateAsync(ffmpeg, timeline, output, cancellationToken, stats).ConfigureAwait(false);
-                    break;
+                    return new StandbyRequest(timeline, StandbyReason.MediaUnreachable);
                 }
 
                 if (skipped > 0)
@@ -399,7 +582,7 @@ public class StreamSessionService
                     ConcatList(programs, index, File.Exists, ConcatCheckHorizon).Select(p => "file '" + p.Path!.Replace("'", "'\\''", StringComparison.Ordinal) + "'"),
                     cancellationToken).ConfigureAwait(false);
 
-                var args = StreamArguments.BuildConcat(listFile, intoItem, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel, burst, timeline);
+                var args = StreamArguments.BuildConcat(listFile, intoItem, width, bitrate, video, audioEncoder, audioBitrate, decodeHwaccel, burst, timeline, StreamArguments.InputMatrix(programs[0].SourceColorSpace, programs[0].SourceHeight), programs[0].DefaultAudioOrdinal ?? 0);
 
                 // The run is cancelled early (separately from the session) when the loop is rebuilt under it, at the
                 // boundary where the rebuilt order takes over.
@@ -450,8 +633,7 @@ public class StreamSessionService
                 if (quickFail)
                 {
                     _logger.LogWarning("Channel {Name}: continuous stream failed to run; showing standby", channel.Name);
-                    await StreamSlateAsync(ffmpeg, timeline, output, cancellationToken, stats).ConfigureAwait(false);
-                    break;
+                    return new StandbyRequest(timeline, StandbyReason.EncoderFailing);
                 }
 
                 if (ranFor < TimeSpan.FromSeconds(60))
@@ -467,8 +649,7 @@ public class StreamSessionService
                     if (shortRuns >= 6)
                     {
                         _logger.LogWarning("Channel {Name}: continuous stream keeps dying; showing standby", channel.Name);
-                        await StreamSlateAsync(ffmpeg, timeline, output, cancellationToken, stats).ConfigureAwait(false);
-                        break;
+                        return new StandbyRequest(timeline, StandbyReason.EncoderFailing);
                     }
                 }
                 else
@@ -481,6 +662,8 @@ public class StreamSessionService
                 // one's output ended.
                 _logger.LogDebug("Channel {Name}: continuous stream ended; resuming at the current position", channel.Name);
             }
+
+            return null;
         }
         finally
         {
@@ -610,7 +793,9 @@ public class StreamSessionService
     // path cannot provide. Every item cold-starts at its boundary; the wall clock a cold start costs is healed by
     // that producer's deficit burst, and the viewer rides the tune-in head start well behind the live edge, so
     // boundaries stay invisible without ever running two encoders at once.
-    private async Task StreamPerItemLoopAsync(string ffmpeg, Channel channel, IStreamSchedule schedule, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan timelineBase = default, TimeSpan headCredit = default)
+    // Returns null once the session is cancelled, or the timeline position standby should start from when item
+    // after item fails to play.
+    private async Task<StandbyRequest?> StreamPerItemLoopAsync(string ffmpeg, Channel channel, IStreamSchedule schedule, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan timelineBase = default, TimeSpan headCredit = default)
     {
         var consecutiveFailures = 0;
         var itemsPlayed = 0;
@@ -651,8 +836,8 @@ public class StreamSessionService
                 // the items: show standby now instead of walking a huge playlist (the cap keeps a 500-item
                 // channel from spinning through spawn-and-fail for minutes before giving the viewer anything).
                 _logger.LogWarning("{Count} consecutive item(s) on channel {Name} failed to play; showing standby", consecutiveFailures, channel.Name);
-                await StreamSlateAsync(ffmpeg, timeline, output, cancellationToken, stats).ConfigureAwait(false);
-                break;
+                _logger.LogDebug("Channel {Name}: stream paused after {Items} item(s)", channel.Name, itemsPlayed);
+                return new StandbyRequest(timeline, StandbyReason.ItemsFailing);
             }
             else
             {
@@ -671,6 +856,7 @@ public class StreamSessionService
         }
 
         _logger.LogDebug("Channel {Name}: stream ended after {Items} item(s)", channel.Name, itemsPlayed);
+        return null;
     }
 
     // Logs, once per tune-in, exactly how the channel will be encoded — resolution, codec, the resolved
@@ -768,7 +954,7 @@ public class StreamSessionService
             }
         }
 
-        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts);
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: false, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts, SilenceFor(program, offset, durationLimit), program.SourceColorSpace);
         var (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats, new SpeedTracker(timeline.TotalSeconds)).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
@@ -776,7 +962,7 @@ public class StreamSessionService
         if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
-            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts);
+            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts, SilenceFor(program, offset, durationLimit), program.SourceColorSpace);
             (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken, stats, new SpeedTracker(timeline.TotalSeconds)).ConfigureAwait(false);
         }
 
@@ -806,14 +992,15 @@ public class StreamSessionService
         return (total > 0, lastOut);
     }
 
-    // Streams a standby slate (colour bars + silence), looped, until the client disconnects. Shown when a
-    // channel has no playable content so viewers get an intentional standby card, not a black screen. Starts on
-    // the channel timeline where the caller left off (after any items that did play), so timestamps never regress.
-    // It encodes the channel's configured codecs (in software: a static card costs next to nothing, and it must
-    // not depend on the hardware path that may be why content failed), so the copy-mode segmenter's playlist never
-    // switches codec when standby takes over. Its progress keeps the session timeline advancing, so a later
-    // producer restart resumes after the slate rather than over it.
-    private async Task StreamSlateAsync(string ffmpeg, TimeSpan timelineBase, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
+    // Streams a standby slate (colour bars + silence), looped, for the hold given (or until the client
+    // disconnects). Shown when a channel has no playable content so viewers get an intentional standby card, not a
+    // black screen. Starts on the channel timeline where the caller left off (after any items that did play), so
+    // timestamps never regress. It encodes the channel's configured codecs (in software: a static card costs next
+    // to nothing, and it must not depend on the hardware path that may be why content failed), so the copy-mode
+    // segmenter's playlist never switches codec when standby takes over. Its progress keeps the session timeline
+    // advancing, so whatever follows resumes after the slate rather than over it. Returns the timeline position
+    // the slate reached, or null when the slate itself could not be produced.
+    private async Task<TimeSpan?> StreamSlateAsync(string ffmpeg, TimeSpan timelineBase, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan? hold = null, string? message = null)
     {
         var (width, bitrate, videoCodec, audioCodec) = Plugin.Instance?.ReadConfiguration(c =>
             (c.TranscodeWidth, c.TranscodeVideoBitrateKbps, c.VideoCodec, c.AudioCodec))
@@ -825,16 +1012,17 @@ public class StreamSessionService
         var font = FontLocator.Find();
         var timeline = timelineBase;
         var clips = 0;
-        while (!cancellationToken.IsCancellationRequested)
+        var holdStarted = DateTime.UtcNow;
+        while (!cancellationToken.IsCancellationRequested && (hold is null || DateTime.UtcNow - holdStarted < hold.Value))
         {
-            var args = StreamArguments.BuildSlate(width, bitrate, clipSeconds, timeline, font, video, audioEncoder, audioBitrate);
+            var args = StreamArguments.BuildSlate(width, bitrate, clipSeconds, timeline, font, video, audioEncoder, audioBitrate, message);
             var started = DateTime.UtcNow;
 
             // Only the first clip's command goes into the session log; the loop repeats it every ten seconds.
             var (total, lastOut, _) = await RunFfmpegAsync(ffmpeg, args, "standby", output, cancellationToken, stats, new SpeedTracker(timeline.TotalSeconds), quiet: clips++ > 0).ConfigureAwait(false);
             if (total == 0)
             {
-                break; // ffmpeg could not even produce the slate; avoid a hot loop.
+                return null; // ffmpeg could not even produce the slate; avoid a hot loop.
             }
 
             // If a clip ended far faster than its length (e.g. ffmpeg failing fast with some output), back off
@@ -854,6 +1042,8 @@ public class StreamSessionService
             // Chain the next clip from where this one actually ended, as the items do.
             timeline = NextTimeline(timeline, TimeSpan.FromSeconds(clipSeconds), lastOut);
         }
+
+        return timeline;
     }
 
     // Runs ffmpeg with the given arguments, pumping its stdout to the output stream. Returns the bytes
@@ -871,8 +1061,80 @@ public class StreamSessionService
             return (0, -1, -1);
         }
 
-        var (total, exitCode) = await PumpProducerAsync(process, stderrTask, label, output, cancellationToken, quiet ? null : stats).ConfigureAwait(false);
-        return (total, tracker.LastContentSeconds, exitCode);
+        var scanner = new TsEndScanner();
+        var (total, exitCode, stalled, stderr, slowExit) = await PumpProducerAsync(process, stderrTask, label, output, cancellationToken, quiet ? null : stats, scanner).ConfigureAwait(false);
+        if (FailureOutcome(total, exitCode, stalled, cancellationToken.IsCancellationRequested, slowExit) is { } outcome)
+        {
+            var report = _reports.Write(label, args, outcome, stderr, DateTime.UtcNow);
+            if (report is not null)
+            {
+                _logger.LogWarning("Live Channels: ffmpeg for {Label} failed ({Outcome}); details in {Report}", label, outcome, report);
+                stats?.AppendLog(label + ": failure report written to " + report);
+            }
+        }
+
+        return (total, ProducerEndSeconds(tracker, scanner, stats), exitCode);
+    }
+
+    /// <summary>
+    /// Describes a producer run that failed, or returns <c>null</c> for one that did not: a run the session
+    /// cancelled (the viewer left, or the schedule moved on) is not a failure, and neither is a clean exit.
+    /// </summary>
+    /// <param name="total">Bytes the run wrote.</param>
+    /// <param name="exitCode">Its exit code (-1 when it had to be killed).</param>
+    /// <param name="stalled">Whether the watchdog killed it as hung.</param>
+    /// <param name="cancelled">Whether the session cancelled it.</param>
+    /// <param name="slowExitAfterOutput">Whether it finished its output and was killed only for being slow to exit.</param>
+    /// <returns>The failure in a sentence, or <c>null</c>.</returns>
+    internal static string? FailureOutcome(long total, int exitCode, bool stalled, bool cancelled, bool slowExitAfterOutput = false)
+    {
+        if (cancelled || (slowExitAfterOutput && total > 0))
+        {
+            return null;
+        }
+
+        if (stalled)
+        {
+            return "hung: stopped writing output after " + total.ToString(CultureInfo.InvariantCulture) + " bytes and was killed";
+        }
+
+        if (total == 0)
+        {
+            return "produced no output (exit code " + exitCode.ToString(CultureInfo.InvariantCulture) + ")";
+        }
+
+        return exitCode != 0
+            ? "exited with code " + exitCode.ToString(CultureInfo.InvariantCulture) + " after " + total.ToString(CultureInfo.InvariantCulture) + " bytes"
+            : null;
+    }
+
+    /// <summary>
+    /// Where a finished producer's output ended, as the start of its last frame on the channel timeline (the
+    /// value NextTimeline chains the next producer from, one frame on). Read from the packet timestamps that went
+    /// through the pump: the next producer then starts after this output's last frame of picture AND of sound,
+    /// whatever the encoder's frame-reorder delay. ffmpeg's -progress position, the fallback when no timestamp was
+    /// seen, follows the decode timestamps instead and trails the last frame by that delay (two frames for
+    /// libx264), which started every next item inside the previous one. The same position is recorded as the
+    /// session's timeline, so a producer restarted under a viewer starts there too.
+    /// </summary>
+    /// <param name="tracker">The producer's progress tracker.</param>
+    /// <param name="scanner">The scanner that watched the producer's output.</param>
+    /// <param name="stats">The session stats to record the timeline in, or <c>null</c>.</param>
+    /// <returns>The start of the output's last frame on the channel timeline, or -1 when unknown.</returns>
+    internal static double ProducerEndSeconds(SpeedTracker tracker, TsEndScanner scanner, SessionStats? stats = null)
+    {
+        ArgumentNullException.ThrowIfNull(tracker);
+        ArgumentNullException.ThrowIfNull(scanner);
+        const double frame = 1.0 / StreamArguments.OutputFps;
+        var reference = tracker.LastContentSeconds >= 0 ? tracker.LastContentSeconds : tracker.BaseSeconds;
+        if (scanner.NextStartSeconds(frame, reference) is not { } next || next - frame <= tracker.BaseSeconds)
+        {
+            return tracker.LastContentSeconds;
+        }
+
+        // The session records where the last frame starts (a restarted producer resumes one frame after it).
+        stats?.ObserveTimeline(next - frame);
+        return next - frame;
     }
 
     // Starts a producer ffmpeg and immediately begins draining its stderr (so it can never block on a full stderr
@@ -920,10 +1182,13 @@ public class StreamSessionService
 
     // Pumps a started producer's stdout into the output stream until it ends, then kills and disposes it.
     // Returns the bytes written and the producer's exit code (-1 when it had to be killed).
-    private async Task<(long Total, int ExitCode)> PumpProducerAsync(Process process, Task<string> stderrTask, string label, Stream output, CancellationToken cancellationToken, SessionStats? stats = null)
+    private async Task<(long Total, int ExitCode, bool Stalled, string Stderr, bool SlowExitAfterOutput)> PumpProducerAsync(Process process, Task<string> stderrTask, string label, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TsEndScanner? scanner = null)
     {
         long total = 0;
         var exitCode = -1;
+        var stalled = false;
+        var slowExitAfterOutput = false;
+        var stderr = string.Empty;
         var buffer = new byte[BufferSize];
         try
         {
@@ -931,15 +1196,34 @@ public class StreamSessionService
             try
             {
                 var stdout = process.StandardOutput.BaseStream;
-                int read;
-                while ((read = await stdout.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+                while (true)
                 {
-                    await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                    total += read;
+                    var timeout = total == 0 ? FirstOutputTimeout : StallTimeout;
+                    var read = await ReadOrStallAsync(stdout, buffer, timeout, cancellationToken).ConfigureAwait(false);
+                    if (read is null)
+                    {
+                        stalled = true;
+                        // Hung: the finally below kills it, which ends the run like any other failure.
+                        _logger.LogWarning("Live Channels: ffmpeg for {Label} wrote nothing for {Seconds:F0}s; killing it as hung", label, timeout.TotalSeconds);
+                        stats?.AppendLog(label + ": no output for " + timeout.TotalSeconds.ToString("F0", CultureInfo.InvariantCulture) + "s; killed as hung");
+                        break;
+                    }
+
+                    if (read == 0)
+                    {
+                        naturalEnd = true;
+                        break;
+                    }
+
+                    await output.WriteAsync(buffer.AsMemory(0, read.Value), cancellationToken).ConfigureAwait(false);
+                    scanner?.Feed(buffer.AsSpan(0, read.Value));
+                    total += read.Value;
                 }
 
-                naturalEnd = true;
-                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                if (naturalEnd)
+                {
+                    await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -955,10 +1239,12 @@ public class StreamSessionService
                 // releasing decoders, so at end of output it is given a moment to exit on its own: killed there, a
                 // clean item would report a kill instead of exit 0 and lose its final progress reading. A cancelled
                 // or failed pump kills straight away.
-                await KillAndWaitAsync(process, graceful: naturalEnd).ConfigureAwait(false);
+                // A run that finished its output but had to be killed because it was slow to exit (a hardware
+                // encoder tearing down) ended cleanly; its exit code is the kill's, not a failure.
+                slowExitAfterOutput = await KillAndWaitAsync(process, graceful: naturalEnd).ConfigureAwait(false) && naturalEnd;
             }
 
-            var stderr = await AwaitStderrAsync(stderrTask).ConfigureAwait(false);
+            stderr = await AwaitStderrAsync(stderrTask).ConfigureAwait(false);
             exitCode = process.HasExited ? process.ExitCode : -1;
             if (total == 0 && !cancellationToken.IsCancellationRequested)
             {
@@ -981,7 +1267,33 @@ public class StreamSessionService
             process.Dispose();
         }
 
-        return (total, exitCode);
+        return (total, exitCode, stalled, stderr, slowExitAfterOutput);
+    }
+
+    /// <summary>
+    /// Reads from a producer's output, giving up if nothing arrives within <paramref name="timeout"/>. A hung
+    /// process holds its pipe open without writing, so a plain read would wait forever.
+    /// </summary>
+    /// <param name="source">The producer's stdout.</param>
+    /// <param name="buffer">The buffer to read into.</param>
+    /// <param name="timeout">How long to wait for data.</param>
+    /// <param name="cancellationToken">Cancelled when the stream is closed.</param>
+    /// <returns>The bytes read (0 at end of output), or <c>null</c> when the producer is hung. The read is then
+    /// still pending and completes once the caller kills the process and its pipe closes.</returns>
+    internal static async Task<int?> ReadOrStallAsync(Stream source, Memory<byte> buffer, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var pending = source.ReadAsync(buffer, cancellationToken).AsTask();
+        try
+        {
+            return await pending.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // Observe the abandoned read's eventual fault (the pipe closing under it) so it is never reported as
+            // an unobserved task exception.
+            _ = pending.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            return null;
+        }
     }
 
     /// <summary>
@@ -998,7 +1310,7 @@ public class StreamSessionService
     public (List<string> Args, bool HardwareDecode) BuildStressArguments(string path, int sourceHeight, bool isHdr, TimeSpan offset, TimeSpan duration)
         => BuildArguments(path, offset, TimeSpan.Zero, null, sourceHeight, null, softwareDecode: false, isHdr, null, initialBurstSeconds: 0, duration);
 
-    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal, double initialBurstSeconds, TimeSpan? durationLimit = null, string? subtitleFontsDir = null)
+    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal, double initialBurstSeconds, TimeSpan? durationLimit = null, string? subtitleFontsDir = null, TimeSpan? silentAudio = null, string? colorSpace = null)
     {
         // Read just the scalars we need inside the config lock, rather than holding a reference to the live
         // (mutable, shared) configuration object after the lock releases.
@@ -1034,8 +1346,37 @@ public class StreamSessionService
         // Every hardware pipeline reports as such, so a no-output failure retries the item in software
         // (StreamItemAsync) instead of blanking the channel.
         var hardwareDecode = intelGpu || (!forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel));
-        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurstSeconds, durationLimit, subtitleStyle, subtitleFontsDir);
+        // Outside the GPU-resident pipeline an HDR item tone-maps in software: with jellyfin-ffmpeg's tonemapx and
+        // the server's own settings when this ffmpeg has it, else with the portable zscale chain.
+        var toneMap = isHdr && !intelGpu && _encoder.SupportsFilter("tonemapx") ? _encoders.SoftwareToneMap() : null;
+        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurstSeconds, durationLimit, subtitleStyle, subtitleFontsDir, silentAudio, toneMap, StreamArguments.InputMatrix(colorSpace, sourceHeight));
         return (args, hardwareDecode);
+    }
+
+    /// <summary>
+    /// How much silence a video-only item needs as its audio track for one run: the video it will play from
+    /// <paramref name="offset"/> (to its end, or to the run's cap). <c>null</c> for an item with its own audio, and
+    /// for one whose length is unknown, which keeps mapping the item's own (absent) audio rather than generating
+    /// silence with no end.
+    /// </summary>
+    /// <param name="program">The item.</param>
+    /// <param name="offset">Where in the item this run starts.</param>
+    /// <param name="durationLimit">The run's cap on how much it plays, or <c>null</c>.</param>
+    /// <returns>The silence length, or <c>null</c>.</returns>
+    internal static TimeSpan? SilenceFor(ProgramEntry program, TimeSpan offset, TimeSpan? durationLimit)
+    {
+        if (!program.IsVideoOnly)
+        {
+            return null;
+        }
+
+        var remaining = TimeSpan.FromTicks(program.DurationTicks) - offset;
+        if (durationLimit is { } limit && limit < remaining)
+        {
+            remaining = limit;
+        }
+
+        return remaining > TimeSpan.Zero ? remaining : null;
     }
 
     // The configured burn-in appearance as a libass style override, or null when nothing was customised (the
@@ -1109,7 +1450,9 @@ public class StreamSessionService
     }
 
     // Completes one stderr line: feeds it to the speed tracker, appends it to a bounded diagnostic tail, and
-    // resets the line builder. The tail is trimmed from the front so it never grows past a few progress lines.
+    // resets the line builder. Progress lines only feed the tracker: a dozen key=value lines arrive every half
+    // second, so kept in the tail they would push out the one error line that explains a failure within seconds.
+    // The tail is trimmed from the front so it never grows past a few kilobytes.
     private static void FlushStderrLine(StringBuilder line, StringBuilder tail, SessionStats? stats, SpeedTracker? tracker)
     {
         if (line.Length == 0)
@@ -1120,6 +1463,10 @@ public class StreamSessionService
         var text = line.ToString();
         line.Clear();
         tracker?.Observe(text, stats);
+        if (IsProgressLine(text))
+        {
+            return;
+        }
 
         tail.Append(text).Append('\n');
         const int MaxTail = 4096;
@@ -1127,6 +1474,34 @@ public class StreamSessionService
         {
             tail.Remove(0, tail.Length - MaxTail);
         }
+    }
+
+    /// <summary>
+    /// Whether a stderr line is one of ffmpeg's <c>-progress</c> key=value lines (<c>frame=</c>, <c>out_time_us=</c>,
+    /// <c>speed=</c>, <c>progress=</c>, ...) rather than a log message: it starts with a bare lowercase key and an
+    /// equals sign. The value may be space-padded (<c>bitrate= 676.5kbits/s</c>); a log message never starts that
+    /// way (it opens with a bracketed context, a capital, or a path).
+    /// </summary>
+    /// <param name="line">One stderr line.</param>
+    /// <returns><c>true</c> for a progress line.</returns>
+    internal static bool IsProgressLine(string line)
+    {
+        var eq = line.IndexOf('=', StringComparison.Ordinal);
+        if (eq <= 0)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < eq; i++)
+        {
+            var c = line[i];
+            if (!char.IsAsciiLetterLower(c) && !char.IsAsciiDigit(c) && c != '_')
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // Where the next item's timeline starts: the previous item's actual final output timestamp plus one
@@ -1188,6 +1563,9 @@ public class StreamSessionService
             _baseSeconds = Math.Max(0, baseSeconds);
         }
 
+        // Where on the channel timeline this producer's output starts.
+        public double BaseSeconds => _baseSeconds;
+
         // The last output timestamp parsed from -progress, in seconds on the channel timeline, so an item's
         // playable length is this minus its timeline offset. -1 until a block is parsed. Read from other threads
         // (the continuous producer's rebuild watcher), so it is published with a volatile write.
@@ -1237,7 +1615,8 @@ public class StreamSessionService
     // Kills the ffmpeg process tree and waits for it to actually exit. Kill() only signals; without waiting,
     // the encoder child can linger (still burning CPU) past the next item's spawn, piling up transcodes. A
     // graceful stop (the process already closed its output) first gives it a moment to finish and exit cleanly.
-    private async Task KillAndWaitAsync(Process process, bool graceful = false)
+    // Returns whether it had to be killed (false when it exited on its own or was already gone).
+    private async Task<bool> KillAndWaitAsync(Process process, bool graceful = false)
     {
         if (graceful)
         {
@@ -1253,7 +1632,7 @@ public class StreamSessionService
             catch (InvalidOperationException)
             {
                 // No process is associated (it never started, or is already gone).
-                return;
+                return false;
             }
         }
 
@@ -1261,7 +1640,7 @@ public class StreamSessionService
         {
             if (process.HasExited)
             {
-                return;
+                return false;
             }
 
             process.Kill(entireProcessTree: true);
@@ -1269,7 +1648,7 @@ public class StreamSessionService
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Failed to kill ffmpeg process");
-            return;
+            return false;
         }
 
         try
@@ -1281,5 +1660,27 @@ public class StreamSessionService
         {
             _logger.LogDebug(ex, "ffmpeg did not exit promptly after kill");
         }
+
+        return true;
     }
+
+    /// <summary>Why a channel went to standby.</summary>
+    internal enum StandbyReason
+    {
+        /// <summary>The channel resolved to no items.</summary>
+        NothingToPlay,
+
+        /// <summary>None of the channel's files can be found.</summary>
+        MediaUnreachable,
+
+        /// <summary>Item after item failed to play.</summary>
+        ItemsFailing,
+
+        /// <summary>The continuous encoder keeps dying.</summary>
+        EncoderFailing
+    }
+
+    // Where on the timeline the schedule stopped, and why: a standby reason, or null when the schedule only needs
+    // planning again (a rebuild the running pipeline cannot follow).
+    private sealed record StandbyRequest(TimeSpan At, StandbyReason? Reason);
 }

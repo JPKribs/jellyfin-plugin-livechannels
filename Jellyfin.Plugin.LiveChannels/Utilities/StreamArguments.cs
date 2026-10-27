@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using Jellyfin.Plugin.LiveChannels.Models;
 
 namespace Jellyfin.Plugin.LiveChannels.Utilities;
@@ -52,6 +53,23 @@ public static class StreamArguments
     // advance of the self-heal path, and it is also the upper bound on disk use per active channel.
     private const int HlsSegmentSeconds = SegmentSeconds;
 
+    // The portable software tone map (ffmpeg's zscale + tonemap), used when the server's ffmpeg has no tonemapx.
+    // Hable keeps highlights soft without crushing the mid-tones; the chain ends in 8-bit bt709 4:2:0.
+    private const string ZscaleToneMap =
+        "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p";
+
+    // How far audio may stray from its timestamps before aresample pads or drops samples to put it back. A per-item
+    // producer starts fresh on every item, so nothing accumulates and the long-standing 100 ms leaves ordinary
+    // timestamp jitter alone.
+    private const double AudioResyncSeconds = 0.100;
+
+    // The continuous concat producer is different: the demuxer times each next file from the previous file's
+    // container duration, which rarely matches its audio exactly, so every item change leaves the audio a few
+    // milliseconds off and, uncorrected below 100 ms, that builds up item after item. Measured over 12 item changes:
+    // 100 ms let the audio drift to 86 ms early before snapping back (a sawtooth, over and over, through a long
+    // session); 10 ms holds it within one video frame the whole way.
+    private const double ConcatAudioResyncSeconds = 0.010;
+
     // Never keep fewer than this many segments, so even a tiny configured window leaves the player something to
     // work with on tune-in.
     private const int MinHlsSegments = 12;
@@ -78,6 +96,9 @@ public static class StreamArguments
     /// <param name="durationLimit">How much content to read, or <c>null</c> for the whole item.</param>
     /// <param name="subtitleStyle">The libass <c>force_style</c> override for burned-in subtitles, or <c>null</c> to render them as authored.</param>
     /// <param name="subtitleFontsDir">A directory of fonts attached to the media, so an ASS subtitle renders in the font it was authored with, or <c>null</c>.</param>
+    /// <param name="silentAudio">For a video-only item, how much silence to give it as its audio track (the length of video this run plays), or <c>null</c> to map the item's own audio.</param>
+    /// <param name="toneMapStage">The software tone-map filter for an HDR item outside the GPU-resident pipeline (jellyfin-ffmpeg's tonemapx with the server's settings), or <c>null</c> for the portable zscale chain.</param>
+    /// <param name="inputMatrix">The colour matrix the item's pixels are in (see <see cref="InputMatrix"/>), so an SDR item is converted to the channel's bt709; <c>auto</c> leaves it to ffmpeg.</param>
     /// <returns>The ffmpeg argument list.</returns>
     public static List<string> Build(
         string path,
@@ -96,7 +117,10 @@ public static class StreamArguments
         double initialBurstSeconds = 0,
         TimeSpan? durationLimit = null,
         string? subtitleStyle = null,
-        string? subtitleFontsDir = null)
+        string? subtitleFontsDir = null,
+        TimeSpan? silentAudio = null,
+        string? toneMapStage = null,
+        string inputMatrix = "auto")
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(video);
@@ -214,6 +238,25 @@ public static class StreamArguments
         args.Add("-i");
         args.Add(path);
 
+        // A video-only item still has to carry the channel's audio track: every item feeds one continuous stream,
+        // and a stretch with no audio packets at all stalls players and breaks the concat path's same-streams
+        // assumption. Silence is generated instead, exactly as long as the video this run plays, so the next item
+        // (which chains from this output's end) starts with neither a hole nor an overlap in the audio. The length
+        // is set explicitly because -shortest is not reliable for this: with an endless audio source it lets the
+        // audio run seconds past the video, by a different amount every run. Under a burn-in seek's -copyts the
+        // video keeps its source timestamps (starting at the seek point), so the silence is shifted to start there.
+        var audioMap = AudioMap(audioOrdinal);
+        if (silentAudio is { } silence && silence > TimeSpan.Zero)
+        {
+            if (burnIn && hasOffset)
+            {
+                Add(args, "-itsoffset", seconds);
+            }
+
+            Add(args, "-t", silence.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture), "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000");
+            audioMap = "1:a:0";
+        }
+
         // A linear channel mixes items of different resolutions, framerates, and aspect ratios. Players probe
         // the stream once and assume a fixed format, so the output stays constant: letterbox-pad every item to
         // the same WxH, force a constant framerate, and pin the pixel format (or upload it to the GPU).
@@ -237,7 +280,7 @@ public static class StreamArguments
                 // same order Jellyfin uses: the gain acts on the PQ signal and the LUT re-normalises it into SDR,
                 // compensating the LUT's dark rendering. Applied after the tone map instead, the same gain lifts
                 // the finished SDR frame's black floor and washes the whole picture out.
-                scale = "scale_vaapi=w=" + w + ":h=" + h + ":force_original_aspect_ratio=decrease:format=p010,"
+                scale = "scale_vaapi=" + FitSize(width, height) + ":format=p010,"
                     + Procamp(video) + "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,"
                     + "pad_vaapi=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30";
             }
@@ -247,7 +290,7 @@ public static class StreamArguments
                 // passes through untouched; scale_vaapi converts 10-bit p010 surfaces to nv12 ON the GPU, so
                 // 10-bit sources never need a software decode.
                 scale = "deinterlace_vaapi=rate=frame:auto=1,"
-                    + "scale_vaapi=w=" + w + ":h=" + h + ":force_original_aspect_ratio=decrease:format=nv12,"
+                    + "scale_vaapi=" + FitSize(width, height) + ":format=nv12:out_color_matrix=bt709:out_range=tv,"
                     + "pad_vaapi=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,fps=30";
             }
         }
@@ -259,22 +302,27 @@ public static class StreamArguments
             // kept frames on the GPU, bring them back to system memory before the software scale.
             var download = hwDecode ? video.DecodeDownload : string.Empty;
             // Software tone map for HDR outside the GPU-resident pipeline (non-Intel encoders and the retry):
-            // the zscale->tonemap(hable)->zscale chain. Decoded in software so the 10-bit depth survives.
-            var tonemap = isHdr
-                ? "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
-                : string.Empty;
-            // setsar=1 normalises non-square (anamorphic) pixels so mixed sources share one aspect ratio.
-            scale = download + "yadif=deint=1," + tonemap + "scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
-                + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,setparams=field_mode=prog," + video.PixelStage;
+            // tonemapx when the caller found it (the SIMD tone mapper Jellyfin itself uses), else the zscale chain.
+            // Decoded in software so the 10-bit depth survives. It runs AFTER the scale, on output-size frames: a
+            // 4K source tone-mapped first costs four times the work for the same picture (measured 3.2x faster
+            // with zscale, 5.2x with tonemapx, on a 4K HDR10 clip), and BEFORE the pad, so the bars are painted on
+            // the finished SDR frame.
+            var tonemap = isHdr ? (toneMapStage ?? ZscaleToneMap) + "," : string.Empty;
+            // The scale sizes the picture from its display aspect ratio (see FitSize), and setsar=1 then marks the
+            // now square pixels so mixed sources share one aspect ratio.
+            // An SDR item is converted to the channel's colour format in the same scale pass (see ToChannelColour);
+            // an HDR item is scaled as-is and the tone map produces bt709 limited itself.
+            scale = download + "yadif=deint=1,scale=" + FitSize(width, height) + (isHdr ? string.Empty : ToChannelColour(inputMatrix)) + "," + tonemap
+                + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30," + ChannelColourParams + "," + video.PixelStage;
         }
 
         if (burnIn && intelGpu)
         {
-            AppendIntelGpuSubtitleFilter(args, path, forcedSubtitle!.Value, scale, gpuTail, externalSubtitlePath, audioOrdinal, w, h, hasOffset ? seconds : "0", subtitleStyle, subtitleFontsDir);
+            AppendIntelGpuSubtitleFilter(args, path, forcedSubtitle!.Value, scale, gpuTail, externalSubtitlePath, audioMap, w, h, hasOffset ? seconds : "0", subtitleStyle, subtitleFontsDir);
         }
         else if (burnIn)
         {
-            AppendSubtitleFilter(args, path, forcedSubtitle!.Value, scale, externalSubtitlePath, audioOrdinal, subtitleStyle, subtitleFontsDir);
+            AppendSubtitleFilter(args, path, forcedSubtitle!.Value, scale, externalSubtitlePath, audioMap, subtitleStyle, subtitleFontsDir);
         }
         else
         {
@@ -287,7 +335,7 @@ public static class StreamArguments
             args.Add("-map");
             args.Add("0:v:0");
             args.Add("-map");
-            args.Add(AudioMap(audioOrdinal));
+            args.Add(audioMap);
         }
 
         AppendEncoders(args, video, bitrate, audioEncoder, audioBitrate);
@@ -329,6 +377,8 @@ public static class StreamArguments
     /// <param name="decodeHwaccel">The hardware decoder to use, or <c>null</c> to decode in software.</param>
     /// <param name="initialBurstSeconds">The tune-in head start: how much content is produced ahead of realtime before the player joins.</param>
     /// <param name="timelineBase">Where on the channel timeline this process's output starts, so a producer restarted mid-session continues forward instead of resetting timestamps to zero.</param>
+    /// <param name="inputMatrix">The colour matrix every listed item's pixels are in (the concat path only takes items that share one), or <c>auto</c>.</param>
+    /// <param name="audioOrdinal">The audio track to play, by position among each file's audio tracks (the concat path only takes items that play the same one).</param>
     /// <returns>The ffmpeg argument list.</returns>
     public static List<string> BuildConcat(
         string listFilePath,
@@ -340,7 +390,9 @@ public static class StreamArguments
         int audioBitrate,
         string? decodeHwaccel = null,
         double initialBurstSeconds = InitialBurstSeconds,
-        TimeSpan timelineBase = default)
+        TimeSpan timelineBase = default,
+        string inputMatrix = "auto",
+        int audioOrdinal = 0)
     {
         ArgumentNullException.ThrowIfNull(listFilePath);
         ArgumentNullException.ThrowIfNull(video);
@@ -391,11 +443,17 @@ public static class StreamArguments
         // and does not add a deinterlace_vaapi pass that fails on QSV. The leading download (when present) brings
         // hardware-decoded frames back to system memory for the software scale.
         var download = hwDecode ? video.DecodeDownload : string.Empty;
-        // setsar=1 normalises non-square (anamorphic) pixels so mixed sources share one aspect ratio.
-        args.Add(download + "yadif=deint=1,scale=" + w + ":" + h + ":force_original_aspect_ratio=decrease,"
-            + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,setparams=field_mode=prog," + video.PixelStage);
+        // The scale sizes the picture from its display aspect ratio (see FitSize), and setsar=1 then marks the
+        // now square pixels so mixed sources share one aspect ratio.
+        args.Add(download + "yadif=deint=1,scale=" + FitSize(width, height) + ToChannelColour(inputMatrix) + ","
+            + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30," + ChannelColourParams + "," + video.PixelStage);
 
-        AppendEncoders(args, video, bitrate, audioEncoder, audioBitrate);
+        // Map the video and the chosen audio track explicitly. Left to itself ffmpeg picks the audio track with the
+        // most channels (the concat demuxer drops the files' default flags), which can be a 5.1 commentary or another
+        // language rather than the track the channel chose and checked (ConcatCompatible).
+        Add(args, "-map", "0:v:0", "-map", AudioMap(audioOrdinal));
+
+        AppendEncoders(args, video, bitrate, audioEncoder, audioBitrate, ConcatAudioResyncSeconds);
 
         // One continuous encoder, so within a run no per-item timeline offset is needed. Across runs it matters:
         // a producer restarted mid-session (self-heal, or a session whose producer died under an active viewer)
@@ -429,8 +487,9 @@ public static class StreamArguments
     /// copy-mode segmenter never sees the codec change mid-playlist; <c>null</c> for software H.264.</param>
     /// <param name="audioEncoder">The ffmpeg audio encoder name, matching the channel's content.</param>
     /// <param name="audioBitrate">Target audio bitrate in kbps.</param>
+    /// <param name="message">The line under "Standby" saying why (plain words, no quotes or colons), or <c>null</c> for the generic one.</param>
     /// <returns>The ffmpeg argument list.</returns>
-    public static List<string> BuildSlate(int width, int bitrate, double seconds, TimeSpan timeline, string? fontPath, VideoEncoderProfile? video = null, string audioEncoder = "aac", int audioBitrate = 192)
+    public static List<string> BuildSlate(int width, int bitrate, double seconds, TimeSpan timeline, string? fontPath, VideoEncoderProfile? video = null, string audioEncoder = "aac", int audioBitrate = 192, string? message = null)
     {
         ArgumentNullException.ThrowIfNull(audioEncoder);
         video ??= new VideoEncoderProfile("libx264", "H.264 (software)", false, Array.Empty<string>(), Array.Empty<string>(), "format=yuv420p", true);
@@ -464,12 +523,12 @@ public static class StreamArguments
             var sub = (height / 24).ToString(CultureInfo.InvariantCulture);
             Add(args, "-vf",
                 "drawtext=fontfile=" + font + ":text='Standby':fontcolor=white:fontsize=" + title + ":x=(w-tw)/2:y=(h/2)-" + title + ","
-                + "drawtext=fontfile=" + font + ":text='Channel content is unavailable':fontcolor=0xaaaaaa:fontsize=" + sub + ":x=(w-tw)/2:y=(h/2)+10,"
-                + video.PixelStage);
+                + "drawtext=fontfile=" + font + ":text='" + SlateText(message ?? "Channel content is unavailable") + "':fontcolor=0xaaaaaa:fontsize=" + sub + ":x=(w-tw)/2:y=(h/2)+10,"
+                + ChannelColourParams + "," + video.PixelStage);
         }
         else
         {
-            Add(args, "-vf", video.PixelStage);
+            Add(args, "-vf", ChannelColourParams + "," + video.PixelStage);
         }
 
         AppendEncoders(args, video, bitrate, audioEncoder, audioBitrate);
@@ -483,6 +542,11 @@ public static class StreamArguments
         Add(args, "-y", "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-muxpreload", "0", "-muxdelay", "0", "pipe:1");
         return args;
     }
+
+    // Keeps a slate message to characters that need no escaping inside a single-quoted drawtext value: the
+    // messages are the plugin's own constants, so this only guards against a future edit breaking the graph.
+    private static string SlateText(string message)
+        => new string(message.Where(c => char.IsLetterOrDigit(c) || c == ' ' || c == '.' || c == '-').ToArray());
 
     /// <summary>
     /// Converts a configured window length in minutes into the number of HLS segments to retain, clamped to a
@@ -558,9 +622,80 @@ public static class StreamArguments
         return height % 2 != 0 ? height + 1 : height;
     }
 
+    // Marks every frame with the channel's colour format right before the encoder (and before any GPU upload,
+    // which carries the frame's properties to the hardware encoder), and clears the interlaced flag that yadif
+    // leaves behind on progressive output.
+    private const string ChannelColourParams = "setparams=field_mode=prog:range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709";
+
+    /// <summary>
+    /// The scale options that convert an SDR item into the channel's single colour format, bt709 matrix at
+    /// limited range, in the same pass as the resize. A channel is one continuous stream whose colour description
+    /// players read once, so every item has to arrive in the same format: an SD item's bt601 pixels shown as
+    /// bt709 shift green and red by up to 39 of 255 (measured), and a full-range item (phone and screen
+    /// recordings) shown as limited range clips its highlights and crushes its blacks. The input range comes from
+    /// the decoded frames themselves; the input matrix is passed explicitly because an untagged frame would
+    /// otherwise be read as bt601 whatever its size.
+    /// </summary>
+    /// <param name="inputMatrix">The item's colour matrix (see <see cref="InputMatrix"/>), or <c>auto</c>.</param>
+    /// <returns>The options to append to a scale filter, starting with a colon.</returns>
+    internal static string ToChannelColour(string inputMatrix)
+        => ":in_color_matrix=" + (string.IsNullOrEmpty(inputMatrix) ? "auto" : inputMatrix) + ":out_color_matrix=bt709:out_range=tv";
+
+    /// <summary>
+    /// The colour matrix an item's pixels are in, as ffmpeg's scale names it: the item's own tag when it has one,
+    /// otherwise what a player assumes for an untagged picture of its size (bt601 below 720 lines, bt709 from
+    /// 720 up), and <c>auto</c> when nothing is known about the item at all.
+    /// </summary>
+    /// <param name="colorSpace">The item's tagged colour space as Jellyfin recorded it (e.g. <c>bt709</c>, <c>smpte170m</c>), or <c>null</c>.</param>
+    /// <param name="sourceHeight">The item's picture height, or 0 when unknown.</param>
+    /// <returns>The matrix name for <c>in_color_matrix</c>.</returns>
+    public static string InputMatrix(string? colorSpace, int sourceHeight)
+    {
+        switch (colorSpace?.Trim().ToLowerInvariant())
+        {
+            case "bt709":
+                return "bt709";
+            case "smpte170m":
+            case "bt470bg":
+            case "bt601":
+                return "bt601";
+            case "smpte240m":
+                return "smpte240m";
+            case "fcc":
+                return "fcc";
+            case "bt2020nc":
+            case "bt2020c":
+            case "bt2020":
+                return "bt2020";
+            default:
+                return sourceHeight <= 0 ? "auto" : sourceHeight < 720 ? "bt601" : "bt709";
+        }
+    }
+
+    /// <summary>
+    /// The <c>w</c>/<c>h</c> options that fit an item's picture inside the WxH frame at its true display aspect
+    /// ratio, for <c>scale</c> and <c>scale_vaapi</c> alike (both evaluate them with ffmpeg's shared scale
+    /// expression code, where an unsignalled SAR reads as square). The size comes from <c>dar</c> (stored size
+    /// times the sample aspect ratio), not the stored pixels: <c>force_original_aspect_ratio</c> ignores the SAR, so
+    /// an anamorphic 16:9 DVD (720x480 at 32:27) used to come out as a squeezed 3:2 picture. A picture within half a
+    /// percent of the frame's own shape fills it exactly, so rounding never leaves a 2px sliver of padding, and both
+    /// sides round to the even sizes every encoder needs.
+    /// </summary>
+    /// <param name="width">The output frame width.</param>
+    /// <param name="height">The output frame height.</param>
+    /// <returns>The scale options, e.g. <c>w='…':h='…'</c>.</returns>
+    internal static string FitSize(int width, int height)
+    {
+        var w = width.ToString(CultureInfo.InvariantCulture);
+        var h = height.ToString(CultureInfo.InvariantCulture);
+        var wide = "gte(dar," + (width / (double)height - 0.005).ToString("0.######", CultureInfo.InvariantCulture) + ")";
+        return "w='if(" + wide + "," + w + ",min(" + w + ",trunc(" + h + "*dar/2+0.5)*2))'"
+            + ":h='if(" + wide + ",min(" + h + ",trunc(" + w + "/dar/2+0.5)*2)," + h + ")'";
+    }
+
     // The encoder half every producer shares (content, continuous playlist, and slate alike), so the segmenter
     // sees one uniform stream shape whichever process produced the bytes.
-    private static void AppendEncoders(List<string> args, VideoEncoderProfile video, int bitrate, string audioEncoder, int audioBitrate)
+    private static void AppendEncoders(List<string> args, VideoEncoderProfile video, int bitrate, string audioEncoder, int audioBitrate, double audioResyncSeconds = AudioResyncSeconds)
     {
         var br = bitrate.ToString(CultureInfo.InvariantCulture);
         Add(args, "-c:v", video.Name);
@@ -575,6 +710,11 @@ public static class StreamArguments
         // Closed GOP gives the downstream segmenter predictable GOP boundaries, so Jellyfin can remux into HLS
         // instead of re-transcoding to realign keyframes.
         Add(args, "-flags", "+cgop");
+
+        // Every item leaves in one colour format, bt709 limited range (see ToChannelColour), and the stream says
+        // so explicitly: players and Jellyfin's remux read the colour description once, at tune-in, so an
+        // untagged or per-item-tagged stream gets decoded with whatever they assumed for the first item.
+        Add(args, "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv");
 
         if (video.UsePreset)
         {
@@ -593,9 +733,11 @@ public static class StreamArguments
             "-bufsize", (bitrate * 2).ToString(CultureInfo.InvariantCulture) + "k", "-g", GopFrames);
 
         // Re-sample audio to a constant 48 kHz stereo track and let aresample fill or drop samples to keep it
-        // locked to the video, so audio never drifts out of sync within or across items.
+        // locked to the video, so audio never drifts out of sync within or across items. It resyncs once the
+        // audio is audioResyncSeconds off its timestamps (see AudioResyncSeconds and ConcatAudioResyncSeconds).
         var abr = audioBitrate.ToString(CultureInfo.InvariantCulture);
-        Add(args, "-c:a", audioEncoder, "-b:a", abr + "k", "-ac", "2", "-ar", "48000", "-af", "aresample=async=1:min_hard_comp=0.100");
+        Add(args, "-c:a", audioEncoder, "-b:a", abr + "k", "-ac", "2", "-ar", "48000",
+            "-af", "aresample=async=1:min_hard_comp=" + audioResyncSeconds.ToString("0.000", CultureInfo.InvariantCulture));
 
         // A generous muxing queue absorbs the brief audio/video imbalance at each item's start instead of
         // aborting with "Too many packets buffered".
@@ -623,7 +765,7 @@ public static class StreamArguments
 
     // Burns the chosen forced subtitle into the picture. Text subtitles render through the libass-backed
     // `subtitles` filter; bitmap subtitles (PGS/VOBSUB) are composited with `overlay`.
-    private static void AppendSubtitleFilter(List<string> args, string path, (int RelativeIndex, bool IsText) forced, string scale, string? externalSubtitlePath, int? audioOrdinal, string? style = null, string? fontsDir = null)
+    private static void AppendSubtitleFilter(List<string> args, string path, (int RelativeIndex, bool IsText) forced, string scale, string? externalSubtitlePath, string audioMap, string? style = null, string? fontsDir = null)
     {
         var index = forced.RelativeIndex.ToString(CultureInfo.InvariantCulture);
         var options = SubtitleOptions(style, fontsDir);
@@ -651,7 +793,7 @@ public static class StreamArguments
         args.Add("-map");
         args.Add("[v]");
         args.Add("-map");
-        args.Add(AudioMap(audioOrdinal));
+        args.Add(audioMap);
     }
 
     // Burns the chosen subtitle INSIDE the GPU-resident Intel pipeline: the video never leaves VRAM. Only the
@@ -659,7 +801,7 @@ public static class StreamArguments
     // subtitles filter draws onto), bitmaps as sparse sub2video frames -- and is uploaded once for a GPU
     // overlay_vaapi composite. This mirrors Jellyfin's own Intel burn-in graphs, so a Forced-only channel
     // playing foreign-language 4K keeps the full GPU speed instead of dropping to the software chain.
-    private static void AppendIntelGpuSubtitleFilter(List<string> args, string path, (int RelativeIndex, bool IsText) forced, string mainChain, string gpuTail, string? externalSubtitlePath, int? audioOrdinal, string w, string h, string startSeconds, string? style = null, string? fontsDir = null)
+    private static void AppendIntelGpuSubtitleFilter(List<string> args, string path, (int RelativeIndex, bool IsText) forced, string mainChain, string gpuTail, string? externalSubtitlePath, string audioMap, string w, string h, string startSeconds, string? style = null, string? fontsDir = null)
     {
         var index = forced.RelativeIndex.ToString(CultureInfo.InvariantCulture);
         var options = SubtitleOptions(style, fontsDir);
@@ -687,7 +829,7 @@ public static class StreamArguments
         args.Add("-map");
         args.Add("[v]");
         args.Add("-map");
-        args.Add(AudioMap(audioOrdinal));
+        args.Add(audioMap);
     }
 
     // The brightness/contrast gain stage ahead of a VAAPI tone map (tonemap_vaapi has no brightness knob of

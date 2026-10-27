@@ -1,8 +1,8 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "12.2.2.2"
-targetAbi: "12.2.0.0"
+version: "12.4.0.0"
+targetAbi: "12.4.0.0"
 framework: "net10.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
 description: >
@@ -16,25 +16,19 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   features:
-  - Multipart episodes now stay together however many parts they have, so a story told in parts 1 through 4 airs back to back instead of only the first two
+  - Built for Jellyfin 12.4
+  - Every channel now delivers one consistent picture format, so DVDs, untagged rips, and full-range phone or screen recordings show their true colours instead of shifted hues or crushed blacks and clipped whites
+  - HDR is tone-mapped after scaling down, about three to five times faster, and uses Jellyfin's own tone mapper and tone-mapping settings when available
+  - Standby is now temporary: a channel that cannot play shows standby for a minute, then tries its schedule again, backing off to five minutes while the problem lasts
+  - Each item plays its audio in your language when it has one: the default track in the channel's audio language (or your default language), else the first track in it, else the item's own default track
+  - The standby card says why the channel is on standby
+  - A stuck encoder is detected within 15 seconds and replaced, so the channel recovers instead of freezing
+  - Every encoder failure leaves a report in Jellyfin's log folder with the exact ffmpeg command and its error
   fixed:
-  - Viewers who stay tuned now follow the refreshed schedule after a guide refresh instead of drifting away from what the guide shows
-  - Items no longer get cut off as they finish, so measured durations are recorded and items line up cleanly at their seams
-  - A restarted stream no longer replays the last half minute of content
-  - The standby slate now uses the channel codecs, so HEVC and AC3 channels no longer break when they fall back to standby
-  - Channels with time-of-day rating blocks now land on the guide clock after the tune-in card instead of running about ten seconds behind
-  - Burned-in subtitle items from sources with a nonzero start time no longer jump forward at the seam
-  - A series recording rule no longer re-records the same unnumbered program at every airing
-  - Cancelling one episode of a series recording now skips that episode instead of recording it at its next airing
-  - Record series now picks the local day of the week instead of the UTC day
-  - Recordings that fail while storage is briefly unavailable now keep retrying instead of giving up after about three minutes
-  - Interrupted recording copies no longer leave temporary files in the library
-  - The stream cleanup task can no longer delete a stream that is just starting
-  - A channel can no longer end up with two encoders running at once
-  - Changing the stream directory no longer leaves later saves clearing the wrong schedule cache
-  - Saving settings during a guide refresh no longer gets overwritten by the old schedule
-  - The Popular channel now honors its audio language filter
-  - The channel editor no longer keeps a rejected save in memory, and warns instead of overwriting changes made in another tab
-  - The stress test now measures real frames produced and fails streams that exit with an error
-  - Settings saved through the API with empty values no longer crash the guide or streams
-  - Very large rating transition windows are now capped at one day instead of turning rating protection off
+  - Widescreen DVDs and other anamorphic sources no longer play squeezed
+  - Channels mixing audio formats (stereo and 5.1, AAC and AC3) or video codecs no longer have silent or broken stretches
+  - Channels that stream continuously no longer slide out of lip sync over time (audio drifted up to about 90 ms early before snapping back)
+  - Items no longer overlap by a few frames where one ends and the next begins
+  - Items with no audio track now carry silence instead of no audio at all
+  - A channel left on for days keeps recovering from occasional encoder crashes instead of giving up after ten
+  - ffmpeg's real error is no longer pushed out of the logs by progress noise

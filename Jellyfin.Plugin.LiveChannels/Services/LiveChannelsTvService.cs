@@ -74,8 +74,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     // How long after a producer dies unexpectedly before the session may start a replacement, and how many
     // replacements one session may run. A producer that keeps dying is a broken pipeline, not a hiccup: the
     // interval keeps a restart loop from spinning, and the cap eventually lets the session be collected instead
-    // of restarting forever.
+    // of restarting forever. The cap counts a run of failures, not a lifetime: a replacement that then runs
+    // healthily for HealthyRunReset clears the count, so a channel left on for days keeps healing the occasional
+    // encoder crash instead of losing that ability after its tenth.
     private static readonly TimeSpan RestartInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan HealthyRunReset = TimeSpan.FromMinutes(10);
     private const int MaxProducerRestarts = 10;
 
     private readonly ChannelService _channels;
@@ -949,6 +952,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         var restarted = session.TryRestart(
             RestartInterval,
             MaxProducerRestarts,
+            HealthyRunReset,
             token => Task.Run(
                 () => RunProducerAsync(
                     () => _streams.StreamToHlsAsync(channel, session.Path, token, session.Stats, nextSegment, timeline),
@@ -1927,8 +1931,8 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         // watching, so the session survives an encoder failure instead of taking the viewer down with it.
         public Task Worker { get; private set; }
 
-        // How many replacement producers this session has run, so a permanently broken pipeline stops being
-        // restarted rather than looping forever.
+        // How many replacement producers this session has run since its producer last ran healthily, so a
+        // permanently broken pipeline stops being restarted rather than looping forever.
         public int Restarts { get; private set; }
 
         public string Path { get; }
@@ -1998,15 +2002,21 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
 
         // Starts a replacement producer and attaches it, refusing when the session is gone, when its current
-        // producer is still running, when replacements are coming too fast, or when it has already had too many.
-        // Done under the lock MarkTornDown takes: the session's token is read and the new worker attached before
-        // any teardown can claim the session, so teardown always waits on (and cancels) the worker that is
-        // actually running. The start delegate must only schedule work, not block.
-        public bool TryRestart(TimeSpan minimumInterval, int maxRestarts, Func<CancellationToken, Task> start)
+        // producer is still running, when replacements are coming too fast, or when it has already had too many in
+        // a row. A previous replacement that ran for at least healthyRun before dying was a success, so the count
+        // starts over. Done under the lock MarkTornDown takes: the session's token is read and the new worker
+        // attached before any teardown can claim the session, so teardown always waits on (and cancels) the worker
+        // that is actually running. The start delegate must only schedule work, not block.
+        public bool TryRestart(TimeSpan minimumInterval, int maxRestarts, TimeSpan healthyRun, Func<CancellationToken, Task> start, DateTime? nowUtc = null)
         {
             lock (_gate)
             {
-                var now = DateTime.UtcNow;
+                var now = nowUtc ?? DateTime.UtcNow;
+                if (Restarts > 0 && now - _lastRestartUtc >= healthyRun)
+                {
+                    Restarts = 0;
+                }
+
                 if (IsTornDown || !Worker.IsCompleted || Restarts >= maxRestarts || now - _lastRestartUtc < minimumInterval)
                 {
                     return false;

@@ -99,6 +99,21 @@ public sealed class ProgramEntry
     /// <summary>Gets the position, among the item's audio streams ordered by index, of the track Jellyfin marks as default (0 when none, <c>null</c> when unknown), so the stream pipeline maps the same audio Jellyfin would play. Probed once at guide refresh and cached here.</summary>
     public int? DefaultAudioOrdinal { get; init; }
 
+    /// <summary>Gets the source video codec (e.g. <c>h264</c>, <c>hevc</c>), or <c>null</c> when unknown (an unprobed item, or a schedule cached before this was recorded). Probed once at guide refresh and cached here.</summary>
+    public string? SourceVideoCodec { get; init; }
+
+    /// <summary>Gets the source video's tagged colour space (e.g. <c>bt709</c>, <c>smpte170m</c>), or <c>null</c> when untagged or unknown, so the stream pipeline converts the item from the right matrix into the channel's bt709. Probed once at guide refresh and cached here.</summary>
+    public string? SourceColorSpace { get; init; }
+
+    /// <summary>Gets the codec of the default audio track (e.g. <c>aac</c>, <c>ac3</c>), or <c>null</c> when unknown or the item has no audio. Probed once at guide refresh and cached here.</summary>
+    public string? SourceAudioCodec { get; init; }
+
+    /// <summary>Gets the channel count of the default audio track, or <c>null</c> when unknown or the item has no audio. Probed once at guide refresh and cached here.</summary>
+    public int? SourceAudioChannels { get; init; }
+
+    /// <summary>Gets a value indicating whether the item has a video stream but no audio stream at all, so the stream pipeline gives it a silent track. <c>false</c> when unknown (an unprobed item, or a schedule cached before this was recorded), which keeps mapping the item's own audio. Probed once at guide refresh and cached here.</summary>
+    public bool IsVideoOnly { get; init; }
+
     /// <summary>Gets the three-letter language of the default audio track, or <c>null</c>, used by the Forced-only subtitle rule to burn in subtitles for foreign-language audio. Probed once at guide refresh and cached here.</summary>
     public string? DefaultAudioLanguage { get; init; }
 

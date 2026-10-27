@@ -50,14 +50,15 @@ public partial class ChannelService
         }
 
         // "Forced only" also burns subtitles when the audio we play is not in the configured default language, so
-        // foreign-language content stays followable. Audio in the default language, or untagged audio, shows
+        // foreign-language content stays followable. Languages match across code forms (eng/en, deu/ger), the same
+        // way the audio track was chosen, so a track picked for being in your language is never subtitled over. Audio in the default language, or untagged audio, shows
         // nothing without a forced track, so ordinary content is never subtitled by surprise.
         var defaultLanguage = Plugin.Instance?.ReadConfiguration(c => c.DefaultSubtitleLanguage) ?? string.Empty;
         var audioLanguage = program.DefaultAudioLanguage;
         var forcedForForeignAudio = mode == SubtitleBurnInMode.Forced
             && !string.IsNullOrEmpty(audioLanguage)
             && !string.IsNullOrEmpty(defaultLanguage)
-            && !string.Equals(audioLanguage, defaultLanguage, StringComparison.OrdinalIgnoreCase);
+            && !LanguageMatches(audioLanguage, defaultLanguage);
 
         if ((mode == SubtitleBurnInMode.Always || forcedForForeignAudio) && subtitles.Count > 0)
         {
