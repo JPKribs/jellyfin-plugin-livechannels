@@ -19,8 +19,8 @@ changelog:
   - Built for Jellyfin 12.4
   - Every channel now delivers one consistent picture format, so DVDs, untagged rips, and full-range phone or screen recordings show their true colours instead of shifted hues or crushed blacks and clipped whites
   - HDR is tone-mapped after scaling down, about three to five times faster, and uses Jellyfin's own tone mapper and tone-mapping settings when available
-  - Standby is now temporary: a channel that cannot play shows standby for a minute, then tries its schedule again, backing off to five minutes while the problem lasts
-  - Each item plays its audio in your language when it has one: the default track in the channel's audio language (or your default language), else the first track in it, else the item's own default track
+  - Standby is now temporary, so a channel that cannot play shows standby for a minute and then tries its schedule again, backing off to five minutes while the problem lasts
+  - Each item plays its audio in your language when it has one, choosing the default track in the channel's audio language (or your default language), else the first track in it, else the item's own default track
   - The standby card says why the channel is on standby
   - A stuck encoder is detected within 15 seconds and replaced, so the channel recovers instead of freezing
   - Every encoder failure leaves a report in Jellyfin's log folder with the exact ffmpeg command and its error
