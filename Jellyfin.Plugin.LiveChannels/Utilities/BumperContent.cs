@@ -167,6 +167,9 @@ internal sealed record BumperContent(string Title, string? Tag, string? Subtitle
 /// <param name="Time">Its start, as the server's clock shows it (<c>9:45 PM</c>).</param>
 internal sealed record BumperThen(string Text, string Time)
 {
+    /// <summary>Gets the stand-in a card is laid out with when it is rendered: the Then line's room, with nothing in it yet.</summary>
+    public static BumperThen Reserved { get; } = new(string.Empty, string.Empty);
+
     /// <summary>The Then line for an item starting at a guide time.</summary>
     /// <param name="program">The item.</param>
     /// <param name="startUtc">When its slot starts.</param>

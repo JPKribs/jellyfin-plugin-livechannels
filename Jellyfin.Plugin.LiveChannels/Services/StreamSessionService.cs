@@ -938,8 +938,14 @@ public class StreamSessionService
                 if (_bumpers is not null && schedule.Following(1) is { } next)
                 {
                     var remaining = step.DurationLimit ?? (TimeSpan.FromTicks(program.DurationTicks) - step.Offset);
-                    _bumpers.Prepare(channel, next.Program, OutputFor(stats).Width, stats?.LogoPath, ThenFor(schedule.Following(2)), BumperService.PrepareDelayFor(remaining), cancellationToken);
+                    _bumpers.Prepare(channel, next.Program, OutputFor(stats).Width, stats?.LogoPath, BumperService.PrepareDelayFor(remaining), cancellationToken);
                 }
+            }
+
+            // The next item is made ready while this one plays, so its boundary costs only its encoder's start.
+            if (!resuming && schedule.Following(1) is { } upcoming)
+            {
+                PrepareNextItem(channel, upcoming.Program, step.DurationLimit ?? (TimeSpan.FromTicks(program.DurationTicks) - step.Offset), cancellationToken);
             }
             _logger.LogDebug("Channel {Name}: item {Number} \"{Title}\"", channel.Name, itemsPlayed + 1, program.Title);
 
@@ -1081,6 +1087,90 @@ public class StreamSessionService
         return false;
     }
 
+    /// <summary>
+    /// How far into the current item to wake the next item's storage: a minute before the item ends (straight away
+    /// when less than that is left). Early enough for a sleeping disk or network share to spin up; late enough that
+    /// what it reads is still cached when the next item opens it.
+    /// </summary>
+    /// <param name="remaining">How much of the current item is left to play.</param>
+    /// <returns>The delay.</returns>
+    internal static TimeSpan WakeDelayFor(TimeSpan remaining)
+    {
+        var wake = remaining - TimeSpan.FromMinutes(1);
+        return wake > TimeSpan.Zero ? wake : TimeSpan.Zero;
+    }
+
+    // Gets the next item ready in the background while the current one plays, when it costs the stream nothing:
+    // its burn-in subtitle is extracted once the current item has settled (an extraction can take minutes, and the
+    // boundary only waits a moment for one), and a minute before the boundary its file's first few megabytes are
+    // read, so a disk or share that has gone to sleep is awake by the time the next producer opens it. Never throws;
+    // the session closing drops whatever has not run yet.
+    private void PrepareNextItem(Channel channel, ProgramEntry next, TimeSpan remaining, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(next.Path))
+        {
+            return;
+        }
+
+        _ = Task.Run(
+            async () =>
+            {
+                try
+                {
+                    var settle = BumperService.PrepareDelayFor(remaining);
+                    await Task.Delay(settle, cancellationToken).ConfigureAwait(false);
+                    var subtitle = ChannelService.FindBurnInSubtitle(next, channel.SubtitleBurnIn);
+                    var external = subtitle is { } chosen && (next.Subtitles.FirstOrDefault(s => s.RelativeIndex == chosen.RelativeIndex)?.IsExternal ?? false);
+                    if (subtitle is { IsText: true } text && !external)
+                    {
+                        await _channels.TryResolveBurnInSubtitleAsync(next.ItemId, text.RelativeIndex, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    var wake = WakeDelayFor(remaining) - settle;
+                    if (wake > TimeSpan.Zero)
+                    {
+                        await Task.Delay(wake, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    await WarmFileAsync(next.Path, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // The session closed first.
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Live Channels: {Name}: could not prepare \"{Title}\" ahead of time", channel.Name, next.Title);
+                }
+            },
+            CancellationToken.None);
+    }
+
+    // Reads the start of a file to wake the storage holding it. Bounded, so a mount that has stopped answering ties
+    // up one background read rather than anything the stream waits on.
+    private static async Task WarmFileAsync(string path, CancellationToken cancellationToken)
+    {
+        if (!new StorageProbe().Exists(path))
+        {
+            return;
+        }
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 16, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await using (stream.ConfigureAwait(false))
+        {
+            var buffer = new byte[1 << 20];
+            for (var i = 0; i < 4; i++)
+            {
+                if (await stream.ReadAsync(buffer, deadline.Token).ConfigureAwait(false) == 0)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
     // The Then line for the slot a schedule has at some distance ahead: what airs then and when its slot starts.
     internal static BumperThen? ThenFor((ProgramEntry Program, DateTime StartUtc)? following)
         => following is { } f ? BumperThen.For(f.Program, f.StartUtc, TimeZoneInfo.Local) : null;
@@ -1115,10 +1205,13 @@ public class StreamSessionService
         }
 
         var width = OutputFor(stats).Width;
-        var bumper = step.Offset <= TimeSpan.Zero ? _bumpers.TryGetCached(channel, step.Program, width, stats?.LogoPath, then) : null;
+        var bumper = step.Offset <= TimeSpan.Zero ? _bumpers.TryGetCached(channel, step.Program, width, stats?.LogoPath) : null;
         if (bumper is not null)
         {
-            var (played, end, _) = await StreamItemAsync(ffmpeg, channel, BumperService.ClipEntry(bumper, "Up Next: " + step.Program.Title, width, BumperService.BumperLength.TotalSeconds), TimeSpan.Zero, timeline, output, burstSeconds, cancellationToken, stats, length, softwareDecodeOnly: true).ConfigureAwait(false);
+            // The Then line is drawn on now, from the schedule as it stands; with nothing known after the item its
+            // room on the card simply stays empty.
+            var overlay = then is null ? null : _bumpers.ThenOverlay(bumper, step.Program, width, then);
+            var (played, end, _) = await StreamItemAsync(ffmpeg, channel, BumperService.ClipEntry(bumper, "Up Next: " + step.Program.Title, width, BumperService.BumperLength.TotalSeconds), TimeSpan.Zero, timeline, output, burstSeconds, cancellationToken, stats, length, softwareDecodeOnly: true, overlayFilter: overlay).ConfigureAwait(false);
             if (played || cancellationToken.IsCancellationRequested)
             {
                 return played ? NextTimeline(timeline, length, end) : timeline;
@@ -1176,6 +1269,30 @@ public class StreamSessionService
 
     // The output settings a session encodes with: pinned on its stats at its first producer, so a codec or size
     // saved mid-session never switches the stream its viewers are decoding (see OutputSettings).
+    /// <summary>
+    /// Renders what every Up Next card of the channel shares (its layer, and the black filler for the output size)
+    /// when missing, at the current output size. Does nothing for a channel with Up Next cards off.
+    /// </summary>
+    /// <param name="channel">The channel.</param>
+    /// <param name="logoPath">The channel's logo, or <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancels the filler render.</param>
+    /// <returns>Whether the channel's cards are ready to be added to (or it has none).</returns>
+    public async Task<bool> PrepareBumperLayerAsync(Channel channel, string? logoPath, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        if (!channel.ShowBumpers || _bumpers is null)
+        {
+            return true;
+        }
+
+        var width = CurrentOutput().Width;
+        await _bumpers.EnsureBlackAsync(width, cancellationToken).ConfigureAwait(false);
+        return await _bumpers.PrepareLayerAsync(channel, width, logoPath).ConfigureAwait(false);
+    }
+
+    /// <summary>Deletes every channel's cached Up Next layer.</summary>
+    public void ClearBumperLayers() => _bumpers?.ClearLayers();
+
     internal static OutputSettings OutputFor(SessionStats? stats) => stats?.PinOutput(CurrentOutput) ?? CurrentOutput();
 
     // Logs, once per tune-in, exactly how the channel will be encoded — resolution, codec, the resolved
@@ -1233,7 +1350,7 @@ public class StreamSessionService
     // hardware attempt burned wall clock that retry should recover). Returns whether the item produced output
     // and the producer's final output timestamp in seconds (-1 when none was parsed), which the loop chains
     // the next item's timeline from.
-    private async Task<(bool Streamed, double EndSeconds, TimeSpan? CutShortAfter)> StreamItemAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan timeline, Stream output, Func<double> burstSeconds, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan? durationLimit = null, bool softwareDecodeOnly = false, StorageProbe? storage = null)
+    private async Task<(bool Streamed, double EndSeconds, TimeSpan? CutShortAfter)> StreamItemAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan timeline, Stream output, Func<double> burstSeconds, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan? durationLimit = null, bool softwareDecodeOnly = false, StorageProbe? storage = null, string? overlayFilter = null)
     {
         if (string.IsNullOrEmpty(program.Path) || !(storage ?? new StorageProbe()).Exists(program.Path))
         {
@@ -1272,7 +1389,7 @@ public class StreamSessionService
             }
         }
 
-        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: softwareDecodeOnly || MustDecodeInSoftware(program, subtitle) || !_encoders.CanHardwareDecode(program), program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts, SilenceFor(program, offset, durationLimit), program.SourceColorSpace, stats);
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: softwareDecodeOnly || MustDecodeInSoftware(program, subtitle) || !_encoders.CanHardwareDecode(program), program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts, SilenceFor(program, offset, durationLimit), program.SourceColorSpace, stats, overlayFilter);
         var (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats, new SpeedTracker(timeline.TotalSeconds)).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
@@ -1280,7 +1397,7 @@ public class StreamSessionService
         if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
-            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts, SilenceFor(program, offset, durationLimit), program.SourceColorSpace, stats);
+            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts, SilenceFor(program, offset, durationLimit), program.SourceColorSpace, stats, overlayFilter);
             (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken, stats, new SpeedTracker(timeline.TotalSeconds)).ConfigureAwait(false);
         }
 
@@ -1656,7 +1773,7 @@ public class StreamSessionService
     public (List<string> Args, bool HardwareDecode) BuildStressArguments(string path, int sourceHeight, bool isHdr, TimeSpan offset, TimeSpan duration)
         => BuildArguments(path, offset, TimeSpan.Zero, null, sourceHeight, null, softwareDecode: false, isHdr, null, initialBurstSeconds: 0, duration);
 
-    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal, double initialBurstSeconds, TimeSpan? durationLimit = null, string? subtitleFontsDir = null, TimeSpan? silentAudio = null, string? colorSpace = null, SessionStats? stats = null)
+    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal, double initialBurstSeconds, TimeSpan? durationLimit = null, string? subtitleFontsDir = null, TimeSpan? silentAudio = null, string? colorSpace = null, SessionStats? stats = null, string? overlayFilter = null)
     {
         var (width, bitrate, videoCodec, audioCodec) = OutputFor(stats);
         var subtitleStyle = ResolveSubtitleStyle();
@@ -1691,7 +1808,7 @@ public class StreamSessionService
         // Outside the GPU-resident pipeline an HDR item tone-maps in software: with jellyfin-ffmpeg's tonemapx and
         // the server's own settings when this ffmpeg has it, else with the portable zscale chain.
         var toneMap = isHdr && !intelGpu && _encoder.SupportsFilter("tonemapx") ? _encoders.SoftwareToneMap() : null;
-        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurstSeconds, durationLimit, subtitleStyle, subtitleFontsDir, silentAudio, toneMap, StreamArguments.InputMatrix(colorSpace, sourceHeight));
+        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurstSeconds, durationLimit, subtitleStyle, subtitleFontsDir, silentAudio, toneMap, StreamArguments.InputMatrix(colorSpace, sourceHeight), overlayFilter);
         return (args, hardwareDecode);
     }
 

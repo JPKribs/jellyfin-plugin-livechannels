@@ -37,7 +37,7 @@ public sealed class BumperScheduleTests : IDisposable
     }
 
     [Fact]
-    public void TheBumperIsPartOfTheSlot_SoAnHourMovieAtNoonStartsAt12_00_15AndEndsAt13_00_15()
+    public void TheBumperIsPartOfTheSlot_SoAnHourMovieAtNoonStartsAt12_00_10AndEndsAt13_00_10()
     {
         var movie = Item("Movie", TimeSpan.FromHours(1));
         var next = Item("Next", TimeSpan.FromMinutes(30));
@@ -46,10 +46,10 @@ public sealed class BumperScheduleTests : IDisposable
         var schedule = ScheduleCalculator.BuildSchedule(loop, Noon.AddMinutes(1), Noon.AddHours(2), Noon);
 
         Assert.Equal(Noon, schedule[0].Start);
-        Assert.Equal(Noon.AddSeconds(15), schedule[0].ContentStart);
-        Assert.Equal(Noon.AddHours(1).AddSeconds(15), schedule[0].Stop);
+        Assert.Equal(Noon + Lead, schedule[0].ContentStart);
+        Assert.Equal(Noon.AddHours(1) + Lead, schedule[0].Stop);
         Assert.Equal(schedule[0].Stop, schedule[1].Start);
-        Assert.Equal(schedule[1].Start.AddSeconds(15), schedule[1].ContentStart);
+        Assert.Equal(schedule[1].Start + Lead, schedule[1].ContentStart);
         Assert.Equal(TimeSpan.FromMinutes(30) + Lead, schedule[1].Stop - schedule[1].Start);
     }
 
@@ -71,12 +71,12 @@ public sealed class BumperScheduleTests : IDisposable
         Assert.Equal((0, TimeSpan.FromSeconds(7)), ScheduleCalculator.CurrentProgram(loop, Noon.AddSeconds(7), Noon));
         Assert.Equal((0, TimeSpan.FromMinutes(5)), ScheduleCalculator.CurrentProgram(loop, Noon.AddMinutes(5), Noon));
 
-        // B's slot starts after A's whole slot: ten minutes and fifteen seconds in.
-        Assert.Equal((1, TimeSpan.Zero), ScheduleCalculator.CurrentProgram(loop, Noon.AddMinutes(10).AddSeconds(15), Noon));
-        Assert.Equal((1, TimeSpan.FromSeconds(14)), ScheduleCalculator.CurrentProgram(loop, Noon.AddMinutes(10).AddSeconds(29), Noon));
+        // B's slot starts after A's whole slot: ten minutes plus the bumper in.
+        Assert.Equal((1, TimeSpan.Zero), ScheduleCalculator.CurrentProgram(loop, Noon.AddMinutes(10) + Lead, Noon));
+        Assert.Equal((1, TimeSpan.FromSeconds(14)), ScheduleCalculator.CurrentProgram(loop, Noon.AddMinutes(10) + Lead + TimeSpan.FromSeconds(14), Noon));
 
         // The whole cycle is both items plus both bumpers.
-        Assert.Equal((0, TimeSpan.Zero), ScheduleCalculator.CurrentProgram(loop, Noon.AddMinutes(20).AddSeconds(30), Noon));
+        Assert.Equal((0, TimeSpan.Zero), ScheduleCalculator.CurrentProgram(loop, Noon.AddMinutes(20) + Lead + Lead, Noon));
     }
 
     [Fact]
@@ -249,7 +249,7 @@ public sealed class BumperScheduleTests : IDisposable
 
         // A playback cap counts from the join point, so the bumper part comes off it.
         var capped = StreamSessionService.ContentStep(new StreamStep(item, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(5), Lead));
-        Assert.Equal(TimeSpan.FromMinutes(5) - TimeSpan.FromSeconds(10), capped.DurationLimit);
+        Assert.Equal(TimeSpan.FromMinutes(5) - (Lead - TimeSpan.FromSeconds(5)), capped.DurationLimit);
 
         // No bumper: unchanged.
         var plain = new StreamStep(item, TimeSpan.FromSeconds(30), null);

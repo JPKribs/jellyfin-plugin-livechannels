@@ -35,19 +35,20 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 public sealed class IntroService : IDisposable
 {
     /// <summary>
-    /// The length of the card in seconds. Jellyfin's delivery remux refuses to serve its playlist until it has
-    /// cut three segments, and it cuts them on the encoder's keyframes: a card that spans three segments plus
-    /// one more keyframe lets all three close from the card alone, so the moment playback can start no longer
-    /// depends on how quickly the real content is seeked into and encoded behind it. Half a second past the
-    /// third segment is enough for that fourth keyframe (one lands exactly at the mark) plus the fade-out.
+    /// The length of the card in seconds, the same as an Up Next card's. Jellyfin's delivery remux refuses to serve
+    /// its playlist until it has cut three segments, and it cuts them on the encoder's keyframes: a card that spans
+    /// three segments plus one more keyframe lets all three close from the card alone, so the moment playback can
+    /// start no longer depends on how quickly the real content is seeked into and encoded behind it. Ten seconds
+    /// covers the third segment's nine and that fourth keyframe (one lands exactly at the mark), with the fade-out.
     /// </summary>
-    public const double IntroSeconds = (3 * StreamArguments.SegmentSeconds) + 0.5;
+    public const double IntroSeconds = BumperArguments.Seconds;
 
     // Bump whenever the card's rendering or the sidecar's shape changes, so stale caches regenerate. 6: cards are
     // rendered in the channel's tagged bt709 limited-range format, which matters doubly for the card because it is
     // the first thing Jellyfin probes on tune-in and the colour description it reads there is kept for the stream.
     // 7: the card plays the soft chord instead of silence.
-    private const int Revision = 7;
+    // 8: ten seconds, a "Starting in" countdown, and images read once per render.
+    private const int Revision = 8;
 
     // The look: the logo sits top-leading inside a thin bordered frame with an inner gutter, over a slowly
     // drifting dark gradient on which two pairs of coloured lines draw in from the left and keep flowing.
@@ -86,7 +87,6 @@ public sealed class IntroService : IDisposable
     // RunProcessAsync) it waits on every live encode, so a busy server can stretch it to minutes; only past this
     // is it hung rather than starved.
     private static readonly TimeSpan RenderPassTimeout = TimeSpan.FromMinutes(10);
-    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(30);
 
     // How long to wait for a killed process to actually exit before giving up on it.
     internal static readonly TimeSpan ReapTimeout = TimeSpan.FromSeconds(5);
@@ -96,6 +96,7 @@ public sealed class IntroService : IDisposable
     private readonly IMediaEncoder _encoder;
     private readonly EncoderResolver _encoders;
     private readonly string _root;
+    private readonly string _fontsDir;
     private readonly ILogger<IntroService> _logger;
 
     // One render at a time: a guide refresh asks for every channel's card in one sweep, and thirty concurrent
@@ -106,7 +107,7 @@ public sealed class IntroService : IDisposable
     /// <summary>
     /// Initializes a new instance of the <see cref="IntroService"/> class.
     /// </summary>
-    /// <param name="encoder">The media encoder, used to locate ffmpeg and ffprobe.</param>
+    /// <param name="encoder">The media encoder, used to locate ffmpeg.</param>
     /// <param name="encoders">The encoder resolver, so the card is encoded with the channel's real encoder.</param>
     /// <param name="appPaths">Application paths; cards live in the assets folder of the plugin's stream root.</param>
     /// <param name="logger">The logger.</param>
@@ -117,6 +118,7 @@ public sealed class IntroService : IDisposable
         _encoders = encoders;
         _logger = logger;
         _root = Path.Combine(PluginPaths.AssetsDir(appPaths), "intros");
+        _fontsDir = Path.Combine(PluginPaths.AssetsDir(appPaths), "fonts");
     }
 
     /// <summary>
@@ -227,6 +229,8 @@ public sealed class IntroService : IDisposable
         var stopwatch = Stopwatch.StartNew();
         var token = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
         var prefix = Path.Combine(_root, channel.Number.ToString(CultureInfo.InvariantCulture) + "-" + token);
+        var labelFile = prefix + ".countdown-label.txt";
+        var numberFile = prefix + ".countdown-number.txt";
         var source = prefix + ".src.mp4";
         var rendered = prefix + ".tmp.ts";
         var (width, height) = FrameSize(profile.Width);
@@ -242,7 +246,17 @@ public sealed class IntroService : IDisposable
             }
 
             // Pass two: the visual, as an ordinary video file at the channel's frame size.
-            var sourceArgs = BuildSourceArguments(logoPath, strips, source);
+            // The countdown's texts go to files beside the render (drawtext reads them; the number is an expansion).
+            var countdown = default((PlacedText Label, PlacedText Number, string LabelFile, string NumberFile)?);
+            if (BumperFonts.Extract(_fontsDir, null) is { } fonts)
+            {
+                var (label, number) = BumperLayout.Countdown(width, height, fonts);
+                await File.WriteAllTextAsync(labelFile, label.Text).ConfigureAwait(false);
+                await File.WriteAllTextAsync(numberFile, BumperArguments.CountdownNumber(number, IntroSeconds).Text).ConfigureAwait(false);
+                countdown = (label, number, labelFile, numberFile);
+            }
+
+            var sourceArgs = BuildSourceArguments(logoPath, strips, source, FontLocator.Find(), countdown);
             (exit, error) = await RunAsync(ffmpeg, sourceArgs).ConfigureAwait(false);
             if (exit != 0 || !File.Exists(source) || new FileInfo(source).Length == 0)
             {
@@ -262,7 +276,7 @@ public sealed class IntroService : IDisposable
 
             // The true end of the card (latest packet end over both streams) is what the first real producer
             // chains its timeline from; chaining from the nominal length instead overlaps the last audio frame.
-            var end = await ProbeEndSecondsAsync(rendered).ConfigureAwait(false) ?? (IntroSeconds + 0.1);
+            var end = ScanEndSeconds(rendered) ?? (IntroSeconds + 0.1);
 
             var final = TsPath(channel.Number);
             File.Move(rendered, final, overwrite: true);
@@ -281,6 +295,8 @@ public sealed class IntroService : IDisposable
         finally
         {
             TryDelete(source);
+            TryDelete(labelFile);
+            TryDelete(numberFile);
             TryDelete(rendered);
             foreach (var file in strips.Files)
             {
@@ -360,6 +376,12 @@ public sealed class IntroService : IDisposable
         return args;
     }
 
+    // One line of the countdown as a drawtext filter, its text read from a file (the number's as an expansion).
+    private static string Countdown(PlacedText text, string file, bool expand, string x)
+        => "drawtext=fontfile=" + StreamArguments.QuoteFilterValue(text.FontPath) + ":textfile=" + StreamArguments.QuoteFilterValue(file)
+            + ":expansion=" + (expand ? "normal" : "none") + ":fontsize=" + text.Size.ToString(CultureInfo.InvariantCulture) + ":fontcolor=" + text.Color
+            + ":x=" + x + ":y=" + text.Baseline.ToString(CultureInfo.InvariantCulture) + "-ascent";
+
     /// <summary>
     /// The card's moving lines laid over its backdrop, as a filtergraph fragment ending in the pad
     /// <paramref name="output"/>. Each strip scrolls at its line's speed; the two lines of a layer screen together;
@@ -368,13 +390,13 @@ public sealed class IntroService : IDisposable
     /// them.
     /// </summary>
     /// <param name="strips">The rendered strips and mask.</param>
-    /// <param name="backdrop">The backdrop's input index.</param>
-    /// <param name="stripInputs">Each strip's input index.</param>
-    /// <param name="mask">The mask's input index.</param>
+    /// <param name="backdrop">The backdrop's pad (<c>[bd]</c>).</param>
+    /// <param name="stripInputs">Each strip's pad.</param>
+    /// <param name="mask">The mask's pad.</param>
     /// <param name="lineOpacity">How opaque the lines are (1 on the card).</param>
     /// <param name="output">The pad the result is written to.</param>
     /// <returns>The fragment, ending in a <c>;</c>.</returns>
-    internal static string LinesFilter(LineStrips strips, int backdrop, int[] stripInputs, int mask, double lineOpacity, string output)
+    internal static string LinesFilter(LineStrips strips, string backdrop, string[] stripInputs, string mask, double lineOpacity, string output)
     {
         ArgumentNullException.ThrowIfNull(strips);
         ArgumentNullException.ThrowIfNull(stripInputs);
@@ -387,13 +409,13 @@ public sealed class IntroService : IDisposable
         var filter = string.Empty;
         for (var i = 0; i < Lines.Length; i++)
         {
-            filter += "[" + stripInputs[i].ToString(CultureInfo.InvariantCulture) + ":v]format=gray,crop=w=" + w + ":h=" + h + ":x='mod(" + strips.PixelsPerSecond[i].ToString("0.####", CultureInfo.InvariantCulture) + "*t," + strips.Periods[i].ToString(CultureInfo.InvariantCulture) + ")':y=0[s" + i.ToString(CultureInfo.InvariantCulture) + "];";
+            filter += stripInputs[i] + "format=gray,crop=w=" + w + ":h=" + h + ":x='mod(" + strips.PixelsPerSecond[i].ToString("0.####", CultureInfo.InvariantCulture) + "*t," + strips.Periods[i].ToString(CultureInfo.InvariantCulture) + ")':y=0[s" + i.ToString(CultureInfo.InvariantCulture) + "];";
         }
 
         var reveal = (width + DrawInEdgePixels).ToString(CultureInfo.InvariantCulture);
         var drawIn = LineDrawInSeconds.ToString(CultureInfo.InvariantCulture);
         var delay = LayerBDrawInDelay.ToString(CultureInfo.InvariantCulture);
-        filter += "[" + mask.ToString(CultureInfo.InvariantCulture) + ":v]format=gray,split[m0][m1];"
+        filter += mask + "format=gray,split[m0][m1];"
             + "[m0]crop=w=" + w + ":h=" + h + ":x='min(" + reveal + ",max(0," + reveal + "*(1-t/" + drawIn + ")))':y=0[mA];"
             + "[m1]crop=w=" + w + ":h=" + h + ":x='min(" + reveal + ",max(0," + reveal + "*(1-(t-" + delay + ")/" + drawIn + ")))':y=0[mB];"
             + "[s0][s1]blend=all_mode=screen[a0];[a0][mA]blend=all_mode=multiply[laf];"
@@ -401,20 +423,49 @@ public sealed class IntroService : IDisposable
             + "color=c=" + LineColorA + ":s=" + size + ":r=" + fps + "[ca];"
             + "color=c=" + LineColorB + ":s=" + size + ":r=" + fps + "[cb];"
             + "[ca][laf]alphamerge" + dim + "[lineA];[cb][lbf]alphamerge" + dim + "[lineB];"
-            + "[" + backdrop.ToString(CultureInfo.InvariantCulture) + ":v][lineA]overlay=format=auto[bg1];[bg1][lineB]overlay=format=auto[" + output + "];";
+            + backdrop + "[lineA]overlay=format=auto[bg1];[bg1][lineB]overlay=format=auto[" + output + "];";
         return filter;
     }
 
     /// <summary>
-    /// The input arguments that read a channel logo strictly as an image (never with a demuxer ffmpeg picks from
-    /// the file's content), looping it for <paramref name="seconds"/>, or <c>null</c> when the file is missing or
-    /// its own bytes do not say it is a PNG, JPEG, WebP or GIF. A GIF has its own demuxer, which takes the generic
-    /// input loop (image2's -loop is not an option there).
+    /// A still image read once and held for the clip: its single frame repeated at the output rate (for
+    /// <paramref name="seconds"/>, or as long as the output runs). Looping the image file itself (<c>-loop 1</c>)
+    /// decodes it again for every frame, which for the card's full-frame strips and scrim was most of a render's
+    /// time.
     /// </summary>
-    /// <param name="logoPath">The logo file, or <c>null</c>.</param>
-    /// <param name="seconds">How long the input runs, or <c>null</c> to leave it to the output's length.</param>
-    /// <returns>The arguments, or <c>null</c>.</returns>
-    internal static List<string>? LogoInput(string? logoPath, double? seconds)
+    /// <param name="input">The image's input index.</param>
+    /// <param name="label">The pad name to write it to, without brackets.</param>
+    /// <param name="seconds">How long to hold it, or <c>null</c> for as long as the output runs.</param>
+    /// <returns>The filtergraph fragment, ending in a <c>;</c>.</returns>
+    internal static string Held(int input, string label, double? seconds)
+        => "[" + input.ToString(CultureInfo.InvariantCulture) + ":v]loop=loop=-1:size=1:start=0,fps=" + StreamArguments.OutputFps.ToString(CultureInfo.InvariantCulture)
+            + (seconds is { } value ? ",trim=duration=" + F(value) : string.Empty) + ",setpts=PTS-STARTPTS[" + label + "];";
+
+    /// <summary>
+    /// The backdrop: the drifting gradient, drawn at a quarter of the frame size and scaled up. The gradient is
+    /// smooth, so it looks the same, and drawing it costs a sixteenth.
+    /// </summary>
+    /// <param name="width">The frame width.</param>
+    /// <param name="height">The frame height.</param>
+    /// <param name="seconds">How long it runs, or <c>null</c> for as long as the output runs.</param>
+    /// <returns>The lavfi source description.</returns>
+    internal static string BackdropSource(int width, int height, double? seconds)
+        => "gradients=s=" + Math.Max(16, width / 4).ToString(CultureInfo.InvariantCulture) + "x" + Math.Max(16, height / 4).ToString(CultureInfo.InvariantCulture)
+            + ":" + BackdropColorSpec + ":r=" + StreamArguments.OutputFps.ToString(CultureInfo.InvariantCulture)
+            + (seconds is { } value ? ":d=" + F(value) : string.Empty)
+            + ",scale=" + width.ToString(CultureInfo.InvariantCulture) + ":" + height.ToString(CultureInfo.InvariantCulture) + ":flags=bicubic";
+
+    /// <summary>
+    /// The input arguments that read an image (a channel logo, or an Up Next card's artwork) strictly as an image
+    /// (never with a demuxer ffmpeg picks from the file's content), or <c>null</c> when the file is missing or its own
+    /// bytes do not say it is a PNG, JPEG, WebP or GIF. A still image is read once, for the caller to hold (see
+    /// <see cref="Held"/>); a GIF, which may be animated, loops through its own demuxer for
+    /// <paramref name="seconds"/>.
+    /// </summary>
+    /// <param name="logoPath">The image file, or <c>null</c>.</param>
+    /// <param name="seconds">How long an animated image runs, or <c>null</c> to leave it to the output's length.</param>
+    /// <returns>The arguments and whether the image is still (to be held), or <c>null</c>.</returns>
+    internal static (List<string> Args, bool Still)? LogoInput(string? logoPath, double? seconds)
     {
         var type = !string.IsNullOrEmpty(logoPath) && File.Exists(logoPath) ? ImageTypeOf(logoPath) : null;
         if (type is null)
@@ -422,13 +473,13 @@ public sealed class IntroService : IDisposable
             return null;
         }
 
-        var length = seconds is { } value ? new List<string> { "-t", F(value) } : new List<string>();
         if (type == "image/gif")
         {
-            return ["-f", "gif", "-stream_loop", "-1", .. length, "-i", logoPath!];
+            var length = seconds is { } value ? new List<string> { "-t", F(value) } : new List<string>();
+            return (["-f", "gif", "-stream_loop", "-1", .. length, "-i", logoPath!], false);
         }
 
-        return ["-f", "image2", "-loop", "1", "-framerate", StreamArguments.OutputFps.ToString(CultureInfo.InvariantCulture), .. length, "-i", logoPath!];
+        return (["-f", "image2", "-i", logoPath!], true);
     }
 
     // Renders the card's visual as a plain 8-bit progressive video at the channel's frame size and rate with the
@@ -439,6 +490,20 @@ public sealed class IntroService : IDisposable
         => BuildSourceArguments(logoPath, strips, output, FontLocator.Find());
 
     internal static List<string> BuildSourceArguments(string? logoPath, LineStrips strips, string output, string? fontPath)
+        => BuildSourceArguments(logoPath, strips, output, fontPath, null);
+
+    /// <summary>
+    /// The card's visual (see the overload above), with the "Starting in" countdown to the channel's content in the
+    /// bottom right when <paramref name="countdown"/> is given: the same placement, fonts and count as an Up Next
+    /// card's, each text read from a file.
+    /// </summary>
+    /// <param name="logoPath">The channel logo, or <c>null</c>.</param>
+    /// <param name="strips">The rendered strips and mask.</param>
+    /// <param name="output">The video to write.</param>
+    /// <param name="fontPath">The caption's font, or <c>null</c> to leave the caption out.</param>
+    /// <param name="countdown">The countdown's label and number (see <see cref="BumperLayout.Countdown"/>) with the files holding their text, or <c>null</c> for none.</param>
+    /// <returns>The arguments.</returns>
+    internal static List<string> BuildSourceArguments(string? logoPath, LineStrips strips, string output, string? fontPath, (PlacedText Label, PlacedText Number, string LabelFile, string NumberFile)? countdown)
     {
         var width = strips.Width;
         var height = strips.Height;
@@ -455,28 +520,40 @@ public sealed class IntroService : IDisposable
         var hasLogo = logoInput is not null;
         var args = new List<string> { "-hide_banner", "-loglevel", "error", "-y" };
         var next = 0;
-        var logo = -1;
-        if (logoInput is not null)
+        var held = string.Empty;
+        var logoPad = string.Empty;
+        if (logoInput is { } logoRead)
         {
-            args.AddRange(logoInput);
-            logo = next++;
+            args.AddRange(logoRead.Args);
+            var logo = next++;
+            if (logoRead.Still)
+            {
+                held += Held(logo, "logoimg", null);
+                logoPad = "[logoimg]";
+            }
+            else
+            {
+                logoPad = "[" + logo.ToString(CultureInfo.InvariantCulture) + ":v]";
+            }
         }
 
-        args.AddRange(["-f", "lavfi", "-i", "gradients=s=" + size + ":" + BackdropColorSpec + ":r=" + fps]);
-        var backdrop = next++;
-        var stripInputs = new int[Lines.Length];
+        args.AddRange(["-f", "lavfi", "-i", BackdropSource(width, height, null)]);
+        var backdrop = "[" + (next++).ToString(CultureInfo.InvariantCulture) + ":v]";
+        var stripInputs = new string[Lines.Length];
         for (var i = 0; i < Lines.Length; i++)
         {
-            args.AddRange(["-loop", "1", "-framerate", fps, "-i", strips.Strips[i]]);
-            stripInputs[i] = next++;
+            args.AddRange(["-i", strips.Strips[i]]);
+            held += Held(next++, "strip" + i.ToString(CultureInfo.InvariantCulture), null);
+            stripInputs[i] = "[strip" + i.ToString(CultureInfo.InvariantCulture) + "]";
         }
 
-        args.AddRange(["-loop", "1", "-framerate", fps, "-i", strips.Mask]);
-        var mask = next++;
+        args.AddRange(["-i", strips.Mask]);
+        held += Held(next++, "mask", null);
+        const string mask = "[mask]";
         args.AddRange(["-f", "lavfi", "-i", BumperArguments.ChordSource(IntroSeconds)]);
         var audio = next++;
 
-        var filter = LinesFilter(strips, backdrop, stripInputs, mask, lineOpacity: 1.0, output: "bg2");
+        var filter = held + LinesFilter(strips, backdrop, stripInputs, mask, lineOpacity: 1.0, output: "bg2");
 
         if (hasLogo)
         {
@@ -500,7 +577,7 @@ public sealed class IntroService : IDisposable
                     + ":x=w-" + budget.ToString(CultureInfo.InvariantCulture) + "+" + gap.ToString(CultureInfo.InvariantCulture) + ":y=(h-th)/2-(descent/2),";
             }
 
-            filter += "[" + logo.ToString(CultureInfo.InvariantCulture) + ":v]format=rgba,scale=-2:" + logoHeight.ToString(CultureInfo.InvariantCulture) + ":flags=lanczos,"
+            filter += logoPad + "format=rgba,scale=-2:" + logoHeight.ToString(CultureInfo.InvariantCulture) + ":flags=lanczos,"
                 + "pad=iw+" + (2 * Gutter).ToString(CultureInfo.InvariantCulture) + ":ih+" + (2 * Gutter).ToString(CultureInfo.InvariantCulture) + ":" + Gutter.ToString(CultureInfo.InvariantCulture) + ":" + Gutter.ToString(CultureInfo.InvariantCulture) + ":color=#00000000,"
                 + "pad=iw+" + (2 * Border).ToString(CultureInfo.InvariantCulture) + ":ih+" + (2 * Border).ToString(CultureInfo.InvariantCulture) + ":" + Border.ToString(CultureInfo.InvariantCulture) + ":" + Border.ToString(CultureInfo.InvariantCulture) + ":color=white@0.35,"
                 + caption
@@ -512,8 +589,19 @@ public sealed class IntroService : IDisposable
             filter += "[bg2]null[bg3];";
         }
 
+        if (countdown is { } count)
+        {
+            filter += "[bg3]" + Countdown(count.Label, count.LabelFile, expand: false, x: count.Label.X.ToString(CultureInfo.InvariantCulture))
+                + "," + Countdown(BumperArguments.CountdownNumber(count.Number, IntroSeconds), count.NumberFile, expand: true, x: count.Number.X.ToString(CultureInfo.InvariantCulture) + "-tw")
+                + "[bg3c];";
+        }
+        else
+        {
+            filter += "[bg3]null[bg3c];";
+        }
+
         // A whisper of temporal noise keeps the channel encoder from banding the dark gradient into blotches.
-        filter += "[bg3]noise=alls=3:allf=t+u,fade=t=out:st=" + fadeOutAt + ":d=" + FadeOutSeconds.ToString(CultureInfo.InvariantCulture) + ",format=yuv420p[v]";
+        filter += "[bg3c]noise=alls=3:allf=t+u,fade=t=out:st=" + fadeOutAt + ":d=" + FadeOutSeconds.ToString(CultureInfo.InvariantCulture) + ",format=yuv420p[v]";
 
         filter += ";[" + audio.ToString(CultureInfo.InvariantCulture) + ":a]" + BumperArguments.ChordFilter + "[a]";
         args.AddRange(["-filter_complex", filter, "-map", "[v]", "-map", "[a]"]);
@@ -534,32 +622,31 @@ public sealed class IntroService : IDisposable
 
     private static string F(double value) => value.ToString("0.####", CultureInfo.InvariantCulture);
 
-    private async Task<double?> ProbeEndSecondsAsync(string file)
+    /// <summary>
+    /// The true end of a rendered card on its own timeline: the latest packet end over both streams (the last
+    /// picture's timestamp plus a frame, or the last sound's plus its frame), read off the MPEG-TS packet headers in
+    /// process. The first real producer chains its timeline from here; chaining from the nominal length instead
+    /// overlaps the last audio frame.
+    /// </summary>
+    /// <param name="file">The rendered card.</param>
+    /// <returns>The end in seconds, or <c>null</c> when the file holds no timestamps.</returns>
+    internal static double? ScanEndSeconds(string file)
     {
-        var ffprobe = _encoder.ProbePath;
-        if (string.IsNullOrEmpty(ffprobe))
+        var scanner = new TsEndScanner();
+        using (var stream = File.OpenRead(file))
         {
-            return null;
-        }
-
-        // The exit code is not consulted: ffprobe can exit non-zero over a trailing packet it could not read while
-        // still printing every packet before it, and those are exactly what is needed. A timed-out probe returns
-        // no output, so it falls back to the nominal length.
-        var (_, stdout, _) = await RunProcessAsync(ffprobe, ["-v", "error", "-show_entries", "packet=pts_time,duration_time", "-of", "csv=p=0", file], captureOutput: true, ProbeTimeout).ConfigureAwait(false);
-
-        double max = -1;
-        foreach (var line in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var parts = line.Trim().Split(',');
-            if (parts.Length >= 2
-                && double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var pts)
-                && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var duration))
+            var buffer = new byte[188 * 1024];
+            int read;
+            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
             {
-                max = Math.Max(max, pts + duration);
+                scanner.Feed(buffer.AsSpan(0, read));
             }
         }
 
-        return max > 0 ? max : null;
+        var video = scanner.MaxVideoPts is { } picture ? picture + (1.0 / StreamArguments.OutputFps) : (double?)null;
+        var audio = scanner.LastAudioPts is { } sound && scanner.AudioFrameSeconds is { } frame ? sound + frame : (double?)null;
+        var end = Math.Max(video ?? -1, audio ?? -1);
+        return end > 0 ? end : null;
     }
 
     private static async Task<(int Exit, string Error)> RunAsync(string ffmpeg, IReadOnlyList<string> args)
@@ -570,7 +657,7 @@ public sealed class IntroService : IDisposable
 
     /// <summary>
     /// Runs a child process to completion, bounded by a timeout. A render runs under the one-at-a-time render
-    /// gate, so an ffmpeg or ffprobe that hangs (a wedged hardware encoder, a stalled filesystem) would otherwise
+    /// gate, so an ffmpeg that hangs (a wedged hardware encoder, a stalled filesystem) would otherwise
     /// hold the gate forever and no card would ever render again until a restart. On timeout the whole process
     /// tree is killed and the run reports failure.
     /// </summary>
@@ -661,7 +748,8 @@ public sealed class IntroService : IDisposable
             video.Name,
             video.PixelStage,
             string.Join(' ', video.ExtraEncoderArgs),
-            string.Join(' ', video.InitArgs)));
+            string.Join(' ', video.InitArgs),
+            video.Preset));
         return (key, width, bitrate, video, audioEncoder, audioBitrate);
     }
 
@@ -729,6 +817,32 @@ public sealed class IntroService : IDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogDebug(ex, "Live Channels: could not delete {Path}", path);
+        }
+    }
+
+    /// <summary>
+    /// Deletes every cached card and its sidecar, so the next generation renders them all afresh. A render in flight
+    /// finishes and writes its card as usual.
+    /// </summary>
+    public void ClearCache()
+    {
+        try
+        {
+            if (!Directory.Exists(_root))
+            {
+                return;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(_root))
+            {
+                TryDelete(file);
+            }
+
+            _logger.LogInformation("Live Channels: cleared the cached tune-in cards");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Live Channels: could not clear the cached tune-in cards");
         }
     }
 

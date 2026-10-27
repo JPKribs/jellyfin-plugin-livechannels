@@ -2,6 +2,8 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Services;
+using MediaBrowser.Common.Configuration;
+using MediaBrowser.Model.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -22,6 +24,8 @@ public class LiveChannelsController : ControllerBase
     private readonly EncoderResolver _encoders;
     private readonly LiveChannelsTvService _tv;
     private readonly StressTestService _stress;
+    private readonly ITaskManager _taskManager;
+    private readonly IApplicationPaths _paths;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LiveChannelsController"/> class.
@@ -29,11 +33,42 @@ public class LiveChannelsController : ControllerBase
     /// <param name="encoders">The encoder resolver, used to report the active hardware acceleration.</param>
     /// <param name="tv">The Live TV service, which owns the active channel streams.</param>
     /// <param name="stress">The encoder stress test the settings page can run.</param>
-    public LiveChannelsController(EncoderResolver encoders, LiveChannelsTvService tv, StressTestService stress)
+    /// <param name="taskManager">The scheduled task manager, which Reset schedule starts the guide and card tasks through.</param>
+    /// <param name="paths">The application paths, which locate the schedule cache Reset schedule clears.</param>
+    public LiveChannelsController(EncoderResolver encoders, LiveChannelsTvService tv, StressTestService stress, ITaskManager taskManager, IApplicationPaths paths)
     {
         _encoders = encoders;
         _tv = tv;
         _stress = stress;
+        _taskManager = taskManager;
+        _paths = paths;
+    }
+
+    /// <summary>
+    /// Resets every channel from scratch: clears the cached schedules and buffer cards, then starts Jellyfin's
+    /// Refresh Guide task (which rebuilds every schedule from the current configuration) and the plugin's
+    /// Generate Buffer Cards task (which renders the cards again). The program on air keeps its slot: the cleared
+    /// schedules are set aside for the rebuild to continue from, as a configuration save does.
+    /// </summary>
+    /// <returns>No content when both tasks were started; 500 when either could not be found.</returns>
+    [HttpPost("schedule/reset")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+    public ActionResult ResetSchedule()
+    {
+        ChannelService.ClearScheduleCache(_paths);
+        _tv.ClearBufferCards();
+        var started = 0;
+        foreach (var worker in _taskManager.ScheduledTasks)
+        {
+            if (worker.ScheduledTask.Key is "RefreshGuide" or GenerateBufferCardsTask.TaskKey)
+            {
+                _taskManager.QueueScheduledTask(worker.ScheduledTask, new TaskOptions());
+                started++;
+            }
+        }
+
+        return started == 2 ? NoContent() : StatusCode(StatusCodes.Status500InternalServerError);
     }
 
     /// <summary>

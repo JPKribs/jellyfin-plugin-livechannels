@@ -99,6 +99,7 @@ public static class StreamArguments
     /// <param name="silentAudio">For a video-only item, how much silence to give it as its audio track (the length of video this run plays), or <c>null</c> to map the item's own audio.</param>
     /// <param name="toneMapStage">The software tone-map filter for an HDR item outside the GPU-resident pipeline (jellyfin-ffmpeg's tonemapx with the server's settings), or <c>null</c> for the portable zscale chain.</param>
     /// <param name="inputMatrix">The colour matrix the item's pixels are in (see <see cref="InputMatrix"/>), so an SDR item is converted to the channel's bt709; <c>auto</c> leaves it to ffmpeg.</param>
+    /// <param name="overlayFilter">Filters drawn onto the picture before it is scaled, ending in a comma (an Up Next card's Then line), or <c>null</c>. Applied on the software path only, which is the one cards play through.</param>
     /// <returns>The ffmpeg argument list.</returns>
     public static List<string> Build(
         string path,
@@ -120,7 +121,8 @@ public static class StreamArguments
         string? subtitleFontsDir = null,
         TimeSpan? silentAudio = null,
         string? toneMapStage = null,
-        string inputMatrix = "auto")
+        string inputMatrix = "auto",
+        string? overlayFilter = null)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(video);
@@ -312,7 +314,7 @@ public static class StreamArguments
             // now square pixels so mixed sources share one aspect ratio.
             // An SDR item is converted to the channel's colour format in the same scale pass (see ToChannelColour);
             // an HDR item is scaled as-is and the tone map produces bt709 limited itself.
-            scale = download + "yadif=deint=1,scale=" + FitSize(width, height) + (isHdr ? string.Empty : ToChannelColour(inputMatrix)) + "," + tonemap
+            scale = download + (overlayFilter ?? string.Empty) + video.Deinterlacer + "=deint=1,scale=" + FitSize(width, height) + (isHdr ? string.Empty : ToChannelColour(inputMatrix)) + "," + tonemap
                 + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30," + ChannelColourParams + "," + video.PixelStage;
         }
 
@@ -445,7 +447,7 @@ public static class StreamArguments
         var download = hwDecode ? video.DecodeDownload : string.Empty;
         // The scale sizes the picture from its display aspect ratio (see FitSize), and setsar=1 then marks the
         // now square pixels so mixed sources share one aspect ratio.
-        args.Add(download + "yadif=deint=1,scale=" + FitSize(width, height) + ToChannelColour(inputMatrix) + ","
+        args.Add(download + video.Deinterlacer + "=deint=1,scale=" + FitSize(width, height) + ToChannelColour(inputMatrix) + ","
             + "pad=" + w + ":" + h + ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30," + ChannelColourParams + "," + video.PixelStage);
 
         // Map the video and the chosen audio track explicitly. Left to itself ffmpeg picks the audio track with the
@@ -718,7 +720,7 @@ public static class StreamArguments
 
         if (video.UsePreset)
         {
-            Add(args, "-preset", "veryfast", "-sc_threshold", "0");
+            Add(args, "-preset", video.Preset, "-sc_threshold", "0");
         }
 
         // libx265 ignores -sc_threshold: left to itself it puts a keyframe at every scene cut and restarts its GOP

@@ -35,7 +35,9 @@ public sealed class BumperService : IDisposable
     public static readonly TimeSpan BumperLength = TimeSpan.FromSeconds(BumperArguments.Seconds);
 
     // Bump whenever a bumper's rendering changes, so cached bumpers regenerate.
-    private const int Revision = 2;
+    // 3: the Then line is drawn on at playback; cards keep its room and record their artwork shape beside them.
+    // 4: ten seconds long, with images read once per render.
+    private const int Revision = 4;
 
     // The black filler runs a little past a bumper's length, so it can always cover a whole slot lead.
     private const double BlackSeconds = BumperArguments.Seconds + 1;
@@ -47,7 +49,6 @@ public sealed class BumperService : IDisposable
     // How long into an item the next bumper starts rendering, at most: the item's start is when its own encoder is
     // busiest catching up, and nothing needs the bumper until the item ends.
     private static readonly TimeSpan PrepareDelay = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(30);
 
     // Bumpers unused for this long are deleted; the sweep runs at most this often.
     private static readonly TimeSpan KeepUnused = TimeSpan.FromDays(3);
@@ -70,7 +71,7 @@ public sealed class BumperService : IDisposable
     /// <summary>
     /// Initializes a new instance of the <see cref="BumperService"/> class.
     /// </summary>
-    /// <param name="encoder">The media encoder, used to locate ffmpeg and ffprobe.</param>
+    /// <param name="encoder">The media encoder, used to locate ffmpeg.</param>
     /// <param name="appPaths">Application paths; bumpers live in the assets folder of the plugin's stream root.</param>
     /// <param name="logger">The logger.</param>
     public BumperService(IMediaEncoder encoder, IApplicationPaths appPaths, ILogger<BumperService> logger)
@@ -91,19 +92,19 @@ public sealed class BumperService : IDisposable
     /// <param name="program">The item.</param>
     /// <param name="width">The channel's output width.</param>
     /// <param name="logoPath">The channel's logo, or <c>null</c>.</param>
-    /// <param name="then">What airs after the item, for the card's Then line, or <c>null</c>.</param>
     /// <returns>The bumper's video, or <c>null</c>.</returns>
-    internal string? TryGetCached(Channel channel, ProgramEntry program, int width, string? logoPath, BumperThen? then = null)
+    public string? TryGetCached(Channel channel, ProgramEntry program, int width, string? logoPath)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(program);
-        var path = ItemPath(channel, program, width, logoPath, then);
+        var path = ItemPath(channel, program, width, logoPath);
         if (!File.Exists(path))
         {
             return null;
         }
 
         Touch(path);
+        Touch(ShapePath(path));
         return path;
     }
 
@@ -116,10 +117,9 @@ public sealed class BumperService : IDisposable
     /// <param name="program">The item.</param>
     /// <param name="width">The channel's output width.</param>
     /// <param name="logoPath">The channel's logo, or <c>null</c>.</param>
-    /// <param name="then">What airs after the item, for the card's Then line, or <c>null</c>.</param>
     /// <param name="delay">How long to wait before rendering (see <see cref="PrepareDelayFor"/>).</param>
     /// <param name="cancellationToken">Cancelled when the stream closes; a render still waiting out its delay is dropped.</param>
-    internal void Prepare(Channel channel, ProgramEntry program, int width, string? logoPath, BumperThen? then = null, TimeSpan delay = default, CancellationToken cancellationToken = default)
+    public void Prepare(Channel channel, ProgramEntry program, int width, string? logoPath, TimeSpan delay = default, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(program);
@@ -129,7 +129,7 @@ public sealed class BumperService : IDisposable
         }
 
         MaybePrune();
-        var path = ItemPath(channel, program, width, logoPath, then);
+        var path = ItemPath(channel, program, width, logoPath);
         if (File.Exists(path))
         {
             return;
@@ -137,10 +137,57 @@ public sealed class BumperService : IDisposable
 
         // A render that completes synchronously runs its own cleanup before GetOrAdd stores it; drop it here then,
         // or it would sit in the map and block every later render of this bumper.
-        var task = _inFlight.GetOrAdd(path, _ => RenderAndForgetAsync(channel, program, width, logoPath, then, path, delay, cancellationToken));
+        var task = _inFlight.GetOrAdd(path, _ => RenderAndForgetAsync(channel, program, width, logoPath, path, delay, cancellationToken));
         if (task.IsCompleted)
         {
             _inFlight.TryRemove(new KeyValuePair<string, Task>(path, task));
+        }
+    }
+
+    /// <summary>
+    /// Renders the channel's Up Next layer (the backdrop, animated lines, scrim, "Up Next" header, logo and chord,
+    /// everything that is the same on every card of the channel) for a frame width when it is missing, so a bumper
+    /// render at an item boundary only has to add the item's text, artwork and ratings. Driven by the "Generate
+    /// Buffer Cards" scheduled task; a bumper render still builds the layer itself if the task has not.
+    /// </summary>
+    /// <param name="channel">The channel.</param>
+    /// <param name="width">The channel's output width.</param>
+    /// <param name="logoPath">The channel's logo, or <c>null</c>.</param>
+    /// <returns>Whether the layer is in the cache.</returns>
+    public async Task<bool> PrepareLayerAsync(Channel channel, int width, string? logoPath)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        var ffmpeg = _encoder.EncoderPath;
+        var fonts = Fonts();
+        if (string.IsNullOrEmpty(ffmpeg) || fonts is null)
+        {
+            return false;
+        }
+
+        var (w, h) = IntroService.FrameSize(width);
+        return await EnsureLayerAsync(ffmpeg, channel, w, h, logoPath, fonts).ConfigureAwait(false) is not null;
+    }
+
+    /// <summary>Deletes every channel's cached Up Next layer, so the next "Generate Buffer Cards" run renders them afresh.</summary>
+    public void ClearLayers()
+    {
+        try
+        {
+            if (!Directory.Exists(_root))
+            {
+                return;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(_root, "layer-*", SearchOption.AllDirectories))
+            {
+                TryDelete(file);
+            }
+
+            _logger.LogInformation("Live Channels: cleared the cached Up Next layers");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Live Channels: could not clear the cached Up Next layers");
         }
     }
 
@@ -249,9 +296,8 @@ public sealed class BumperService : IDisposable
     /// <param name="width">The channel's output width.</param>
     /// <param name="logoPath">The channel's logo, or <c>null</c>.</param>
     /// <param name="output">Where the bumper is written.</param>
-    /// <param name="then">What airs after the item, for the card's Then line, or <c>null</c>.</param>
     /// <returns>Whether the bumper was rendered.</returns>
-    internal async Task<bool> RenderAsync(Channel channel, ProgramEntry program, int width, string? logoPath, string output, BumperThen? then = null)
+    internal async Task<bool> RenderAsync(Channel channel, ProgramEntry program, int width, string? logoPath, string output)
     {
         var ffmpeg = _encoder.EncoderPath;
         var fonts = Fonts();
@@ -278,13 +324,16 @@ public sealed class BumperService : IDisposable
         {
             var art = ChooseArt(program);
             var artInput = art is null ? null : IntroService.LogoInput(art, BumperArguments.Seconds);
-            var shape = artInput is null ? ArtShape.None : await ProbeShapeAsync(art!).ConfigureAwait(false);
+            // The frame takes the image's shape, read from its header (no process, nothing decoded).
+            var shape = artInput is null ? ArtShape.None : ImageSize.Read(art!) is { } size ? BumperLayout.ShapeFor(size.Width, size.Height) : ArtShape.None;
             if (shape == ArtShape.None)
             {
                 artInput = null;
             }
 
-            var layout = BumperLayout.Compute(BumperContent.For(program), shape, w, h, fonts, then);
+            // The card keeps room for its Then line, which is drawn on as it plays (see ThenOverlay); the shape it was
+            // laid out with is kept beside it, so that line lands where the card left room for it.
+            var layout = BumperLayout.Compute(BumperContent.For(program), shape, w, h, fonts, BumperThen.Reserved);
             if (BumperArguments.BuildShapeArguments(layout, shapes) is { } shapeArgs)
             {
                 var (exit, _, error) = await IntroService.RunProcessAsync(ffmpeg, shapeArgs, captureOutput: false, RenderPassTimeout, background: true).ConfigureAwait(false);
@@ -311,6 +360,7 @@ public sealed class BumperService : IDisposable
                 return false;
             }
 
+            await File.WriteAllTextAsync(ShapePath(output), shape.ToString()).ConfigureAwait(false);
             File.Move(temp, output, overwrite: true);
             _logger.LogInformation("Live Channels: rendered the Up Next bumper for \"{Title}\" on {Name} in {Seconds:F1}s", program.Title, channel.Name, stopwatch.Elapsed.TotalSeconds);
             return true;
@@ -334,7 +384,7 @@ public sealed class BumperService : IDisposable
     internal static TimeSpan PrepareDelayFor(TimeSpan remaining)
         => remaining <= TimeSpan.Zero ? TimeSpan.Zero : TimeSpan.FromTicks(Math.Min(PrepareDelay.Ticks, remaining.Ticks / 4));
 
-    private async Task RenderAndForgetAsync(Channel channel, ProgramEntry program, int width, string? logoPath, BumperThen? then, string path, TimeSpan delay, CancellationToken cancellationToken)
+    private async Task RenderAndForgetAsync(Channel channel, ProgramEntry program, int width, string? logoPath, string path, TimeSpan delay, CancellationToken cancellationToken)
     {
         try
         {
@@ -357,7 +407,7 @@ public sealed class BumperService : IDisposable
             {
                 if (!File.Exists(path))
                 {
-                    await RenderAsync(channel, program, width, logoPath, path, then).ConfigureAwait(false);
+                    await RenderAsync(channel, program, width, logoPath, path).ConfigureAwait(false);
                 }
             }
             finally
@@ -435,24 +485,6 @@ public sealed class BumperService : IDisposable
         }
     }
 
-    // The artwork frame's shape, from the image's own size (probed, since only the file knows it).
-    private async Task<ArtShape> ProbeShapeAsync(string image)
-    {
-        var ffprobe = _encoder.ProbePath;
-        if (string.IsNullOrEmpty(ffprobe))
-        {
-            return ArtShape.None;
-        }
-
-        var (_, stdout, _) = await IntroService.RunProcessAsync(ffprobe, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", image], captureOutput: true, ProbeTimeout).ConfigureAwait(false);
-        var parts = stdout.Trim().Split('\n')[0].Split('x');
-        return parts.Length == 2
-            && int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var w)
-            && int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var h)
-                ? BumperLayout.ShapeFor(w, h)
-                : ArtShape.None;
-    }
-
     private BumperFonts? Fonts()
     {
         lock (_fontsLock)
@@ -474,8 +506,9 @@ public sealed class BumperService : IDisposable
     }
 
     // Where an item's bumper lives: per channel, named by item and by everything the card shows, so a change to
-    // the item's metadata or artwork, the channel's logo, the frame size, or what airs after it renders a new one.
-    private string ItemPath(Channel channel, ProgramEntry program, int width, string? logoPath, BumperThen? then)
+    // the item's metadata or artwork, the channel's logo, or the frame size renders a new one. What airs after it
+    // is not part of the card (it is drawn on at playback), so a reshuffled schedule renders nothing new.
+    private string ItemPath(Channel channel, ProgramEntry program, int width, string? logoPath)
     {
         var content = BumperContent.For(program);
         var art = ChooseArt(program);
@@ -491,11 +524,64 @@ public sealed class BumperService : IDisposable
             content.Details ?? string.Empty,
             content.Score ?? string.Empty,
             content.Rating ?? string.Empty,
-            IntroService.LogoStamp(art),
-            then?.Text ?? string.Empty,
-            then?.Time ?? string.Empty));
+            IntroService.LogoStamp(art)));
         return Path.Combine(ChannelDir(channel), program.ItemId.ToString("N", CultureInfo.InvariantCulture) + "-" + key + ".mp4");
     }
+
+    /// <summary>
+    /// The card's Then line, drawn onto a rendered card while it plays: what airs after its item and when, placed
+    /// where the card left room for it. Drawn at playback rather than rendered in, so it always matches the
+    /// schedule as it stands, even one rebuilt after the card was rendered. <c>null</c> (the line's room stays
+    /// empty) when the card's sidecar or the fonts cannot be read.
+    /// </summary>
+    /// <param name="card">The rendered card.</param>
+    /// <param name="program">The card's item.</param>
+    /// <param name="width">The channel's output width.</param>
+    /// <param name="then">What airs after the item.</param>
+    /// <returns>The filters to draw it, or <c>null</c>.</returns>
+    internal string? ThenOverlay(string card, ProgramEntry program, int width, BumperThen then)
+    {
+        ArgumentNullException.ThrowIfNull(program);
+        ArgumentNullException.ThrowIfNull(then);
+        var fonts = Fonts();
+        if (fonts is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (!Enum.TryParse<ArtShape>(File.ReadAllText(ShapePath(card)).Trim(), out var shape))
+            {
+                return null;
+            }
+
+            var (w, h) = IntroService.FrameSize(width);
+            var layout = BumperLayout.Compute(BumperContent.For(program), shape, w, h, fonts, then);
+            var texts = Path.Combine(_root, "then");
+            Directory.CreateDirectory(texts);
+            return BumperArguments.ThenOverlay(layout, text =>
+            {
+                // Named by content, so a line already written is reused, and the prune clears old ones.
+                var file = Path.Combine(texts, Hash(text) + ".txt");
+                if (!File.Exists(file))
+                {
+                    File.WriteAllText(file, text);
+                }
+
+                Touch(file);
+                return file;
+            });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogDebug(ex, "Live Channels: could not draw the Then line on {Card}", card);
+            return null;
+        }
+    }
+
+    // The sidecar a card keeps its artwork shape in.
+    private static string ShapePath(string card) => card + ".shape";
 
     private string ChannelDir(Channel channel) => Path.Combine(_root, "ch" + channel.Number.ToString(CultureInfo.InvariantCulture));
 

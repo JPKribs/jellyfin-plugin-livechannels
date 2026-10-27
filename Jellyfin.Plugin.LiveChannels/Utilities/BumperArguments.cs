@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 using Jellyfin.Plugin.LiveChannels.Services;
 
@@ -20,7 +21,7 @@ internal static class BumperArguments
     public const int Fps = StreamArguments.OutputFps;
 
     /// <summary>The bumper's length in seconds.</summary>
-    public const double Seconds = 15.0;
+    public const double Seconds = 10.0;
 
     // The scene fades up from black at the start and down to black at the end, into the item.
     private const double SceneFadeIn = 0.5;
@@ -106,40 +107,55 @@ internal static class BumperArguments
     /// <param name="scale">The scale from the 720-line design to this frame.</param>
     /// <param name="output">The video to write.</param>
     /// <returns>The arguments.</returns>
-    public static List<string> BuildLayerArguments(LineStrips strips, string scrim, IReadOnlyList<string>? logoInput, string captionFont, string captionFile, double scale, string output)
+    public static List<string> BuildLayerArguments(LineStrips strips, string scrim, (List<string> Args, bool Still)? logoInput, string captionFont, string captionFile, double scale, string output)
     {
         ArgumentNullException.ThrowIfNull(strips);
         var fps = Fps.ToString(CultureInfo.InvariantCulture);
         var seconds = F(Seconds);
         int P(double design) => (int)Math.Round(design * scale);
 
+        // Every still image (the strips, the mask, the scrim, a still logo) is read once and held for the clip.
         var args = new List<string> { "-hide_banner", "-loglevel", "error", "-y" };
+        var held = new StringBuilder();
         var next = 0;
-        args.AddRange(["-f", "lavfi", "-i", "gradients=s=" + strips.Width.ToString(CultureInfo.InvariantCulture) + "x" + strips.Height.ToString(CultureInfo.InvariantCulture) + ":" + IntroService.BackdropColorSpec + ":r=" + fps + ":d=" + seconds]);
-        var backdrop = next++;
-        var stripInputs = new int[strips.Strips.Length];
-        for (var i = 0; i < strips.Strips.Length; i++)
+        string Still(string path, string label)
         {
-            args.AddRange(["-loop", "1", "-framerate", fps, "-t", seconds, "-i", strips.Strips[i]]);
-            stripInputs[i] = next++;
+            args.AddRange(["-i", path]);
+            held.Append(IntroService.Held(next++, label, Seconds));
+            return "[" + label + "]";
         }
 
-        args.AddRange(["-loop", "1", "-framerate", fps, "-t", seconds, "-i", strips.Mask]);
-        var mask = next++;
-        args.AddRange(["-loop", "1", "-framerate", fps, "-t", seconds, "-i", scrim]);
-        var scrimInput = next++;
-        var logo = -1;
-        if (logoInput is not null)
+        args.AddRange(["-f", "lavfi", "-i", IntroService.BackdropSource(strips.Width, strips.Height, Seconds)]);
+        var backdrop = "[" + I(next++) + ":v]";
+        var stripInputs = new string[strips.Strips.Length];
+        for (var i = 0; i < strips.Strips.Length; i++)
         {
-            args.AddRange(logoInput);
-            logo = next++;
+            stripInputs[i] = Still(strips.Strips[i], "strip" + I(i));
+        }
+
+        var mask = Still(strips.Mask, "mask");
+        var scrimPad = Still(scrim, "scrimimg");
+        string? logoPad = null;
+        if (logoInput is { } logoRead)
+        {
+            if (logoRead.Still)
+            {
+                args.AddRange(logoRead.Args);
+                held.Append(IntroService.Held(next++, "logoimg", Seconds));
+                logoPad = "[logoimg]";
+            }
+            else
+            {
+                args.AddRange(logoRead.Args);
+                logoPad = "[" + I(next++) + ":v]";
+            }
         }
 
         args.AddRange(["-f", "lavfi", "-i", ChordSource(Seconds)]);
         var audio = next++;
 
-        var filter = new StringBuilder(IntroService.LinesFilter(strips, backdrop, stripInputs, mask, lineOpacity: 0.6, output: "lines"));
-        filter.Append('[').Append(I(scrimInput)).Append(":v]format=rgba[scrim];[lines][scrim]overlay=format=auto[bg];");
+        var filter = new StringBuilder(held.ToString()).Append(IntroService.LinesFilter(strips, backdrop, stripInputs, mask, lineOpacity: 0.6, output: "lines"));
+        filter.Append(scrimPad).Append("format=rgba[scrim];[lines][scrim]overlay=format=auto[bg];");
 
         // The header sits at the design's 36-pixel margin: the logo framed 56 pixels tall (a 12-pixel gutter
         // inside a thin border), then "Up Next" 22 pixels to its right, centred on the frame.
@@ -147,13 +163,13 @@ internal static class BumperArguments
         var captionSize = P(30);
         var caption = "drawtext=fontfile=" + StreamArguments.QuoteFilterValue(captionFont) + ":textfile=" + StreamArguments.QuoteFilterValue(captionFile)
             + ":expansion=none:fontcolor=0xFFFFFF@0.9:fontsize=" + I(captionSize);
-        if (logo >= 0)
+        if (logoPad is not null)
         {
             var logoHeight = P(56);
             var gutter = P(12);
             var border = Math.Max(1, P(2));
             var budget = strips.Width / 2;
-            filter.Append('[').Append(I(logo)).Append(":v]format=rgba,scale=-2:").Append(I(logoHeight)).Append(":flags=lanczos,")
+            filter.Append(logoPad).Append("format=rgba,scale=-2:").Append(I(logoHeight)).Append(":flags=lanczos,")
                 .Append("pad=iw+").Append(I(2 * gutter)).Append(":ih+").Append(I(2 * gutter)).Append(':').Append(I(gutter)).Append(':').Append(I(gutter)).Append(":color=#00000000,")
                 .Append("pad=iw+").Append(I(2 * border)).Append(":ih+").Append(I(2 * border)).Append(':').Append(I(border)).Append(':').Append(I(border)).Append(":color=white@0.35,")
                 .Append("pad=iw+").Append(I(budget)).Append(":ih:0:0:color=#00000000,")
@@ -236,27 +252,29 @@ internal static class BumperArguments
     /// </summary>
     /// <param name="layout">The item's layout.</param>
     /// <param name="layer">The channel's layer video.</param>
-    /// <param name="artInput">The input arguments that read the artwork image (see <see cref="IntroService.LogoInput"/>), or <c>null</c> when <paramref name="layout"/> has none.</param>
+    /// <param name="artInput">The input that reads the artwork image and whether it is still (see <see cref="IntroService.LogoInput"/>), or <c>null</c> when <paramref name="layout"/> has none.</param>
     /// <param name="files">The item's shape images (from <see cref="BuildShapeArguments"/>).</param>
     /// <param name="textFile">Writes a piece of text to a file and returns its path (drawtext reads text from files, so no title ever needs escaping).</param>
     /// <param name="output">The video to write.</param>
     /// <returns>The arguments.</returns>
-    public static List<string> BuildItemArguments(BumperLayout layout, string layer, IReadOnlyList<string>? artInput, BumperShapeFiles files, Func<string, string> textFile, string output)
+    public static List<string> BuildItemArguments(BumperLayout layout, string layer, (List<string> Args, bool Still)? artInput, BumperShapeFiles files, Func<string, string> textFile, string output)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(files);
         ArgumentNullException.ThrowIfNull(textFile);
         var fps = Fps.ToString(CultureInfo.InvariantCulture);
         var seconds = F(Seconds);
+        // The shape images and a still artwork are read once and held for the clip.
         var args = new List<string> { "-hide_banner", "-loglevel", "error", "-y", "-i", layer };
         var next = 1;
-        int Image(string path)
+        var filter = new StringBuilder();
+        string Image(string path, string label)
         {
-            args.AddRange(["-loop", "1", "-framerate", fps, "-t", seconds, "-i", path]);
-            return next++;
+            args.AddRange(["-i", path]);
+            filter.Append(IntroService.Held(next++, label, Seconds));
+            return "[" + label + "]";
         }
 
-        var filter = new StringBuilder();
         filter.Append("[0:v]").Append(FromBt709).Append("[s0];");
         var stage = 0;
         string Stage() => "[s" + I(stage) + "]";
@@ -286,41 +304,48 @@ internal static class BumperArguments
         if (layout.Art is { } art && artInput is not null)
         {
             var (_, shadowAt) = Shadow(art, layout);
-            var shadow = Image(files.Shadow);
-            filter.Append('[').Append(I(shadow)).Append(":v]format=rgba,").Append(FadeIn(ArtAt, ArtFade)).Append("[shadow];");
+            var shadow = Image(files.Shadow, "shadowimg");
+            filter.Append(shadow).Append("format=rgba,").Append(FadeIn(ArtAt, ArtFade)).Append("[shadow];");
             Overlay("[shadow]", I(shadowAt.X), I(shadowAt.Y));
 
             // Cover-fit at twice the frame's size, push in from there, then scale down: the push moves by whole
             // pixels of the doubled image, which is half a pixel on screen, so the slow zoom does not step.
-            args.AddRange(artInput);
-            var picture = next++;
-            var mask = Image(files.ArtMask);
+            // The artwork is read with its image format named (never one ffmpeg picks from the file's content); a still
+            // one is held like the shapes, an animated one plays.
+            args.AddRange(artInput.Value.Args);
+            string picture;
+            if (artInput.Value.Still)
+            {
+                filter.Append(IntroService.Held(next++, "artimg", Seconds));
+                picture = "[artimg]";
+            }
+            else
+            {
+                picture = "[" + I(next++) + ":v]";
+            }
+
+            var mask = Image(files.ArtMask, "artmaskimg");
             var w2 = I(2 * art.Width);
             var h2 = I(2 * art.Height);
-            filter.Append('[').Append(I(picture)).Append(":v]scale=").Append(w2).Append(':').Append(h2).Append(":force_original_aspect_ratio=increase:flags=lanczos,crop=").Append(w2).Append(':').Append(h2)
+            filter.Append(picture).Append("scale=").Append(w2).Append(':').Append(h2).Append(":force_original_aspect_ratio=increase:flags=lanczos,crop=").Append(w2).Append(':').Append(h2)
                 .Append(",scale=w='").Append(w2).Append("*(1+").Append(F(ArtPush)).Append("*clip((t-").Append(F(ArtAt)).Append(")/").Append(F(Seconds - ArtAt)).Append(",0,1))':h=-2:eval=frame:flags=bicubic")
                 .Append(",crop=").Append(w2).Append(':').Append(h2).Append(",scale=").Append(I(art.Width)).Append(':').Append(I(art.Height)).Append(":flags=area,format=rgba[art0];")
-                .Append('[').Append(I(mask)).Append(":v]format=gray[artmask];[art0][artmask]alphamerge,").Append(FadeIn(ArtAt, ArtFade)).Append("[art];");
+                .Append(mask).Append("format=gray[artmask];[art0][artmask]alphamerge,").Append(FadeIn(ArtAt, ArtFade)).Append("[art];");
             Overlay("[art]", I(art.X), I(art.Y));
         }
 
         var pillDone = false;
-        foreach (var row in layout.Rows)
+        // The Then line is not rendered into the card: it names what airs after the card's item, which a schedule
+        // rebuild can change, so it is drawn on when the card plays (see ThenOverlay). The card keeps its room.
+        foreach (var row in layout.Rows.Where(r => r.Slides))
         {
-            // The info column's rows slide in from the left; the Then line only fades in where it rests.
-            var slide = row.Slides ? SlideX(layout.Slide, row.Delay) : string.Empty;
+            var slide = SlideX(layout.Slide, row.Delay);
             var alpha = "'clip((t-" + F(row.Delay) + ")/" + F(HeaderFade) + ",0,1)'";
-            if (row.Divider is { } divider)
-            {
-                filter.Append("color=c=white@0.14:s=").Append(I(divider.Width)).Append('x').Append(I(divider.Height)).Append(":r=").Append(fps).Append(":d=").Append(seconds)
-                    .Append(",format=rgba,").Append(FadeIn(row.Delay, HeaderFade)).Append("[divider];");
-                Overlay("[divider]", I(divider.X), I(divider.Y));
-            }
 
             if (row.Pill is { } pill && !pillDone)
             {
-                var pillInput = Image(files.Pill);
-                filter.Append('[').Append(I(pillInput)).Append(":v]format=rgba,").Append(FadeIn(row.Delay, HeaderFade)).Append("[pill];");
+                var pillInput = Image(files.Pill, "pillimg");
+                filter.Append(pillInput).Append("format=rgba,").Append(FadeIn(row.Delay, HeaderFade)).Append("[pill];");
                 Overlay("[pill]", "'" + I(pill.X) + slide + "'", I(pill.Y));
                 pillDone = true;
             }
@@ -333,10 +358,10 @@ internal static class BumperArguments
 
         if (layout.Badge is { } badge && layout.BadgeText is { } badgeText)
         {
-            var fill = Image(files.BadgeFill);
-            var ring = Image(files.BadgeRing);
-            filter.Append('[').Append(I(fill)).Append(":v]format=rgba,").Append(FadeIn(HeaderAt, HeaderFade)).Append("[badgefill];");
-            filter.Append('[').Append(I(ring)).Append(":v]format=rgba,").Append(FadeIn(HeaderAt, HeaderFade)).Append("[badgering];");
+            var fill = Image(files.BadgeFill, "badgefillimg");
+            var ring = Image(files.BadgeRing, "badgeringimg");
+            filter.Append(fill).Append("format=rgba,").Append(FadeIn(HeaderAt, HeaderFade)).Append("[badgefill];");
+            filter.Append(ring).Append("format=rgba,").Append(FadeIn(HeaderAt, HeaderFade)).Append("[badgering];");
             Overlay("[badgefill]", I(badge.X), I(badge.Y));
             Overlay("[badgering]", I(badge.X), I(badge.Y));
             Draw(badgeText, I(badgeText.X), "'clip((t-" + F(HeaderAt) + ")/" + F(HeaderFade) + ",0,1)'");
@@ -345,7 +370,7 @@ internal static class BumperArguments
         // The countdown counts the whole seconds left to the item, never showing zero; the number is drawn
         // right-aligned so the label beside it stays put.
         Draw(layout.CountdownLabel, I(layout.CountdownLabel.X), null);
-        Draw(layout.CountdownNumber with { Text = "%{eif:max(1,ceil(" + F(Seconds) + "-t)):d}" }, I(layout.CountdownNumber.X) + "-tw", null, expand: true);
+        Draw(CountdownNumber(layout.CountdownNumber, Seconds), I(layout.CountdownNumber.X) + "-tw", null, expand: true);
 
         // The progress bar slides across the bottom edge over the whole clip.
         filter.Append("color=c=0x").Append(BumperLayout.Accent).Append(":s=").Append(I(layout.Width)).Append('x').Append(I(layout.BarHeight)).Append(":r=").Append(fps).Append(":d=").Append(seconds).Append(",format=rgba[bar];");
@@ -356,6 +381,46 @@ internal static class BumperArguments
         args.AddRange(["-filter_complex", filter.ToString(), "-map", "[v]", "-map", "0:a", "-t", seconds]);
         args.AddRange(Intermediate(output, copyAudio: true));
         return args;
+    }
+
+    /// <summary>
+    /// The card's Then line as filters drawn onto the card while it plays (ending in a comma, for
+    /// <see cref="StreamArguments.Build"/>), from a layout computed with what airs after the card's item now: the
+    /// hairline, when the line sits in the info column, appears as the line fades in, and the line fades in after
+    /// the rest of the card and out with it.
+    /// </summary>
+    /// <param name="layout">The card's layout, with the Then line.</param>
+    /// <param name="textFile">Writes a piece of text to a file and returns its path.</param>
+    /// <returns>The filters, or <c>null</c> when the layout has no Then line.</returns>
+    public static string? ThenOverlay(BumperLayout layout, Func<string, string> textFile)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        ArgumentNullException.ThrowIfNull(textFile);
+        var row = layout.Rows.FirstOrDefault(r => !r.Slides);
+        if (row is null)
+        {
+            return null;
+        }
+
+        var filter = new StringBuilder();
+        var fadeIn = "clip((t-" + F(row.Delay) + ")/" + F(HeaderFade) + ",0,1)";
+        var fadeOut = "clip((" + F(Seconds) + "-t)/" + F(SceneFadeOut) + ",0,1)";
+        if (row.Divider is { } divider)
+        {
+            filter.Append("drawbox=x=").Append(I(divider.X)).Append(":y=").Append(I(divider.Y)).Append(":w=").Append(I(divider.Width)).Append(":h=").Append(I(divider.Height))
+                .Append(":color=white@0.14:t=fill:enable='between(t,").Append(F(row.Delay)).Append(',').Append(F(Seconds - SceneFadeOut)).Append(")',");
+        }
+
+        foreach (var text in row.Texts)
+        {
+            filter.Append("drawtext=fontfile=").Append(StreamArguments.QuoteFilterValue(text.FontPath))
+                .Append(":textfile=").Append(StreamArguments.QuoteFilterValue(textFile(text.Text)))
+                .Append(":expansion=none:fontsize=").Append(I(text.Size)).Append(":fontcolor=").Append(text.Color)
+                .Append(":x=").Append(I(text.X)).Append(":y=").Append(I(text.Baseline)).Append("-ascent")
+                .Append(":alpha='").Append(fadeIn).Append('*').Append(fadeOut).Append("',");
+        }
+
+        return filter.ToString();
     }
 
     /// <summary>
@@ -382,6 +447,13 @@ internal static class BumperArguments
         args.AddRange(Intermediate(output));
         return args;
     }
+
+    /// <summary>The countdown number as a drawtext expansion: the whole seconds left of a clip, never zero.</summary>
+    /// <param name="number">The number's placement.</param>
+    /// <param name="seconds">The clip's length.</param>
+    /// <returns>The number with its text replaced by the expansion.</returns>
+    internal static PlacedText CountdownNumber(PlacedText number, double seconds)
+        => number with { Text = "%{eif:max(1,ceil(" + F(seconds) + "-t)):d}" };
 
     // Converts the RGB composite to the channel's tagged bt709 limited-range 4:2:0 picture.
     private static string ToBt709 => "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p";

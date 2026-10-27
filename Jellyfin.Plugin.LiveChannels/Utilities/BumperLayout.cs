@@ -320,18 +320,7 @@ internal sealed class BumperLayout
             badgeText = new PlacedText(rating, BumperFace.DisplayExtraBold, font.Path, size, badge.Value.X + border + P(12), Baseline(badge.Value.Y, badgeH, font.Metrics, size), "0xFFFFFF@1");
         }
 
-        // The countdown, bottom right: the number right-aligned, the label to its left at a fixed distance, so the
-        // label never shifts as the number shrinks from two digits to one.
-        var countSize = P(18);
-        var countHeight = countSize * 1.4;
-        var countTop = height - P(34) - countHeight;
-        var numberFont = fonts.For(BumperFace.DisplayBold, "15");
-        var labelFont = fonts.For(BumperFace.Medium, "Starting in");
-        var numberRoom = numberFont.Metrics.Measure("15", countSize);
-        var labelWidth = labelFont.Metrics.Measure("Starting in", countSize);
-        var space = labelFont.Metrics.Measure(" ", countSize);
-        var number = new PlacedText("15", BumperFace.DisplayBold, numberFont.Path, countSize, right, Baseline(countTop, countHeight, numberFont.Metrics, countSize), "0xFFFFFF@1");
-        var label = new PlacedText("Starting in", BumperFace.Medium, labelFont.Path, countSize, (int)Math.Round(right - numberRoom - (2 * space) - labelWidth), Baseline(countTop, countHeight, labelFont.Metrics, countSize), "0xFFFFFF@0.7");
+        var (label, number) = Countdown(width, height, fonts);
 
         return new BumperLayout
         {
@@ -351,6 +340,34 @@ internal sealed class BumperLayout
             CountdownNumber = number,
             BarHeight = Math.Max(2, P(4)),
         };
+    }
+
+    /// <summary>
+    /// The countdown, bottom right ("Starting in 7"), shared by the Up Next card and the tune-in card: the number
+    /// right-aligned, the label to its left at a fixed distance, so the label never shifts as the number shrinks
+    /// from two digits to one.
+    /// </summary>
+    /// <param name="width">The frame width.</param>
+    /// <param name="height">The frame height.</param>
+    /// <param name="fonts">The fonts.</param>
+    /// <returns>The label, and the number's style and baseline with its X the right edge it aligns to.</returns>
+    internal static (PlacedText Label, PlacedText Number) Countdown(int width, int height, BumperFonts fonts)
+    {
+        ArgumentNullException.ThrowIfNull(fonts);
+        var s = height / 720.0;
+        int P(double design) => (int)Math.Round(design * s);
+        var right = width - P(72);
+        var countSize = P(18);
+        var countHeight = countSize * 1.4;
+        var countTop = height - P(34) - countHeight;
+        var numberFont = fonts.For(BumperFace.DisplayBold, "10");
+        var labelFont = fonts.For(BumperFace.Medium, "Starting in");
+        var numberRoom = numberFont.Metrics.Measure("10", countSize);
+        var labelWidth = labelFont.Metrics.Measure("Starting in", countSize);
+        var space = labelFont.Metrics.Measure(" ", countSize);
+        var number = new PlacedText("10", BumperFace.DisplayBold, numberFont.Path, countSize, right, Baseline(countTop, countHeight, numberFont.Metrics, countSize), "0xFFFFFF@1");
+        var label = new PlacedText("Starting in", BumperFace.Medium, labelFont.Path, countSize, (int)Math.Round(right - numberRoom - (2 * space) - labelWidth), Baseline(countTop, countHeight, labelFont.Metrics, countSize), "0xFFFFFF@0.7");
+        return (label, number);
     }
 
     // The Then line: THEN in the accent colour, the item's name, and its start time. Under the artwork the time sits

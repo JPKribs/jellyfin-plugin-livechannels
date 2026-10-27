@@ -1,8 +1,17 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
+using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Services;
 using Jellyfin.Plugin.LiveChannels.Utilities;
+using MediaBrowser.Common.Configuration;
+using MediaBrowser.Controller.Configuration;
+using MediaBrowser.Controller.MediaEncoding;
+using MediaBrowser.Model.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 using Xunit;
 
 namespace Jellyfin.Plugin.LiveChannels.Tests;
@@ -12,6 +21,86 @@ namespace Jellyfin.Plugin.LiveChannels.Tests;
 /// </summary>
 public class IntroCardTests
 {
+    [Fact]
+    public void TheCardCountsDownToTheChannel_LikeAnUpNextCard()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "lc-card-" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            var fonts = BumperFonts.Extract(Path.Combine(dir, "fonts"), null)!;
+            var (label, number) = BumperLayout.Countdown(1920, 1080, fonts);
+            var strips = new LineStrips(Path.Combine(dir, "card"), 1920, 1080);
+            var args = IntroService.BuildSourceArguments(null, strips, "/tmp/out.mp4", null, (label, number, "/tmp/label.txt", "/tmp/number.txt"));
+            var filter = args[args.IndexOf("-filter_complex") + 1];
+
+            Assert.Contains("textfile='/tmp/label.txt'", filter, StringComparison.Ordinal);
+            Assert.Contains("textfile='/tmp/number.txt':expansion=normal", filter, StringComparison.Ordinal);
+            Assert.Contains(":x=" + number.X + "-tw:", filter, StringComparison.Ordinal);
+            Assert.Equal("%{eif:max(1,ceil(10-t)):d}", BumperArguments.CountdownNumber(number, IntroService.IntroSeconds).Text);
+            Assert.Equal(1920 - 108, number.X);
+
+            // Without one, the card is as before.
+            Assert.DoesNotContain("number.txt", string.Join(" ", IntroService.BuildSourceArguments(null, strips, "/tmp/out.mp4", null)), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ARenderedCard_RunsTenSeconds_AndClearingTheCacheRemovesIt()
+    {
+        if (FfmpegHarness.Instance is not { } ffmpeg)
+        {
+            return;
+        }
+
+        var dir = Path.Combine(Path.GetTempPath(), "lc-card-" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            var encoder = Substitute.For<IMediaEncoder>();
+            encoder.EncoderPath.Returns(ffmpeg.Ffmpeg);
+            var paths = Substitute.For<IApplicationPaths>();
+            paths.CachePath.Returns(Path.Combine(dir, "cache"));
+            paths.DataPath.Returns(Path.Combine(dir, "data"));
+            var config = Substitute.For<IServerConfigurationManager>();
+            config.GetConfiguration(Arg.Any<string>()).Returns(new EncodingOptions());
+            using var intros = new IntroService(encoder, new EncoderResolver(config, NullLogger<EncoderResolver>.Instance), paths, NullLogger<IntroService>.Instance);
+            var channel = new Channel { Id = "c1", Name = "Card", Number = 12 };
+
+            await intros.EnsureAsync(channel, null);
+            var card = intros.TryGetCached(channel);
+            Assert.NotNull(card);
+            Assert.InRange(card!.EndSeconds, 9.9, 10.2);
+
+            // The countdown sits in the top right and changes as it counts down.
+            var early = ffmpeg.Frame(card.Path, Path.Combine(dir, "early.png"), 1.0);
+            var late = ffmpeg.Frame(card.Path, Path.Combine(dir, "late.png"), 8.5);
+            if (Environment.GetEnvironmentVariable("LIVECHANNELS_BUMPER_PREVIEW") is { Length: > 0 } folder)
+            {
+                Directory.CreateDirectory(folder);
+                foreach (var at in new[] { 1.0, 5.0, 8.5 })
+                {
+                    ffmpeg.Frame(card.Path, Path.Combine(folder, "tunein-" + at.ToString("0.0", CultureInfo.InvariantCulture) + ".png"), at);
+                }
+            }
+
+            Assert.True(File.Exists(early) && File.Exists(late));
+
+            intros.ClearCache();
+            Assert.Null(intros.TryGetCached(channel));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void TheCardIsTenSeconds_TheSameAsAnUpNextCard()
+        => Assert.Equal(BumperService.BumperLength.TotalSeconds, IntroService.IntroSeconds);
+
     [Fact]
     public void CardCoversJellyfinsFirstThreeDeliverySegments()
     {
@@ -60,7 +149,8 @@ public class IntroCardTests
         // A logo that does not exist is treated as no logo, and the output is always last.
         Assert.DoesNotContain("-loop 1 -framerate 30 -i /nonexistent", joined, StringComparison.Ordinal);
         Assert.Equal("/tmp/out.mp4", withLogo[^1]);
-        Assert.Contains("gradients=s=3840x2160:", joined, StringComparison.Ordinal);
+        Assert.Contains("gradients=s=960x540:", joined, StringComparison.Ordinal);
+        Assert.Contains("scale=3840:2160:flags=bicubic", joined, StringComparison.Ordinal);
         Assert.Contains("crop=w=3840:h=2160:x='mod(", joined, StringComparison.Ordinal);
         Assert.Contains("[bg2]null[bg3]", joined, StringComparison.Ordinal);
 

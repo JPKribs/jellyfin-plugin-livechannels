@@ -23,6 +23,8 @@ namespace Jellyfin.Plugin.LiveChannels.Models;
 /// brightness gain" setting). Intel's fixed-function HDR→SDR LUT renders dark; Jellyfin recommends 16.</param>
 /// <param name="VppContrast">Contrast gain applied after the VAAPI tone map (Jellyfin's VPP tone-mapping
 /// contrast setting); 1 is neutral.</param>
+/// <param name="Preset">The software encoder's <c>-preset</c> (Jellyfin's "Encoding preset", <c>veryfast</c> when it is left on Auto).</param>
+/// <param name="Deinterlacer">The software deinterlace filter (Jellyfin's "Deinterlacing method": <c>yadif</c> or <c>bwdif</c>).</param>
 public sealed record VideoEncoderProfile(
     string Name,
     string DisplayName,
@@ -36,4 +38,6 @@ public sealed record VideoEncoderProfile(
     string DecodeDownload = "",
     string? GpuDevice = null,
     double VppBrightness = 0,
-    double VppContrast = 1);
+    double VppContrast = 1,
+    string Preset = "veryfast",
+    string Deinterlacer = "yadif");

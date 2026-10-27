@@ -189,7 +189,6 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         // sweeps them too (see GetChannelsAsync), but Jellyfin does not refresh the guide at start-up on its own,
         // so without this a fresh install or update would open every channel without a card until the daily
         // refresh or a save. Runs in the background, one channel at a time.
-        _ = WarmCardsAtStartupAsync();
     }
 
     /// <inheritdoc />
@@ -198,51 +197,49 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <inheritdoc />
     public string HomePageUrl => string.Empty;
 
-    // Resolves each enabled channel's logo and sweeps the cards once the server has settled. Never throws: a card
-    // is a nicety and start-up must not be disturbed by one failing to render.
-    private async Task WarmCardsAtStartupAsync()
+    /// <summary>
+    /// Generates the buffer cards of every enabled channel in the configuration (the Popular channel included) that
+    /// has no current one in the cache (missing, or made stale by a new logo or changed output settings): the tune-in
+    /// card in full, and for a channel with Up Next cards on, the layer those cards share, so a bumper render at an
+    /// item boundary only adds the item's text, artwork and ratings. Driven by the "Generate Buffer Cards" scheduled
+    /// task, from the configuration rather than the guide, so cards and guide are built independently of each
+    /// other. Renders run one at a time, at idle priority.
+    /// </summary>
+    public async Task GenerateBufferCardsAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
-        try
+        ArgumentNullException.ThrowIfNull(progress);
+        var channels = _channels.GetEnabledChannels();
+        _logger.LogInformation("Live Channels: generating buffer cards for {Count} channel(s)", channels.Count);
+        for (var i = 0; i < channels.Count; i++)
         {
-            await Task.Delay(TimeSpan.FromSeconds(20)).ConfigureAwait(false);
-            var channels = new List<(Channel Channel, string? Logo)>();
-            foreach (var channel in _channels.GetEnabledChannels())
+            cancellationToken.ThrowIfCancellationRequested();
+            var channel = channels[i];
+            try
             {
-                channels.Add((channel, await EnsureLogoAsync(channel, CancellationToken.None).ConfigureAwait(false)));
+                var logo = await EnsureLogoAsync(channel, cancellationToken).ConfigureAwait(false);
+                await _intros.EnsureAsync(channel, logo).ConfigureAwait(false);
+                await _streams.PrepareBumperLayerAsync(channel, logo, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Live Channels: could not generate the buffer cards for {Name}", channel.Name);
             }
 
-            await SweepCardsAsync(channels, "start-up").ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Live Channels: the start-up tune-in card sweep failed");
+            progress.Report(100.0 * (i + 1) / channels.Count);
         }
     }
 
-    // Makes sure every listed channel has a tune-in card for its logo and the current output profile, rendering
-    // the missing or stale ones one at a time (a settings change that alters the output profile, or a new logo,
-    // makes a card stale). Cards already current cost nothing. Never throws.
-    private async Task SweepCardsAsync(List<(Channel Channel, string? Logo)> channels, string trigger)
+    /// <summary>Deletes every cached tune-in card and Up Next layer, so the next "Generate Buffer Cards" run renders them all afresh.</summary>
+    public void ClearBufferCards()
     {
-        _logger.LogInformation("Live Channels: checking tune-in cards for {Count} channel(s) at {Trigger}", channels.Count, trigger);
-        try
-        {
-            foreach (var (channel, logo) in channels)
-            {
-                await _intros.EnsureAsync(channel, logo).ConfigureAwait(false);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Live Channels: the {Trigger} tune-in card sweep failed", trigger);
-        }
+        _intros.ClearCache();
+        _streams.ClearBumperLayers();
     }
 
     /// <inheritdoc />
     public async Task<IEnumerable<ChannelInfo>> GetChannelsAsync(CancellationToken cancellationToken)
     {
         var result = new List<ChannelInfo>();
-        var cards = new List<(Channel Channel, string? Logo)>();
         foreach (var channel in _channels.GetEnabledChannels())
         {
             var info = new ChannelInfo
@@ -260,16 +257,10 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 info.HasImage = true;
             }
 
-            cards.Add((channel, logo));
             result.Add(info);
         }
 
         _logger.LogInformation("Live Channels: provided {Count} channel(s) to Live TV", result.Count);
-
-        // Every guide refresh (the daily one, and the one a save from the configuration page triggers) generates
-        // the tune-in cards: missing ones, and ones made stale by a new logo or changed output settings. Renders
-        // run in the background, one at a time, so the refresh is not held up and live sessions are not starved.
-        _ = SweepCardsAsync(cards, "guide refresh");
         return result;
     }
 
@@ -535,11 +526,12 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
 
         // Resolve the channel logo (uploaded or generated, cached on disk, usually already written at guide time)
-        // so the Sessions tab can show it without re-resolving on every poll, then make sure the channel's card is
-        // current. Both run in the background: the logo's first-ever generation is an ffmpeg run, and the viewer
-        // must not wait on it (nor on a hung one) before the playlist is handed over. Not tied to the request
-        // token: a client cancelling the tune must not leave the session with no logo for its whole life.
-        _ = AttachLogoAndCardAsync(session, channel);
+        // so the Sessions tab and the session's Up Next cards can use it without re-resolving. In the background:
+        // the logo's first-ever generation is an ffmpeg run, and the viewer must not wait on it (nor on a hung one)
+        // before the playlist is handed over. Not tied to the request token: a client cancelling the tune must not
+        // leave the session with no logo for its whole life. Tune-in cards are not rendered here; the "Generate
+        // Buffer Cards" task does that, so a tune-in never starts a render.
+        _ = AttachLogoAsync(session, channel);
 
         // Jellyfin probes the opened stream immediately, so wait until the segmenter has written the playlist and
         // its first segment, and if the producer dies with nothing, drop this consumer (tearing the session
@@ -576,20 +568,17 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         return (session, liveStreamId);
     }
 
-    // Resolves a session's logo (a no-op when it was joined and already has one) and kicks the channel's tune-in
-    // card: one missing or stale (first tune-in after a config change, before the next guide refresh got to it) is
-    // rendered for the next tune-in. Never throws; both are niceties.
-    private async Task AttachLogoAndCardAsync(LiveSession session, Channel channel)
+    // Resolves a session's logo (a no-op when it was joined and already has one). Never throws: a logo is a nicety.
+    private async Task AttachLogoAsync(LiveSession session, Channel channel)
     {
         try
         {
             session.LogoPath ??= await EnsureLogoAsync(channel, CancellationToken.None).ConfigureAwait(false);
             session.Stats.LogoPath = session.LogoPath;
-            _ = _intros.EnsureAsync(channel, session.LogoPath);
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Live Channels: could not prepare the logo or card for {Name}", channel.Name);
+            _logger.LogDebug(ex, "Live Channels: could not prepare the logo for {Name}", channel.Name);
         }
     }
 

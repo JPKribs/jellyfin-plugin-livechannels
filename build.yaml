@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "12.4.1.1"
+version: "12.4.1.2"
 targetAbi: "12.4.0.0"
 framework: "net10.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -16,9 +16,11 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   features:
-  - The Up Next card shows what airs after it, and when, on a smaller Then line
-  - The Up Next card shows a movie's poster, and a landscape image for episodes, music videos and home videos
-  - Hardware decoding follows Jellyfin's own settings (the codecs ticked for hardware decoding, and the 10-bit and range extension HEVC switches), so a file the GPU cannot decode goes straight to software instead of failing first
+  - Tune-in and Up Next cards are 10 seconds, and the tune-in card counts down to the channel
+  - New Generate Buffer Cards scheduled task (Live TV) renders every channel's tune-in card and the shared part of its Up Next cards ahead of time, at start-up and after Reset schedule, so tuning in never waits on a render
+  - Reset schedule rebuilds the guide and every channel's buffer cards from scratch
+  - Encoding follows more of Jellyfin's settings (encoder preset, thread count, deinterlacing method and Intel low-power encoding)
+  - The next item is prepared ahead of each boundary, so slow or sleeping storage no longer stalls the transition
   fixed:
-  - Tune-in cards no longer fail to render on Intel QSV
-  - Rendering tune-in and Up Next cards no longer makes playing channels stutter
+  - Up Next cards render about twice as fast, and no longer need ffprobe
+  - An Up Next card whose following item is unknown leaves its Then line empty instead of showing black

@@ -46,6 +46,11 @@ public class EncoderResolver
     /// <param name="allowHardware">Whether hardware encoding may be used (subtitle burn-in forces software).</param>
     /// <returns>The resolved encoder profile.</returns>
     public VideoEncoderProfile ResolveVideo(VideoCodec codec, bool allowHardware)
+        => ResolveVideoCore(codec, allowHardware) with { Deinterlacer = DeinterlacerOf(ReadOptions()) };
+
+    // ResolveVideo before Jellyfin's deinterlacing method is applied (it is used wherever frames are deinterlaced in
+    // software, the hardware profiles' software-decode fallback included).
+    private VideoEncoderProfile ResolveVideoCore(VideoCodec codec, bool allowHardware)
     {
         var options = ReadOptions();
         // The plugin's own "disable hardware acceleration" switch forces software end to end (encode and
@@ -59,7 +64,7 @@ public class EncoderResolver
         // hardware branches can read it directly (a null-conditional there would be a provably constant check).
         if (options is null)
         {
-            return Software(codec);
+            return Software(codec, null);
         }
 
         switch (accel)
@@ -99,18 +104,18 @@ public class EncoderResolver
                 // a software retry. With a render node the GPU-resident pipeline decodes on VAAPI, so this profile's
                 // separate decode does the same; without one (Windows) it decodes in software from the start.
                 return new VideoEncoderProfile(family + "_qsv", label + " (QSV)", true,
-                    qsvInit, Empty, "format=nv12,hwupload=extra_hw_frames=64", false,
+                    qsvInit, LowPower(options, codec), "format=nv12,hwupload=extra_hw_frames=64", false,
                     DecodeHwaccel: qsvDevice is null ? null : "vaapi", DecodeOutputFormat: qsvDevice is null ? null : "vaapi", DecodeDownload: qsvDevice is null ? string.Empty : "hwdownload,format=nv12|p010le,",
                     GpuDevice: qsvDevice, VppBrightness: VppBrightness(options), VppContrast: VppContrast(options));
             case "vaapi":
                 var device = FirstDevice(options.VaapiDevice, options.QsvDevice);
                 return new VideoEncoderProfile(family + "_vaapi", label + " (VAAPI)", true,
-                    new[] { "-init_hw_device", "vaapi=va:" + device, "-filter_hw_device", "va" }, Empty,
+                    new[] { "-init_hw_device", "vaapi=va:" + device, "-filter_hw_device", "va" }, LowPower(options, codec),
                     "format=nv12,hwupload", false,
                     DecodeHwaccel: "vaapi", DecodeOutputFormat: "vaapi", DecodeDownload: "hwdownload,format=nv12|p010le,",
                     GpuDevice: device, VppBrightness: VppBrightness(options), VppContrast: VppContrast(options));
             default:
-                return Software(codec);
+                return Software(codec, options);
         }
     }
 
@@ -301,8 +306,33 @@ public class EncoderResolver
             _ => ("aac", 192)
         };
 
-    private static VideoEncoderProfile Software(VideoCodec codec)
-        => codec == VideoCodec.Hevc
-            ? new VideoEncoderProfile("libx265", "HEVC (software)", false, Array.Empty<string>(), Array.Empty<string>(), "format=yuv420p", true)
-            : new VideoEncoderProfile("libx264", "H.264 (software)", false, Array.Empty<string>(), Array.Empty<string>(), "format=yuv420p", true);
+    // The software encoder, tuned by Jellyfin's own transcoding settings: its encoding preset (Auto keeps veryfast,
+    // which holds realtime on modest CPUs), its thread count (Auto leaves it to ffmpeg) and its deinterlacer.
+    private static VideoEncoderProfile Software(VideoCodec codec, EncodingOptions? options)
+    {
+        var threads = options is { EncodingThreadCount: > 0 } ? new[] { "-threads", options.EncodingThreadCount.ToString(CultureInfo.InvariantCulture) } : Array.Empty<string>();
+        var profile = codec == VideoCodec.Hevc
+            ? new VideoEncoderProfile("libx265", "HEVC (software)", false, Array.Empty<string>(), threads, "format=yuv420p", true)
+            : new VideoEncoderProfile("libx264", "H.264 (software)", false, Array.Empty<string>(), threads, "format=yuv420p", true);
+        return profile with { Preset = PresetOf(options), Deinterlacer = DeinterlacerOf(options) };
+    }
+
+    /// <summary>The software encoder preset Jellyfin's settings name: its "Encoding preset", or <c>veryfast</c> on Auto.</summary>
+    /// <param name="options">Jellyfin's encoding options, or <c>null</c>.</param>
+    /// <returns>The preset.</returns>
+    internal static string PresetOf(EncodingOptions? options)
+        => options is null || options.EncoderPreset == EncoderPreset.auto ? "veryfast" : options.EncoderPreset.ToString();
+
+    /// <summary>The software deinterlacer Jellyfin's settings name: its "Deinterlacing method".</summary>
+    /// <param name="options">Jellyfin's encoding options, or <c>null</c>.</param>
+    /// <returns>The filter name (<c>yadif</c> or <c>bwdif</c>).</returns>
+    internal static string DeinterlacerOf(EncodingOptions? options)
+        => options?.DeinterlaceMethod == DeinterlaceMethod.bwdif ? "bwdif" : "yadif";
+
+    // Intel's low-power (fixed-function) encoder, when Jellyfin's "Enable Intel Low-Power" switch for the codec is on:
+    // it encodes on dedicated hardware, leaving the GPU's shader units free for decoding and tone mapping.
+    private static string[] LowPower(EncodingOptions options, VideoCodec codec)
+        => (codec == VideoCodec.Hevc ? options.EnableIntelLowPowerHevcHwEncoder : options.EnableIntelLowPowerH264HwEncoder)
+            ? new[] { "-low_power", "1" }
+            : Array.Empty<string>();
 }

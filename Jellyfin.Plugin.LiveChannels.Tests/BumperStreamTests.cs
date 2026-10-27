@@ -49,20 +49,20 @@ public sealed class BumperStreamTests : IClassFixture<MediaFixtures>
             var item = Item("Bumper join item");
             var channel = new Channel { Id = Guid.NewGuid().ToString("N"), Name = "Bumper join", Number = ChannelNumber };
 
-            // The item's slot began five seconds ago, so ten seconds of its bumper are left.
-            var loop = new ProgramLoop(new[] { item }, DateTime.UtcNow.AddSeconds(-5), BumperService.BumperLength.Ticks);
+            // The item's slot began four seconds ago, so six seconds of its bumper are left.
+            var loop = new ProgramLoop(new[] { item }, DateTime.UtcNow.AddSeconds(-4), BumperService.BumperLength.Ticks);
             var log = _media.Output("join.log");
             var output = _media.Output("join.ts");
-            await Stream(ff, channel, loop, log, output, "Bumper join item\n$ ffmpeg", after: "black before", untilSeconds: 13).ConfigureAwait(false);
+            await Stream(ff, channel, loop, log, output, "Bumper join item\n$ ffmpeg", after: "black before", untilSeconds: 10).ConfigureAwait(false);
 
             var text = File.ReadAllText(log);
             Assert.Contains("Tune-in during an Up Next bumper", text, StringComparison.Ordinal);
             Assert.Contains("Joined partway into Up Next bumper", text, StringComparison.Ordinal);
             Assert.True(text.IndexOf("black before", StringComparison.Ordinal) < text.IndexOf("Bumper join item\n$ ffmpeg", StringComparison.Ordinal));
 
-            // Black for the rest of the bumper, then the item from its first frame, about ten seconds in.
-            Assert.True(ff.MeanLuma(ff.Frame(output, _media.Output("join-black.png"), 4)) < 20);
-            Assert.True(ff.MeanLuma(ff.Frame(output, _media.Output("join-item.png"), 11.5)) > 40);
+            // Black for the rest of the bumper, then the item from its first frame, about six seconds in.
+            Assert.True(ff.MeanLuma(ff.Frame(output, _media.Output("join-black.png"), 2.5)) < 20);
+            Assert.True(ff.MeanLuma(ff.Frame(output, _media.Output("join-item.png"), 8.5)) > 40);
             AssertMonotonic(ff, output);
         });
     }
@@ -81,32 +81,19 @@ public sealed class BumperStreamTests : IClassFixture<MediaFixtures>
             var second = Item("Second item");
             var channel = new Channel { Id = Guid.NewGuid().ToString("N"), Name = "Bumper slot", Number = ChannelNumber + 1 };
 
-            // The second item's bumper is already rendered, as it would be by the time the first item ends; its
-            // Then line names the first item again, whose next slot starts after both slots. The stream joins one
-            // second into the first item itself (its slot began sixteen seconds earlier, bumper included), with the
-            // clock taken once the render is done; the Then time is only to the minute, so a render that straddles
-            // a minute boundary is redone.
+            // The second item's bumper is already rendered, as it would be by the time the first item ends.
             var service = NewService(ff, out var bumpers);
             var width = StreamSessionService.OutputFor(null).Width;
-            var slot = BumperService.BumperLength + TimeSpan.FromTicks(first.DurationTicks);
-            ProgramLoop loop = null!;
-            for (var attempt = 0; attempt < 3; attempt++)
+            bumpers.Prepare(channel, second, width, null);
+            for (var i = 0; i < 1200 && bumpers.TryGetCached(channel, second, width, null) is null; i++)
             {
-                var estimate = DateTime.UtcNow.AddSeconds(-16);
-                var expected = StreamSessionService.ThenFor((first, estimate + slot + slot));
-                bumpers.Prepare(channel, second, width, null, expected);
-                for (var i = 0; i < 1200 && bumpers.TryGetCached(channel, second, width, null, expected) is null; i++)
-                {
-                    await Task.Delay(100).ConfigureAwait(false);
-                }
-
-                var anchor = DateTime.UtcNow.AddSeconds(-16);
-                loop = new ProgramLoop(new[] { first, second }, anchor, BumperService.BumperLength.Ticks);
-                if (bumpers.TryGetCached(channel, second, width, null, StreamSessionService.ThenFor((first, anchor + slot + slot))) is not null)
-                {
-                    break;
-                }
+                await Task.Delay(100).ConfigureAwait(false);
             }
+
+            Assert.NotNull(bumpers.TryGetCached(channel, second, width, null));
+
+            // One second into the first item itself (its slot began eleven seconds ago, bumper included).
+            var loop = new ProgramLoop(new[] { first, second }, DateTime.UtcNow.AddSeconds(-11), BumperService.BumperLength.Ticks);
             var log = _media.Output("slot.log");
             var output = _media.Output("slot.ts");
             await Stream(ff, channel, loop, log, output, "Second item\n$ ffmpeg", after: "Up Next: Second item", untilSeconds: 14, service).ConfigureAwait(false);
@@ -118,8 +105,8 @@ public sealed class BumperStreamTests : IClassFixture<MediaFixtures>
             var secondAt = text.IndexOf("Second item\n$ ffmpeg", StringComparison.Ordinal);
             Assert.True(firstAt >= 0 && firstAt < bumperAt && bumperAt < secondAt);
 
-            // About five seconds of the first item, then the bumper (lit, not black), then the second item.
-            Assert.True(ff.MeanLuma(ff.Frame(output, _media.Output("slot-bumper.png"), 12)) > 15);
+            // About five seconds of the first item, then the ten-second bumper (lit, not black), then the second item.
+            Assert.True(ff.MeanLuma(ff.Frame(output, _media.Output("slot-bumper.png"), 9)) > 15);
             AssertMonotonic(ff, output);
         });
     }

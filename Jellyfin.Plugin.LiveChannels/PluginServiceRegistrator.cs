@@ -34,6 +34,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<LiveChannelsTvService>();
         serviceCollection.AddSingleton<ILiveTvService>(sp => sp.GetRequiredService<LiveChannelsTvService>());
         serviceCollection.AddSingleton<IScheduledTask, StreamCleanupTask>();
+        serviceCollection.AddSingleton<IScheduledTask, GenerateBufferCardsTask>();
 
         // Keeps the Refresh Guide percentage from going backwards now that there is a second Live TV service.
         serviceCollection.AddHostedService<GuideProgressGuard>();

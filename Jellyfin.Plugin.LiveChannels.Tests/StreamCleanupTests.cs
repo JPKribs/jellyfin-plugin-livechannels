@@ -14,6 +14,7 @@ using MediaBrowser.Model.Activity;
 using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.Globalization;
 using MediaBrowser.Model.IO;
+using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
@@ -25,6 +26,7 @@ namespace Jellyfin.Plugin.LiveChannels.Tests;
 /// directories: never a live session's, never the schedule cache or the rebuildable assets, never anything else in
 /// a user-chosen root.
 /// </summary>
+[Collection(ScheduleCacheCollection.Name)]
 public sealed class StreamCleanupTests : IDisposable
 {
     private readonly string _cache = Path.Combine(Path.GetTempPath(), "lc-cleanup-" + Guid.NewGuid().ToString("N"));
@@ -89,6 +91,57 @@ public sealed class StreamCleanupTests : IDisposable
         Directory.CreateDirectory(dir);
         File.WriteAllText(Path.Combine(dir, "seg0.ts"), "ts");
         return dir;
+    }
+
+    [Fact]
+    public void ResetSchedule_ClearsSchedulesAndCards_ThenStartsTheGuideAndCardTasks()
+    {
+        using var service = Create();
+        var schedule = Directory.CreateDirectory(Path.Combine(_cache, "data", "livechannels", ChannelService.ScheduleDirName)).FullName;
+        File.WriteAllText(Path.Combine(schedule, "4.json"), "{}");
+        var cards = Directory.CreateDirectory(Path.Combine(StreamRoot, "assets", "intros")).FullName;
+        File.WriteAllText(Path.Combine(cards, "4.ts"), "ts");
+        File.WriteAllText(Path.Combine(cards, "4.json"), "{}");
+
+        var refresh = Worker("RefreshGuide");
+        var generate = Worker(GenerateBufferCardsTask.TaskKey);
+        var other = Worker("SomethingElse");
+        var tasks = Substitute.For<ITaskManager>();
+        tasks.ScheduledTasks.Returns(new[] { refresh, generate, other });
+        var paths = Substitute.For<IApplicationPaths>();
+        paths.CachePath.Returns(_cache);
+        paths.DataPath.Returns(Path.Combine(_cache, "data"));
+        var controller = new Jellyfin.Plugin.LiveChannels.Api.LiveChannelsController(null!, service, null!, tasks, paths);
+
+        Assert.IsType<Microsoft.AspNetCore.Mvc.NoContentResult>(controller.ResetSchedule());
+
+        // The schedule is set aside for the rebuild to splice onto; the cards are gone.
+        Assert.False(File.Exists(Path.Combine(schedule, "4.json")));
+        Assert.True(File.Exists(Path.Combine(schedule, "4.superseded")));
+        Assert.Empty(Directory.GetFiles(cards));
+        tasks.Received(1).QueueScheduledTask(refresh.ScheduledTask, Arg.Any<TaskOptions>());
+        tasks.Received(1).QueueScheduledTask(generate.ScheduledTask, Arg.Any<TaskOptions>());
+        tasks.DidNotReceive().QueueScheduledTask(other.ScheduledTask, Arg.Any<TaskOptions>());
+    }
+
+    [Fact]
+    public void GenerateBufferCards_IsALiveTvTaskThatRunsAtStartUp()
+    {
+        using var service = Create();
+        var task = new GenerateBufferCardsTask(service);
+        Assert.Equal("Generate Buffer Cards", task.Name);
+        Assert.Equal("Live TV", task.Category);
+        Assert.Equal(GenerateBufferCardsTask.TaskKey, task.Key);
+        Assert.Contains(task.GetDefaultTriggers(), t => t.Type == TaskTriggerInfoType.StartupTrigger);
+    }
+
+    private static IScheduledTaskWorker Worker(string key)
+    {
+        var task = Substitute.For<IScheduledTask>();
+        task.Key.Returns(key);
+        var worker = Substitute.For<IScheduledTaskWorker>();
+        worker.ScheduledTask.Returns(task);
+        return worker;
     }
 
     private LiveChannelsTvService Create()

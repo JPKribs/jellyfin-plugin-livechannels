@@ -296,7 +296,7 @@ public sealed class BumperCardTests : IDisposable
     {
         var layout = BumperLayout.Compute(BumperContent.For(Episode(series: "It's: a \"title\", [with] 100% risk")), ArtShape.Landscape, 1280, 720, _fonts);
         var written = new System.Collections.Generic.List<string>();
-        var args = BumperArguments.BuildItemArguments(layout, "/tmp/layer.mp4", ["-f", "image2", "-loop", "1", "-i", "/tmp/art.jpg"], BumperShapeFiles.Under("/tmp/r"), text =>
+        var args = BumperArguments.BuildItemArguments(layout, "/tmp/layer.mp4", (["-f", "image2", "-i", "/tmp/art.jpg"], true), BumperShapeFiles.Under("/tmp/r"), text =>
         {
             written.Add(text);
             return "/tmp/t" + written.Count + ".txt";
@@ -306,10 +306,10 @@ public sealed class BumperCardTests : IDisposable
         // Titles go to drawtext as files, never inline, so no title needs escaping.
         Assert.DoesNotContain("100%", filter, StringComparison.Ordinal);
         Assert.Contains(written, w => w.Contains("100% risk", StringComparison.Ordinal));
-        Assert.Contains("%{eif:max(1,ceil(15-t)):d}", written);
+        Assert.Contains("%{eif:max(1,ceil(10-t)):d}", written);
         Assert.Contains(":expansion=normal", filter, StringComparison.Ordinal);
         Assert.Contains("alphamerge", filter, StringComparison.Ordinal);
-        Assert.Contains("fade=t=out:st=14.4:d=0.6", filter, StringComparison.Ordinal);
+        Assert.Contains("fade=t=out:st=9.4:d=0.6", filter, StringComparison.Ordinal);
         Assert.Equal("/tmp/out.mp4", args[^1]);
         Assert.Contains("0:a", args);
     }

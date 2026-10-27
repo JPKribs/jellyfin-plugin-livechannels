@@ -211,17 +211,13 @@ export default function (view) {
         });
     }
 
-    // Forces Jellyfin to rebuild the Live TV guide for every channel from the current saved configuration.
-    // The schedule is a pure projection of the channels, so a guide rebuild is a full reset: a stale schedule
-    // (for example one still showing a now-excluded genre) is recreated fresh.
+    // Resets every channel from scratch: the plugin clears the cached schedules and tune-in cards, then starts
+    // Jellyfin's Refresh Guide task and its own Generate Buffer Cards task, so a stale schedule (for example one
+    // still showing a now-excluded genre) and stale cards are both recreated fresh.
     function resetSchedule() {
-        Shared.setStatus('resetStatus', 'Rebuilding schedule and guide…', false);
-        ApiClient.getScheduledTasks().then(function (tasks) {
-            var task = (tasks || []).filter(function (t) { return t.Key === 'RefreshGuide'; })[0];
-            if (!task) { throw new Error('Refresh Guide task not found'); }
-            return ApiClient.startScheduledTask(task.Id);
-        }).then(function () {
-            Shared.setStatus('resetStatus', 'Done. The guide is rebuilding in the background.', false);
+        Shared.setStatus('resetStatus', 'Rebuilding schedules, guide and tune-in cards…', false);
+        ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('livechannels/schedule/reset') }).then(function () {
+            Shared.setStatus('resetStatus', 'Done. The guide and tune-in cards are rebuilding in the background.', false);
         }).catch(function () {
             Shared.setStatus('resetStatus', 'Could not start the rebuild. Try again in a moment.', true);
         });
