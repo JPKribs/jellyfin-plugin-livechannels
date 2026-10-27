@@ -191,6 +191,7 @@ public sealed class StreamFollowTests : IDisposable
     {
         var paths = Substitute.For<IApplicationPaths>();
         paths.CachePath.Returns(_dir);
+        paths.DataPath.Returns(Path.Combine(_dir, "data"));
         return new ChannelService(
             Substitute.For<ILibraryManager>(),
             Substitute.For<IMediaSourceManager>(),

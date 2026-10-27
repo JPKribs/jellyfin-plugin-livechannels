@@ -150,6 +150,7 @@ export default function (view) {
         el('popularEpisodesPerBlock').value = pc.EpisodesPerBlock || 4;
         el('popularEpisodeOrder').value = pc.ShuffleEpisodes ? 'random' : 'air';
         el('popularKeepMultiPart').checked = pc.KeepMultiPartTogether !== false;
+        el('popularShowBumpers').checked = pc.ShowBumpers !== false;
         el('popularIncludeEpisodes').checked = pc.IncludeEpisodes !== false;
         el('popularIncludeMovies').checked = pc.IncludeMovies !== false;
         el('popularIncludeSpecials').checked = !!pc.IncludeSpecials;
@@ -187,6 +188,7 @@ export default function (view) {
             pc.EpisodesPerBlock = Math.max(1, parseInt(el('popularEpisodesPerBlock').value, 10) || 1);
             pc.ShuffleEpisodes = el('popularEpisodeOrder').value === 'random';
             pc.KeepMultiPartTogether = el('popularKeepMultiPart').checked;
+            pc.ShowBumpers = el('popularShowBumpers').checked;
             pc.IncludeEpisodes = el('popularIncludeEpisodes').checked;
             pc.IncludeMovies = el('popularIncludeMovies').checked;
             pc.IncludeSpecials = el('popularIncludeSpecials').checked;

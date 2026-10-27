@@ -22,7 +22,8 @@ namespace Jellyfin.Plugin.LiveChannels.Tests;
 
 /// <summary>
 /// The "Clean Channels Directory" task and the start-up sweep remove only the plugin's own leftover session
-/// directories: never a live session's, never the schedule cache, never anything else in a user-chosen root.
+/// directories: never a live session's, never the schedule cache or the rebuildable assets, never anything else in
+/// a user-chosen root.
 /// </summary>
 public sealed class StreamCleanupTests : IDisposable
 {
@@ -42,16 +43,26 @@ public sealed class StreamCleanupTests : IDisposable
     public void StartUp_RemovesLeftoverSessions_AndNothingElse()
     {
         var orphan = SessionDir();
-        var schedule = Directory.CreateDirectory(Path.Combine(StreamRoot, ChannelService.ScheduleDirName)).FullName;
+        var schedule = Directory.CreateDirectory(Path.Combine(_cache, "data", "livechannels", ChannelService.ScheduleDirName)).FullName;
+        var assets = Directory.CreateDirectory(Path.Combine(StreamRoot, "assets", "bumpers")).FullName;
         var foreign = Directory.CreateDirectory(Path.Combine(StreamRoot, "my-files")).FullName;
         var lookalike = Directory.CreateDirectory(Path.Combine(StreamRoot, "lc_NOT-A-SESSION")).FullName;
+        var legacyAssets = Directory.CreateDirectory(Path.Combine(_cache, "livechannels-assets", "intros")).FullName;
+        var legacyLogo = Path.Combine(Directory.CreateDirectory(Path.Combine(_cache, "livechannels-assets", "logos")).FullName, "1-abc.png");
+        File.WriteAllText(legacyLogo, "png");
 
         using var service = Create();
 
         Assert.False(Directory.Exists(orphan));
         Assert.True(Directory.Exists(schedule));
+        Assert.True(Directory.Exists(assets));
         Assert.True(Directory.Exists(foreign));
         Assert.True(Directory.Exists(lookalike));
+
+        // The cards versions before 12.4.1 kept in Jellyfin's cache are cleared out (all of it is rebuilt on
+        // demand); a recent logo stays, since Jellyfin may still point a channel image at it.
+        Assert.False(Directory.Exists(legacyAssets));
+        Assert.True(File.Exists(legacyLogo));
     }
 
     [Fact]

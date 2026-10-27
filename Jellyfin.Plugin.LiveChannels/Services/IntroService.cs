@@ -46,7 +46,8 @@ public sealed class IntroService : IDisposable
     // Bump whenever the card's rendering or the sidecar's shape changes, so stale caches regenerate. 6: cards are
     // rendered in the channel's tagged bt709 limited-range format, which matters doubly for the card because it is
     // the first thing Jellyfin probes on tune-in and the colour description it reads there is kept for the stream.
-    private const int Revision = 6;
+    // 7: the card plays the soft chord instead of silence.
+    private const int Revision = 7;
 
     // The look: the logo sits top-leading inside a thin bordered frame with an inner gutter, over a slowly
     // drifting dark gradient on which two pairs of coloured lines draw in from the left and keep flowing.
@@ -88,7 +89,8 @@ public sealed class IntroService : IDisposable
 
     // How long to wait for a killed process to actually exit before giving up on it.
     internal static readonly TimeSpan ReapTimeout = TimeSpan.FromSeconds(5);
-    private const string BackdropColors = "c0=#0b1020:c1=#1a0f33:c2=#0a1c2e:c3=#12082a:nb_colors=4:speed=0.012";
+    /// <summary>The backdrop's gradient colours and drift, shared with the Up Next bumper.</summary>
+    internal const string BackdropColorSpec = "c0=#0b1020:c1=#1a0f33:c2=#0a1c2e:c3=#12082a:nb_colors=4:speed=0.012";
 
     private readonly IMediaEncoder _encoder;
     private readonly EncoderResolver _encoders;
@@ -105,7 +107,7 @@ public sealed class IntroService : IDisposable
     /// </summary>
     /// <param name="encoder">The media encoder, used to locate ffmpeg and ffprobe.</param>
     /// <param name="encoders">The encoder resolver, so the card is encoded with the channel's real encoder.</param>
-    /// <param name="appPaths">Application paths; cards live under the plugin's asset cache.</param>
+    /// <param name="appPaths">Application paths; cards live in the assets folder of the plugin's stream root.</param>
     /// <param name="logger">The logger.</param>
     public IntroService(IMediaEncoder encoder, EncoderResolver encoders, IApplicationPaths appPaths, ILogger<IntroService> logger)
     {
@@ -113,7 +115,7 @@ public sealed class IntroService : IDisposable
         _encoder = encoder;
         _encoders = encoders;
         _logger = logger;
-        _root = Path.Combine(appPaths.CachePath, "livechannels-assets", "intros");
+        _root = Path.Combine(PluginPaths.AssetsDir(appPaths), "intros");
     }
 
     /// <summary>
@@ -337,63 +339,30 @@ public sealed class IntroService : IDisposable
         }
     }
 
-    // Renders the card's visual as a plain 8-bit progressive video at the channel's frame size and rate with a
-    // silent stereo track. Any codec would do here since the next pass re-encodes it; x264 is universally
-    // present. Inputs: the logo (when present), the gradient backdrop, the four strips, the mask, and silence.
-    internal static List<string> BuildSourceArguments(string? logoPath, LineStrips strips, string output)
-        => BuildSourceArguments(logoPath, strips, output, FontLocator.Find());
-
-    internal static List<string> BuildSourceArguments(string? logoPath, LineStrips strips, string output, string? fontPath)
+    /// <summary>
+    /// The card's moving lines laid over its backdrop, as a filtergraph fragment ending in the pad
+    /// <paramref name="output"/>. Each strip scrolls at its line's speed; the two lines of a layer screen together;
+    /// the layer is then gated by the sliding reveal (layer B a beat behind layer A), coloured through its own
+    /// alpha, and laid over the backdrop. Shared with the Up Next bumper, which dims the lines so text reads over
+    /// them.
+    /// </summary>
+    /// <param name="strips">The rendered strips and mask.</param>
+    /// <param name="backdrop">The backdrop's input index.</param>
+    /// <param name="stripInputs">Each strip's input index.</param>
+    /// <param name="mask">The mask's input index.</param>
+    /// <param name="lineOpacity">How opaque the lines are (1 on the card).</param>
+    /// <param name="output">The pad the result is written to.</param>
+    /// <returns>The fragment, ending in a <c>;</c>.</returns>
+    internal static string LinesFilter(LineStrips strips, int backdrop, int[] stripInputs, int mask, double lineOpacity, string output)
     {
+        ArgumentNullException.ThrowIfNull(strips);
+        ArgumentNullException.ThrowIfNull(stripInputs);
         var width = strips.Width;
-        var height = strips.Height;
         var w = width.ToString(CultureInfo.InvariantCulture);
-        var h = height.ToString(CultureInfo.InvariantCulture);
+        var h = strips.Height.ToString(CultureInfo.InvariantCulture);
         var fps = StreamArguments.OutputFps.ToString(CultureInfo.InvariantCulture);
         var size = w + "x" + h;
-        var seconds = IntroSeconds.ToString(CultureInfo.InvariantCulture);
-        var fadeOutAt = (IntroSeconds - FadeOutSeconds).ToString(CultureInfo.InvariantCulture);
-
-        // Only a file whose own bytes say it is a PNG, JPEG, WebP or GIF is drawn: it is read with that image
-        // format named outright (below), never one ffmpeg would pick from the file's content.
-        var logoType = !string.IsNullOrEmpty(logoPath) && File.Exists(logoPath) ? ImageTypeOf(logoPath) : null;
-        var hasLogo = logoType is not null;
-        var args = new List<string> { "-hide_banner", "-loglevel", "error", "-y" };
-        var next = 0;
-        var logo = -1;
-        if (hasLogo)
-        {
-            // Read strictly as an image, never with a demuxer ffmpeg picks from the file's content. A GIF has its
-            // own demuxer, which takes the generic input loop (image2's -loop is not an option there, so GIF logos
-            // used to fail the whole card).
-            if (logoType == "image/gif")
-            {
-                args.AddRange(["-f", "gif", "-stream_loop", "-1", "-i", logoPath!]);
-            }
-            else
-            {
-                args.AddRange(["-f", "image2", "-loop", "1", "-framerate", fps, "-i", logoPath!]);
-            }
-            logo = next++;
-        }
-
-        args.AddRange(["-f", "lavfi", "-i", "gradients=s=" + size + ":" + BackdropColors + ":r=" + fps]);
-        var backdrop = next++;
-        var stripInputs = new int[Lines.Length];
-        for (var i = 0; i < Lines.Length; i++)
-        {
-            args.AddRange(["-loop", "1", "-framerate", fps, "-i", strips.Strips[i]]);
-            stripInputs[i] = next++;
-        }
-
-        args.AddRange(["-loop", "1", "-framerate", fps, "-i", strips.Mask]);
-        var mask = next++;
-        args.AddRange(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]);
-        var audio = next++;
-
-        // Each strip scrolls at its line's speed; the two lines of a layer screen together; the layer is then
-        // gated by the sliding reveal (layer B a beat behind layer A), coloured through its own alpha, and laid
-        // over the backdrop.
+        var dim = lineOpacity < 1 ? ",colorchannelmixer=aa=" + F(Math.Max(0, lineOpacity)) : string.Empty;
         var filter = string.Empty;
         for (var i = 0; i < Lines.Length; i++)
         {
@@ -410,8 +379,83 @@ public sealed class IntroService : IDisposable
             + "[s2][s3]blend=all_mode=screen[b0];[b0][mB]blend=all_mode=multiply[lbf];"
             + "color=c=" + LineColorA + ":s=" + size + ":r=" + fps + "[ca];"
             + "color=c=" + LineColorB + ":s=" + size + ":r=" + fps + "[cb];"
-            + "[ca][laf]alphamerge[lineA];[cb][lbf]alphamerge[lineB];"
-            + "[" + backdrop.ToString(CultureInfo.InvariantCulture) + ":v][lineA]overlay=format=auto[bg1];[bg1][lineB]overlay=format=auto[bg2];";
+            + "[ca][laf]alphamerge" + dim + "[lineA];[cb][lbf]alphamerge" + dim + "[lineB];"
+            + "[" + backdrop.ToString(CultureInfo.InvariantCulture) + ":v][lineA]overlay=format=auto[bg1];[bg1][lineB]overlay=format=auto[" + output + "];";
+        return filter;
+    }
+
+    /// <summary>
+    /// The input arguments that read a channel logo strictly as an image (never with a demuxer ffmpeg picks from
+    /// the file's content), looping it for <paramref name="seconds"/>, or <c>null</c> when the file is missing or
+    /// its own bytes do not say it is a PNG, JPEG, WebP or GIF. A GIF has its own demuxer, which takes the generic
+    /// input loop (image2's -loop is not an option there).
+    /// </summary>
+    /// <param name="logoPath">The logo file, or <c>null</c>.</param>
+    /// <param name="seconds">How long the input runs, or <c>null</c> to leave it to the output's length.</param>
+    /// <returns>The arguments, or <c>null</c>.</returns>
+    internal static List<string>? LogoInput(string? logoPath, double? seconds)
+    {
+        var type = !string.IsNullOrEmpty(logoPath) && File.Exists(logoPath) ? ImageTypeOf(logoPath) : null;
+        if (type is null)
+        {
+            return null;
+        }
+
+        var length = seconds is { } value ? new List<string> { "-t", F(value) } : new List<string>();
+        if (type == "image/gif")
+        {
+            return ["-f", "gif", "-stream_loop", "-1", .. length, "-i", logoPath!];
+        }
+
+        return ["-f", "image2", "-loop", "1", "-framerate", StreamArguments.OutputFps.ToString(CultureInfo.InvariantCulture), .. length, "-i", logoPath!];
+    }
+
+    // Renders the card's visual as a plain 8-bit progressive video at the channel's frame size and rate with the
+    // soft chord the Up Next bumper also plays. Any codec would do here since the next pass re-encodes it; x264 is
+    // universally present. Inputs: the logo (when present), the gradient backdrop, the four strips, the mask, and
+    // the chord.
+    internal static List<string> BuildSourceArguments(string? logoPath, LineStrips strips, string output)
+        => BuildSourceArguments(logoPath, strips, output, FontLocator.Find());
+
+    internal static List<string> BuildSourceArguments(string? logoPath, LineStrips strips, string output, string? fontPath)
+    {
+        var width = strips.Width;
+        var height = strips.Height;
+        var w = width.ToString(CultureInfo.InvariantCulture);
+        var h = height.ToString(CultureInfo.InvariantCulture);
+        var fps = StreamArguments.OutputFps.ToString(CultureInfo.InvariantCulture);
+        var size = w + "x" + h;
+        var seconds = IntroSeconds.ToString(CultureInfo.InvariantCulture);
+        var fadeOutAt = (IntroSeconds - FadeOutSeconds).ToString(CultureInfo.InvariantCulture);
+
+        // Only a file whose own bytes say it is a PNG, JPEG, WebP or GIF is drawn: it is read with that image
+        // format named outright (below), never one ffmpeg would pick from the file's content.
+        var logoInput = LogoInput(logoPath, null);
+        var hasLogo = logoInput is not null;
+        var args = new List<string> { "-hide_banner", "-loglevel", "error", "-y" };
+        var next = 0;
+        var logo = -1;
+        if (logoInput is not null)
+        {
+            args.AddRange(logoInput);
+            logo = next++;
+        }
+
+        args.AddRange(["-f", "lavfi", "-i", "gradients=s=" + size + ":" + BackdropColorSpec + ":r=" + fps]);
+        var backdrop = next++;
+        var stripInputs = new int[Lines.Length];
+        for (var i = 0; i < Lines.Length; i++)
+        {
+            args.AddRange(["-loop", "1", "-framerate", fps, "-i", strips.Strips[i]]);
+            stripInputs[i] = next++;
+        }
+
+        args.AddRange(["-loop", "1", "-framerate", fps, "-i", strips.Mask]);
+        var mask = next++;
+        args.AddRange(["-f", "lavfi", "-i", BumperArguments.ChordSource(IntroSeconds)]);
+        var audio = next++;
+
+        var filter = LinesFilter(strips, backdrop, stripInputs, mask, lineOpacity: 1.0, output: "bg2");
 
         if (hasLogo)
         {
@@ -450,7 +494,8 @@ public sealed class IntroService : IDisposable
         // A whisper of temporal noise keeps the channel encoder from banding the dark gradient into blotches.
         filter += "[bg3]noise=alls=3:allf=t+u,fade=t=out:st=" + fadeOutAt + ":d=" + FadeOutSeconds.ToString(CultureInfo.InvariantCulture) + ",format=yuv420p[v]";
 
-        args.AddRange(["-filter_complex", filter, "-map", "[v]", "-map", audio.ToString(CultureInfo.InvariantCulture) + ":a"]);
+        filter += ";[" + audio.ToString(CultureInfo.InvariantCulture) + ":a]" + BumperArguments.ChordFilter + "[a]";
+        args.AddRange(["-filter_complex", filter, "-map", "[v]", "-map", "[a]"]);
         args.AddRange([
             "-t", seconds,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", "-g", (StreamArguments.OutputFps * StreamArguments.SegmentSeconds).ToString(CultureInfo.InvariantCulture),
@@ -586,7 +631,10 @@ public sealed class IntroService : IDisposable
         return (key, width, bitrate, video, audioEncoder, audioBitrate);
     }
 
-    private static (int Width, int Height) FrameSize(int width)
+    /// <summary>The channel's frame size for an output width: 16:9, the height rounded up to even.</summary>
+    /// <param name="width">The output width.</param>
+    /// <returns>The frame size.</returns>
+    internal static (int Width, int Height) FrameSize(int width)
     {
         var height = (int)Math.Round(width * 9.0 / 16.0);
         if (height % 2 != 0)
@@ -597,7 +645,10 @@ public sealed class IntroService : IDisposable
         return (width, height);
     }
 
-    private static string LogoStamp(string? logoPath)
+    /// <summary>A stamp that changes whenever the logo file does (its path, write time and size), or <c>none</c>.</summary>
+    /// <param name="logoPath">The logo file, or <c>null</c>.</param>
+    /// <returns>The stamp.</returns>
+    internal static string LogoStamp(string? logoPath)
     {
         if (string.IsNullOrEmpty(logoPath))
         {

@@ -718,7 +718,8 @@ public sealed partial class RecordingService : IDisposable
         var item = programs.FirstOrDefault(p => p.ItemId == expected);
         if (item is not null)
         {
-            return new ScheduledProgram(item, start, start + TimeSpan.FromTicks(item.DurationTicks));
+            var lead = TimeSpan.FromTicks(ProgramLoop.LeadOf(programs));
+            return new ScheduledProgram(item, start, start + TimeSpan.FromTicks(item.DurationTicks) + lead) { Lead = lead };
         }
 
         fellBack = slot is not null;

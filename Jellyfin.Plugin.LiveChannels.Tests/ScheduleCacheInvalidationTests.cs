@@ -148,6 +148,7 @@ public sealed class ScheduleCacheInvalidationTests : IDisposable
     {
         var paths = Substitute.For<IApplicationPaths>();
         paths.CachePath.Returns(cache);
+        paths.DataPath.Returns(Path.Combine(cache, "data"));
         return paths;
     }
 

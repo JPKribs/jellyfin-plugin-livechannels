@@ -95,6 +95,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     private readonly IServerApplicationHost _appHost;
     private readonly string _streamRoot;
     private readonly string _logoRoot;
+    private readonly IApplicationPaths _appPaths;
 
     // One encoder per channel. A channel currently being encoded has exactly one session, tracked here by channel
     // id; every viewer of that channel is a CONSUMER of that single session (see LiveSession). Jellyfin opens a
@@ -145,10 +146,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         _sessionManager = sessionManager;
         _logger = logger;
 
-        // Logos live in the plugin's own cache directory, not the shared system temp: a fixed path in a
-        // world-writable temp dir can be pre-created or swapped by another local user, and temp cleaners
+        // Logos live in the assets folder of the plugin's stream root, not the shared system temp: a fixed path in
+        // a world-writable temp dir can be pre-created or swapped by another local user, and temp cleaners
         // delete it out from under the guide.
-        _logoRoot = Path.Combine(appPaths.CachePath, "livechannels-assets", "logos");
+        _logoRoot = Path.Combine(PluginPaths.AssetsDir(appPaths), "logos");
+        _appPaths = appPaths;
 
         // Opened streams are served as a direct stream provider: each one points at Jellyfin's own
         // /LiveTv/LiveStreamFiles endpoint (a continuous MPEG-TS backed by DirectLiveStream.GetStream), which
@@ -582,6 +584,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         try
         {
             session.LogoPath ??= await EnsureLogoAsync(channel, CancellationToken.None).ConfigureAwait(false);
+            session.Stats.LogoPath = session.LogoPath;
             _ = _intros.EnsureAsync(channel, session.LogoPath);
         }
         catch (Exception ex)
@@ -840,15 +843,51 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 }
             }
 
-            foreach (var list in Directory.EnumerateFiles(Path.GetTempPath(), "livechannels-*.txt"))
+            // Concat playlists of streams that were running when the process ended. Versions before 12.4.1 wrote
+            // them to the system temp folder, which is still swept for theirs.
+            var work = Path.Combine(_streamRoot, PluginPaths.WorkDirName);
+            foreach (var dir in new[] { work, Path.GetTempPath() })
             {
-                TryDeleteFile(list);
+                if (Directory.Exists(dir))
+                {
+                    foreach (var list in Directory.EnumerateFiles(dir, "livechannels-*.txt"))
+                    {
+                        TryDeleteFile(list);
+                    }
+                }
             }
 
-            // Older versions kept the generated logos and the icon font in the shared system temp; both now
-            // live under Jellyfin's cache, so clear the legacy copies out once.
+            // Older versions kept the generated logos and the icon font in the shared system temp, and then the
+            // cards, logos and font in a folder of Jellyfin's cache; all of it now lives in the stream root's
+            // assets folder and is rebuilt on demand, so clear the legacy copies out. The legacy logos stay until
+            // they are a month old: Jellyfin keeps pointing its channel images at them until the next guide
+            // refresh hands it the new ones.
             TryDeleteDirectory(Path.Combine(Path.GetTempPath(), "livechannels-logos"));
             TryDeleteFile(Path.Combine(Path.GetTempPath(), "livechannels-MaterialSymbolsOutlined.ttf"));
+            var legacy = PluginPaths.LegacyAssetsDir(_appPaths);
+            TryDeleteDirectory(Path.Combine(legacy, "intros"));
+            TryDeleteFile(Path.Combine(legacy, "MaterialSymbolsOutlined.ttf"));
+            var legacyLogos = Path.Combine(legacy, "logos");
+            if (Directory.Exists(legacyLogos))
+            {
+                var cutoff = DateTime.UtcNow - TimeSpan.FromDays(30);
+                foreach (var logo in Directory.EnumerateFiles(legacyLogos))
+                {
+                    if (File.GetLastWriteTimeUtc(logo) < cutoff)
+                    {
+                        TryDeleteFile(logo);
+                    }
+                }
+
+                if (!Directory.EnumerateFileSystemEntries(legacyLogos).Any())
+                {
+                    TryDeleteDirectory(legacy);
+                }
+            }
+            else
+            {
+                TryDeleteDirectory(legacy);
+            }
 
             ReapSubtitleCache();
         }

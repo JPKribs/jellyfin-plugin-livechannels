@@ -9,13 +9,16 @@ using Jellyfin.Plugin.LiveChannels.Utilities;
 namespace Jellyfin.Plugin.LiveChannels.Services;
 
 /// <summary>
-/// One item for the per-item stream loop to play: the program, how far into it to start, and an optional playback
-/// cap (a defensive bound used only if the schedule ever hands over a slot shorter than the item).
+/// One slot for the per-item stream loop to play: the program, how far into its slot to start, an optional playback
+/// cap (a defensive bound used only if the schedule ever hands over a slot shorter than the item), and the Up Next
+/// bumper that opens the slot. The offset is measured from the slot's start, so an offset below the lead falls in
+/// the bumper and the item itself starts at the lead.
 /// </summary>
 /// <param name="Program">The item to play.</param>
-/// <param name="Offset">How far into the item to start (non-zero only on the tune-in item).</param>
+/// <param name="Offset">How far into the slot to start (non-zero only on the tune-in slot).</param>
 /// <param name="DurationLimit">A playback cap from the seek point, or <c>null</c> to play to the natural end.</param>
-internal readonly record struct StreamStep(ProgramEntry Program, TimeSpan Offset, TimeSpan? DurationLimit);
+/// <param name="Lead">The bumper that opens the slot, or zero.</param>
+internal readonly record struct StreamStep(ProgramEntry Program, TimeSpan Offset, TimeSpan? DurationLimit, TimeSpan Lead = default);
 
 /// <summary>
 /// The source of the next item for the per-item stream loop: a free-running loop for ordinary channels, or a
@@ -31,6 +34,10 @@ internal interface IStreamSchedule
 
     /// <summary>Advances to the next item.</summary>
     void Advance();
+
+    /// <summary>The item after the current one as the schedule stands now (a rebuild may still change it), or <c>null</c> when unknown.</summary>
+    /// <returns>The next item, or <c>null</c>.</returns>
+    ProgramEntry? PeekNext();
 }
 
 /// <summary>
@@ -153,12 +160,14 @@ internal sealed class LoopStreamSchedule : IStreamSchedule
 
     public int PoolCount => _programs.Count;
 
-    public StreamStep Current => new(_programs[_index], _offset, null);
+    public StreamStep Current => new(_programs[_index], _offset, null, TimeSpan.FromTicks(ProgramLoop.LeadOf(_programs)));
+
+    public ProgramEntry? PeekNext() => _programs[(_index + 1) % _programs.Count];
 
     public void Advance()
     {
-        // The guide time the item just played ends at, per the loop it was scheduled from.
-        var boundary = _itemStartUtc + TimeSpan.FromTicks(_programs[_index].DurationTicks);
+        // The guide time the slot just played ends at, per the loop it was scheduled from.
+        var boundary = _itemStartUtc + TimeSpan.FromTicks(ProgramLoop.SlotTicks(_programs, _index));
         if (_follower?.TryTakeNewer(RefreshWait) is { } fresh)
         {
             _programs = fresh;
@@ -204,7 +213,7 @@ internal static class StreamScheduleMath
     /// <returns>The snapped item index and offset.</returns>
     public static (int Index, TimeSpan Offset) Snap(IReadOnlyList<ProgramEntry> programs, int index, TimeSpan offset)
     {
-        if (TimeSpan.FromTicks(programs[index].DurationTicks) - offset < BoundaryTolerance)
+        if (TimeSpan.FromTicks(ProgramLoop.SlotTicks(programs, index)) - offset < BoundaryTolerance)
         {
             return ((index + 1) % programs.Count, TimeSpan.Zero);
         }
@@ -287,16 +296,18 @@ internal sealed class DaypartStreamSchedule : IStreamSchedule
             // Cap playback only if the schedule shortened this slot. The continuous chain never does; this stays
             // as a defensive bound so a schedule bug cannot make an item overrun its slot forever.
             var scheduled = slot.Stop - slot.Start;
-            var full = TimeSpan.FromTicks(slot.Program.DurationTicks);
+            var full = TimeSpan.FromTicks(slot.Program.DurationTicks) + slot.Lead;
             TimeSpan? limit = scheduled < full - TimeSpan.FromSeconds(1) ? scheduled - offset : null;
             if (limit is { } value && value <= TimeSpan.Zero)
             {
                 limit = null;
             }
 
-            return new StreamStep(slot.Program, offset, limit);
+            return new StreamStep(slot.Program, offset, limit, slot.Lead);
         }
     }
+
+    public ProgramEntry? PeekNext() => _pos + 1 < _window.Count ? _window[_pos + 1].Program : null;
 
     public void Advance()
     {
@@ -341,7 +352,8 @@ internal sealed class DaypartStreamSchedule : IStreamSchedule
         if (_window.Count == 0)
         {
             // Degenerate (a non-empty pool always yields at least one slot): fall back to the raw pool, untruncated.
-            _window = _pool.Select(p => new ScheduledProgram(p, fromUtc, fromUtc + TimeSpan.FromTicks(p.DurationTicks))).ToList();
+            var lead = TimeSpan.FromTicks(ProgramLoop.LeadOf(_pool));
+            _window = _pool.Select(p => new ScheduledProgram(p, fromUtc, fromUtc + TimeSpan.FromTicks(p.DurationTicks) + lead) { Lead = lead }).ToList();
         }
 
         _pos = 0;

@@ -1071,6 +1071,7 @@ export default function (view) {
         peoplePicker.setValue((ch.People || []).map(function (p) { return { key: p.Id, label: p.Name }; }));
         el('episodesPerBlock').value = ch.EpisodesPerBlock || 1;
         el('keepMultiPart').checked = ch.KeepMultiPartTogether !== false;
+        el('showBumpers').checked = ch.ShowBumpers !== false;
         el('includeEpisodes').checked = ch.IncludeEpisodes !== false;
         el('includeMovies').checked = ch.IncludeMovies !== false;
         el('includeSpecials').checked = !!ch.IncludeSpecials;
@@ -1118,6 +1119,7 @@ export default function (view) {
         ch.People = peoplePicker ? peoplePicker.getValue().map(function (p) { return { Id: p.key, Name: p.label }; }) : (ch.People || []);
         ch.EpisodesPerBlock = Math.max(1, parseInt(el('episodesPerBlock').value, 10) || 1);
         ch.KeepMultiPartTogether = el('keepMultiPart').checked;
+        ch.ShowBumpers = el('showBumpers').checked;
         ch.IncludeEpisodes = el('includeEpisodes').checked;
         ch.IncludeMovies = el('includeMovies').checked;
         ch.IncludeSpecials = el('includeSpecials').checked;
@@ -1310,7 +1312,7 @@ export default function (view) {
             Id: newId(), Name: '', Number: nextNumber(), LogoData: '', LogoContentType: '',
             LogoStyle: 'Number', LogoSymbol: '', LogoShowName: true,
             Sources: [], AudioLanguage: '', RatingBlocks: [], TransitionWindowMinutes: 0, MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, Category: 'None',
-            EpisodesPerBlock: 1, KeepMultiPartTogether: true,
+            EpisodesPerBlock: 1, KeepMultiPartTogether: true, ShowBumpers: true,
             IncludeEpisodes: true, IncludeMovies: true, IncludeSpecials: false, IncludeMusicVideos: true, IncludeHomeVideos: false, Shuffle: true, LoopMode: 'Shuffle', ShuffleEpisodes: false,
             FavorKind: 'None', FavorStrength: 'Moderate', SubtitleBurnIn: 'Never', Enabled: true
         });

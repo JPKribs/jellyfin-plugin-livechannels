@@ -123,6 +123,9 @@ public static class DaypartSchedule
             return schedule;
         }
 
+        // Every slot opens with the loop's Up Next bumper (none when the channel shows none).
+        var bumper = ProgramLoop.LeadOf(loop);
+
         // A transition buffer past a whole day adds nothing (the span already covers every window) and, unclamped,
         // overflows the block-span sum below into a negative span that silently disables the rating check.
         transitionMinutes = Math.Clamp(transitionMinutes, 0, RatingSchedule.MinutesPerDay);
@@ -196,7 +199,7 @@ public static class DaypartSchedule
                 }
             }
 
-            var stop = t + TimeSpan.FromTicks(item.DurationTicks);
+            var stop = t + TimeSpan.FromTicks(item.DurationTicks + bumper);
             if (stop <= t)
             {
                 break; // Defensive: a non-positive duration would not advance the clock.
@@ -204,7 +207,7 @@ public static class DaypartSchedule
 
             if (stop > fromUtc)
             {
-                schedule.Add(new ScheduledProgram(item, t, stop));
+                schedule.Add(new ScheduledProgram(item, t, stop) { Lead = TimeSpan.FromTicks(bumper) });
             }
 
             t = stop;
@@ -231,7 +234,7 @@ public static class DaypartSchedule
             long leadTicks = 0;
             for (var k = 0; k < length - 1; k++)
             {
-                leadTicks += loop[(start + k) % loop.Count].DurationTicks;
+                leadTicks += ProgramLoop.SlotTicks(loop, (start + k) % loop.Count);
             }
 
             var span = transitionMinutes + (int)Math.Min(RatingSchedule.MinutesPerDay, Math.Ceiling(TimeSpan.FromTicks(leadTicks).TotalMinutes));

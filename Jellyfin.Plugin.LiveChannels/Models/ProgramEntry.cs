@@ -45,6 +45,15 @@ public sealed class ProgramEntry
     /// <summary>Gets the official/parental rating, used for the guide's <c>rating</c>.</summary>
     public string? OfficialRating { get; init; }
 
+    /// <summary>Gets the parent series' official/parental rating for an episode, or <c>null</c>. The Up Next bumper shows an episode's series rating (an episode's own is often missing).</summary>
+    public string? SeriesOfficialRating { get; init; }
+
+    /// <summary>Gets the item's tagline (a movie's one-line pitch), or <c>null</c>, shown on its Up Next bumper.</summary>
+    public string? Tagline { get; init; }
+
+    /// <summary>Gets the library item kind (e.g. <c>Episode</c>, <c>Movie</c>, <c>MusicVideo</c>, <c>Video</c>), or <c>null</c> in schedules cached before it was recorded. Chooses the Up Next bumper's layout.</summary>
+    public string? ItemKind { get; init; }
+
     /// <summary>Gets the item's numeric inherited parental score (<c>null</c> when unrated), cached at guide refresh so time-of-day rating blocks can be applied when the schedule is built without re-querying the library.</summary>
     public int? ParentalRatingValue { get; init; }
 
@@ -187,4 +196,10 @@ public sealed class ScheduledProgram
 
     /// <summary>Gets the UTC stop time.</summary>
     public DateTime Stop { get; }
+
+    /// <summary>Gets the Up Next bumper that opens the slot (zero when there is none). The item itself starts this long after <see cref="Start"/>.</summary>
+    public TimeSpan Lead { get; init; }
+
+    /// <summary>Gets the UTC time the item itself starts: the slot start plus the bumper lead.</summary>
+    public DateTime ContentStart => Start + Lead;
 }

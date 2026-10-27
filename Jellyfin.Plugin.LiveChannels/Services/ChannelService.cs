@@ -68,7 +68,7 @@ public partial class ChannelService
     /// <param name="localization">The localization manager used to rank official ratings.</param>
     /// <param name="userManager">The user manager, used to read server-wide watch data for the Popular channel.</param>
     /// <param name="userDataManager">The user-data manager, used to read per-item play counts for the Popular channel.</param>
-    /// <param name="appPaths">The application paths, used to locate the stream root the schedule cache lives in.</param>
+    /// <param name="appPaths">The application paths, used to locate the data folder the schedule cache lives in.</param>
     /// <param name="logger">The logger.</param>
     public ChannelService(ILibraryManager libraryManager, IMediaSourceManager mediaSourceManager, ISubtitleEncoder subtitleEncoder, IPathManager pathManager, ILocalizationManager localization, IUserManager userManager, IUserDataManager userDataManager, IApplicationPaths appPaths, ILogger<ChannelService> logger)
     {
@@ -79,6 +79,7 @@ public partial class ChannelService
         _localization = localization;
         _userManager = userManager;
         _userDataManager = userDataManager;
+        MigrateLegacyScheduleDir(appPaths, logger);
         _scheduleDir = ScheduleDir(appPaths);
         Volatile.Write(ref _activeScheduleDir, _scheduleDir);
         _durationsStore = new JsonFileStore<Dictionary<Guid, ObservedDuration>>(Path.Combine(_scheduleDir, DurationsFileName), logger);
@@ -154,6 +155,16 @@ public partial class ChannelService
         var version = ScheduleVersion(channel.Number);
         var stopwatch = Stopwatch.StartNew();
         var cached = TryReadScheduleCache(channel);
+        if (cached is not null && cached.LeadTicks != LeadFor(channel))
+        {
+            // The channel's bumper setting differs from the one the cached loop was built for (a schedule cached
+            // before bumpers existed, or one the save's rebuild has not reached yet). Re-splicing the same items
+            // with the new lead is pure schedule maths, so it is done here rather than paying a full rebuild on
+            // the tune-in path; it keeps what is airing in place exactly as a rebuild would.
+            var releaded = Splice(channel, cached, cached, DateTime.UtcNow, LeadFor(channel));
+            cached = WriteScheduleCache(channel, releaded, generation) ? releaded : cached;
+        }
+
         var programs = (IReadOnlyList<ProgramEntry>?)cached ?? RefreshPrograms(channel);
         stopwatch.Stop();
 
@@ -208,7 +219,7 @@ public partial class ChannelService
         IReadOnlyList<ProgramEntry>? previous = MemorySchedules.TryGetValue(channel.Number, out var hotPrevious)
             ? hotPrevious
             : (IReadOnlyList<ProgramEntry>?)TryReadScheduleCache(channel) ?? SupersededLoop(channel);
-        var programs = Splice(channel, previous, BuildPrograms(channel), DateTime.UtcNow);
+        var programs = Splice(channel, previous, BuildPrograms(channel), DateTime.UtcNow, LeadFor(channel));
 
         // A build takes seconds (tens of seconds on a large channel); a configuration save during it means this loop
         // was built from the old channel settings. The caller still gets it, but it is neither cached nor pinned.
@@ -242,20 +253,25 @@ public partial class ChannelService
     /// previous loop has on air at <paramref name="nowUtc"/>, rotates the new loop to begin with it (the loop is a
     /// cycle, so its order is untouched), and anchors it at that item's original start, so the airing program
     /// keeps its slot and the new loop carries on from its end.
+    /// When the bumper lead changes (the channel's bumpers were switched on or off), the airing item keeps its own
+    /// start rather than its slot's: the slot is stretched or shrunk at its head, so the item on air never moves.
+    /// Only a switch-off during the bumper itself starts the item early, at the slot's start, since nothing on air
+    /// can move later.
     /// </summary>
     /// <param name="channel">The channel.</param>
     /// <param name="previous">The loop in use before this rebuild, or <c>null</c> when there is none (a first build,
     /// or one after a configuration save cleared the cache).</param>
     /// <param name="built">The freshly built loop.</param>
     /// <param name="nowUtc">The rebuild instant.</param>
+    /// <param name="leadTicks">The bumper lead the new loop carries, in ticks.</param>
     /// <returns>The loop to cache and serve.</returns>
-    internal ProgramLoop Splice(Channel channel, IReadOnlyList<ProgramEntry>? previous, IReadOnlyList<ProgramEntry> built, DateTime nowUtc)
+    internal ProgramLoop Splice(Channel channel, IReadOnlyList<ProgramEntry>? previous, IReadOnlyList<ProgramEntry> built, DateTime nowUtc, long leadTicks = 0)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(built);
         if (previous is null || previous.Count == 0 || built.Count == 0)
         {
-            return new ProgramLoop(built, null);
+            return new ProgramLoop(built, null, leadTicks);
         }
 
         ScheduledProgram? airing = null;
@@ -270,7 +286,7 @@ public partial class ChannelService
 
         if (airing is null)
         {
-            return new ProgramLoop(built, null);
+            return new ProgramLoop(built, null, leadTicks);
         }
 
         // An item the rebuild dropped (deleted, or filtered out) cannot continue; the new loop then simply starts
@@ -285,9 +301,24 @@ public partial class ChannelService
             }
         }
 
-        var rotated = index == 0 ? built : built.Skip(index).Concat(built.Take(index)).ToList();
-        return new ProgramLoop(rotated, airing.Start);
+        // The new loop's items, without whatever lead the built list carried: the lead is the new loop's own.
+        IReadOnlyList<ProgramEntry> items = built is ProgramLoop ? built.ToList() : built;
+        var rotated = index == 0 ? items : items.Skip(index).Concat(items.Take(index)).ToList();
+        var anchor = airing.Start;
+        var newLead = TimeSpan.FromTicks(Math.Max(0, leadTicks));
+        if (newLead != airing.Lead && nowUtc >= airing.ContentStart)
+        {
+            anchor = airing.ContentStart - newLead;
+        }
+
+        return new ProgramLoop(rotated, anchor, leadTicks);
     }
+
+    /// <summary>The bumper lead a channel's loop carries: the Up Next bumper's length when the channel shows bumpers, else none.</summary>
+    /// <param name="channel">The channel.</param>
+    /// <returns>The lead in ticks.</returns>
+    internal static long LeadFor(Channel channel)
+        => channel.ShowBumpers ? BumperService.BumperLength.Ticks : 0;
 
     /// <summary>
     /// Releases a channel's in-memory schedule once it has no more active sessions, so an unwatched channel holds

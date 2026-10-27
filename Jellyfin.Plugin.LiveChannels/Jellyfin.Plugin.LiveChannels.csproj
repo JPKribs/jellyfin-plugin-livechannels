@@ -45,6 +45,7 @@
     <!-- Material Symbols font + name-to-codepoint map, used to render symbol channel logos -->
     <EmbeddedResource Include="Assets\MaterialSymbolsOutlined.ttf" />
     <EmbeddedResource Include="Assets\MaterialSymbolsOutlined.codepoints" />
+    <EmbeddedResource Include="Assets\Fonts\*.ttf" />
   </ItemGroup>
 
 </Project>

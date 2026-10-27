@@ -1,0 +1,6 @@
+Inter (Inter-*.ttf) and Outfit (Outfit-*.ttf) are from Google Fonts
+(https://github.com/google/fonts), each instanced from its variable font to the
+static weights the Up Next bumper uses. Both are licensed under the SIL Open
+Font License, Version 1.1; see Inter-OFL.txt and Outfit-OFL.txt beside them.
+https://github.com/rsms/inter
+https://github.com/Outfitio/Outfit-Fonts

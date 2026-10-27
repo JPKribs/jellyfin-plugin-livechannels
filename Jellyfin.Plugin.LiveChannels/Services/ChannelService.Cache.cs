@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using Jellyfin.Plugin.LiveChannels.Models;
+using Jellyfin.Plugin.LiveChannels.Utilities;
 using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
 using Microsoft.Extensions.Logging;
@@ -19,8 +20,8 @@ public partial class ChannelService
     // Resolved schedules cached on disk so the expensive library resolve (and per-item media probe) runs once -- on
     // guide refresh -- and every tune-in reads the result instead of rebuilding it on the stream's start-up critical
     // path (a large channel's rebuild took ~40s, past the live-playlist deadline, and the client reported "Failed to
-    // load"). One file per channel lives under the stream root in a `schedule` subdirectory, named by channel number
-    // (e.g. <cache>/livechannels/schedule/0.json), so a tune-in reads and parses only the one channel it needs, and a
+    // load"). One file per channel lives in the plugin's data folder in a `schedule` subdirectory, named by channel
+    // number (e.g. <data>/livechannels/schedule/0.json), so a tune-in reads and parses only the one channel it needs, and a
     // guide refresh rewrites only the channel that changed. Cleared when the plugin configuration changes so channel
     // edits take effect on the next guide refresh or tune-in.
     private static readonly JsonSerializerOptions ScheduleCacheJson = new() { PropertyNameCaseInsensitive = true };
@@ -36,7 +37,7 @@ public partial class ChannelService
     // would otherwise outlive the clear until the next guide refresh.
     private static long _cacheGeneration;
 
-    /// <summary>The name of the directory, under the stream root, that holds the per-channel schedule files.</summary>
+    /// <summary>The name of the directory, in the plugin's data folder, that holds the per-channel schedule files. Versions before 12.4.1 kept it under the stream root.</summary>
     public const string ScheduleDirName = "schedule";
 
     /// <summary>
@@ -270,10 +271,57 @@ public partial class ChannelService
             : configured;
     }
 
-    /// <summary>The directory, under the stream root, that holds the per-channel schedule files.</summary>
+    /// <summary>
+    /// The directory, in the plugin's data folder, that holds the per-channel schedule files. They hold each loop's
+    /// splice anchor and the item lengths learned by playing them, so they must survive a cleared cache: losing
+    /// them moves the program on air.
+    /// </summary>
     /// <param name="paths">The application paths.</param>
     /// <returns>The schedule cache directory.</returns>
-    public static string ScheduleDir(IApplicationPaths paths) => Path.Combine(ResolveStreamRoot(paths), ScheduleDirName);
+    public static string ScheduleDir(IApplicationPaths paths) => Path.Combine(PluginPaths.DataDir(paths), ScheduleDirName);
+
+    /// <summary>
+    /// Moves the schedule files an earlier version kept under the stream root into the data folder, once. Files
+    /// already in the data folder win; the legacy directory is removed once it is empty. Best effort: a failure
+    /// only means the next guide refresh rebuilds what could not be moved.
+    /// </summary>
+    /// <param name="paths">The application paths.</param>
+    /// <param name="logger">The logger.</param>
+    internal static void MigrateLegacyScheduleDir(IApplicationPaths paths, ILogger logger)
+    {
+        var legacy = Path.Combine(ResolveStreamRoot(paths), ScheduleDirName);
+        var current = ScheduleDir(paths);
+        try
+        {
+            if (!Directory.Exists(legacy) || string.Equals(Path.GetFullPath(legacy), Path.GetFullPath(current), StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(current);
+            var moved = 0;
+            foreach (var file in Directory.EnumerateFiles(legacy))
+            {
+                var name = Path.GetFileName(file);
+                var target = Path.Combine(current, name);
+                if (name.EndsWith(".tmp", StringComparison.Ordinal) || File.Exists(target))
+                {
+                    File.Delete(file);
+                    continue;
+                }
+
+                File.Move(file, target);
+                moved++;
+            }
+
+            Directory.Delete(legacy);
+            logger.LogInformation("Live Channels: moved {Count} schedule file(s) from {Legacy} to {Current}", moved, legacy, current);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "Live Channels: could not move the schedule files from {Legacy} to {Current}; the next guide refresh rebuilds them", legacy, current);
+        }
+    }
 
     // The on-disk path of one channel's schedule file, named by channel number (e.g. .../schedule/0.json).
     private string ScheduleFileFor(Channel channel)
@@ -314,7 +362,7 @@ public partial class ChannelService
         }
     }
 
-    private ProgramLoop? TryReadScheduleCache(Channel channel)
+    internal ProgramLoop? TryReadScheduleCache(Channel channel)
     {
         var file = ScheduleFileFor(channel);
         return File.Exists(file) ? ReadScheduleFile(file, channel) : null;
@@ -342,7 +390,7 @@ public partial class ChannelService
             }
 
             var cached = JsonSerializer.Deserialize<CachedLoop>(bytes, ScheduleCacheJson);
-            return cached?.Programs is null ? null : new ProgramLoop(cached.Programs, cached.AnchorUtc);
+            return cached?.Programs is null ? null : new ProgramLoop(cached.Programs, cached.AnchorUtc, cached.LeadTicks);
         }
         catch (Exception ex)
         {
@@ -368,7 +416,8 @@ public partial class ChannelService
     }
 
     // The on-disk schedule: the loop and its splice anchor (null when it was not spliced onto a previous build).
-    private sealed record CachedLoop(DateTime? AnchorUtc, List<ProgramEntry>? Programs);
+    // A schedule written before bumpers existed has no lead, which reads as none.
+    private sealed record CachedLoop(DateTime? AnchorUtc, List<ProgramEntry>? Programs, long LeadTicks = 0);
 
     // Writes the schedule unless a cache clear landed since `generation` was captured (the schedule then reflects
     // the pre-save configuration). Returns false when the write was skipped for that reason.
@@ -394,7 +443,7 @@ public partial class ChannelService
                 temp = file + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
                 using (var stream = File.Create(temp))
                 {
-                    JsonSerializer.Serialize(stream, new CachedLoop(programs.AnchorUtc, programs.ToList()), ScheduleCacheJson);
+                    JsonSerializer.Serialize(stream, new CachedLoop(programs.AnchorUtc, programs.ToList(), programs.LeadTicks), ScheduleCacheJson);
                 }
 
                 File.Move(temp, file, overwrite: true);

@@ -61,6 +61,7 @@ public class GuidePurgeTests
     {
         var paths = Substitute.For<IApplicationPaths>();
         paths.CachePath.Returns(System.IO.Path.GetTempPath());
+        paths.DataPath.Returns(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lc-guidepurge-data"));
         return new ChannelService(
             library,
             Substitute.For<IMediaSourceManager>(),

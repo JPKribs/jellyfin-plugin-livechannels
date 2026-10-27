@@ -295,13 +295,15 @@ public class ConfigurationValidatorTests
     [Fact]
     public void StreamDirectory_PreMarkerPluginRoot_IsAccepted()
     {
-        // A stream root written by a version before the marker existed: session dirs, the schedule cache, and
-        // the legacy single-file schedule are all recognisably ours.
+        // A stream root written by a version before the marker existed: session dirs, the schedule cache, the
+        // assets and working folders, and the legacy single-file schedule are all recognisably ours.
         var dir = Directory.CreateTempSubdirectory("lc-test-").FullName;
         try
         {
             Directory.CreateDirectory(Path.Combine(dir, ChannelService.ScheduleDirName));
             Directory.CreateDirectory(Path.Combine(dir, "lc_" + new string('a', 32)));
+            Directory.CreateDirectory(Path.Combine(dir, "assets"));
+            Directory.CreateDirectory(Path.Combine(dir, "work"));
             File.WriteAllText(Path.Combine(dir, "schedule.json"), "[]");
             ConfigurationValidator.Validate(new PluginConfiguration { StreamDirectory = dir });
         }

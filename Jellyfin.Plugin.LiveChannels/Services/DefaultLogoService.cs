@@ -54,9 +54,9 @@ public class DefaultLogoService
         _encoder = encoder;
         _logger = logger;
 
-        // The plugin's own cache directory, not the shared system temp: a fixed path in a world-writable temp
-        // dir can be pre-created or swapped by another local user before ffmpeg parses it as a font.
-        _assetsDir = Path.Combine(appPaths.CachePath, "livechannels-assets");
+        // The plugin's own assets folder in its stream root, not the shared system temp: a fixed path in a
+        // world-writable temp dir can be pre-created or swapped by another local user before ffmpeg parses it as a font.
+        _assetsDir = PluginPaths.AssetsDir(appPaths);
     }
 
     /// <summary>

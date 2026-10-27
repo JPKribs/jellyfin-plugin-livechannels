@@ -260,14 +260,16 @@ public static class ConfigurationValidator
     }
 
     // Whether an entry inside a candidate stream root is plugin-shaped, which identifies a stream root written
-    // by a version before the marker file existed: session directories, the schedule cache, or the legacy
-    // single-file schedule.
+    // by a version before the marker file existed: session directories, the schedule cache (kept there before
+    // 12.4.1), the assets and working folders, or the legacy single-file schedule.
     private static bool IsPluginStreamEntry(string entry)
     {
         var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(entry));
         if (Directory.Exists(entry))
         {
             return string.Equals(name, ChannelService.ScheduleDirName, StringComparison.Ordinal)
+                || string.Equals(name, PluginPaths.AssetsDirName, StringComparison.Ordinal)
+                || string.Equals(name, PluginPaths.WorkDirName, StringComparison.Ordinal)
                 || LiveChannelsTvService.IsSessionDir(entry);
         }
 

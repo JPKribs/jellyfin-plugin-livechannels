@@ -51,8 +51,12 @@ public class StreamSessionService
     private readonly ChannelService _channels;
     private readonly EncoderResolver _encoders;
     private readonly IntroService _intros;
+    private readonly BumperService? _bumpers;
     private readonly ILogger<StreamSessionService> _logger;
     private readonly FailureReports _reports;
+
+    // Where the concat playlists are written: the working folder of the plugin's stream root.
+    private readonly string _workDir;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StreamSessionService"/> class.
@@ -63,15 +67,18 @@ public class StreamSessionService
     /// <param name="intros">The tune-in card cache, played ahead of the first item of a fresh session.</param>
     /// <param name="appPaths">The server paths; failure reports are written to its log directory.</param>
     /// <param name="logger">The logger.</param>
-    public StreamSessionService(IMediaEncoder encoder, ChannelService channels, EncoderResolver encoders, IntroService intros, IApplicationPaths appPaths, ILogger<StreamSessionService> logger)
+    /// <param name="bumpers">The Up Next bumpers, played at the head of every slot of a channel that shows them; <c>null</c> plays black there instead.</param>
+    public StreamSessionService(IMediaEncoder encoder, ChannelService channels, EncoderResolver encoders, IntroService intros, IApplicationPaths appPaths, ILogger<StreamSessionService> logger, BumperService? bumpers = null)
     {
         ArgumentNullException.ThrowIfNull(appPaths);
         _encoder = encoder;
         _channels = channels;
         _encoders = encoders;
         _intros = intros;
+        _bumpers = bumpers;
         _logger = logger;
         _reports = new FailureReports(appPaths.LogDirectoryPath);
+        _workDir = PluginPaths.WorkDir(appPaths);
     }
 
     /// <summary>
@@ -106,10 +113,17 @@ public class StreamSessionService
         // timeline from the card's true end exactly as every item chains from the previous one, and the
         // schedule position it seeks to is advanced by the card's length so the content still lands on the
         // wall clock the guide shows. A restarted producer (non-zero timeline) is continuing under a viewer and
-        // never replays the card.
+        // never replays the card. A tune-in during an item's Up Next bumper skips the card too: the slot shows black
+        // until the item starts, on time, rather than a card running into the item.
         var lead = TimeSpan.Zero;
-        var card = timelineBase == TimeSpan.Zero ? _intros.TryGetCached(channel) : null;
-        if (timelineBase == TimeSpan.Zero && card is null)
+        var duringBumper = timelineBase == TimeSpan.Zero && DuringBumper(channel, DateTime.UtcNow);
+        var card = timelineBase == TimeSpan.Zero && !duringBumper ? _intros.TryGetCached(channel) : null;
+        if (duringBumper)
+        {
+            _logger.LogInformation("Live Channels: {Name}: tuned in during an Up Next bumper; showing black until the item starts", channel.Name);
+            stats?.AppendLog("Tune-in during an Up Next bumper: no card, black until the item starts");
+        }
+        else if (timelineBase == TimeSpan.Zero && card is null)
         {
             _logger.LogInformation("Live Channels: {Name}: no tune-in card is rendered for the current output settings yet; opening straight on content", channel.Name);
         }
@@ -324,7 +338,16 @@ public class StreamSessionService
             _logger.LogInformation("Live Channels: {Name}: its items differ in video codec, audio codec, audio channels, default audio track, or colour matrix (or were scanned before these were recorded), so it streams item by item", channel.Name);
         }
 
-        var perItem = alreadyPerItem || hasHdr || hasVideoOnly || mixedFormats || timeOfDay;
+        // A channel that shows Up Next bumpers plays every slot as bumper then item, which the one continuous concat
+        // playlist cannot interleave; the bumper is a deliberate break, so the concat path's seamlessness buys
+        // nothing there. Its black filler is made ready up front, since a tune-in during a bumper needs it at once.
+        var bumpers = ProgramLoop.LeadOf(programs) > 0;
+        if (bumpers && _bumpers is not null)
+        {
+            _ = _bumpers.EnsureBlackAsync(OutputFor(stats).Width, CancellationToken.None);
+        }
+
+        var perItem = alreadyPerItem || hasHdr || hasVideoOnly || mixedFormats || timeOfDay || bumpers;
         var uniform = IsUniform(programs);
 
         // A fresh session bursts the full head start; a restart only tops up whatever lead it has lost, so the
@@ -412,15 +435,16 @@ public class StreamSessionService
     }
 
     /// <summary>
-    /// Whether the continuous concat pipeline can play these items at all: none above 1080p (software decode cannot
-    /// keep up), none HDR (only the per-item path tone-maps), none without audio (concat has no track to give
-    /// them), and all sharing their formats (see <see cref="ConcatCompatible"/>). Channel-level reasons for the
+    /// Whether the continuous concat pipeline can play these items at all: no Up Next bumpers (one playlist cannot
+    /// interleave them, so switching them on mid-session hands the stream to the per-item path), none above 1080p
+    /// (software decode cannot keep up), none HDR (only the per-item path tone-maps), none without audio (concat
+    /// has no track to give them), and all sharing their formats (see <see cref="ConcatCompatible"/>). Channel-level reasons for the
     /// per-item path (burn-in, time-of-day ratings, a GPU-upload encoder) do not change with the schedule.
     /// </summary>
     /// <param name="programs">The channel's items.</param>
     /// <returns>Whether the concat pipeline suits them.</returns>
     internal static bool ConcatSuits(IReadOnlyList<ProgramEntry> programs)
-        => !programs.Any(p => p.SourceHeight > 1080 || p.IsHdr || p.IsVideoOnly) && ConcatCompatible(programs);
+        => ProgramLoop.LeadOf(programs) == 0 && !programs.Any(p => p.SourceHeight > 1080 || p.IsHdr || p.IsVideoOnly) && ConcatCompatible(programs);
 
     // Whether every item shares one known source height, which lets the continuous pipeline hardware-decode (the
     // concat demuxer feeds one shared decoder, and a hardware decoder cannot follow a mid-stream resolution change).
@@ -533,10 +557,11 @@ public class StreamSessionService
         // position after a missing item away from the guide and stat every file on every tune-in); a missing item
         // is skipped only when playback reaches it (see FirstPlayable).
         var listFile = Path.Combine(
-            Path.GetTempPath(),
+            _workDir,
             "livechannels-" + channel.Number.ToString(CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N") + ".txt");
         try
         {
+            Directory.CreateDirectory(_workDir);
             var (width, bitrate, videoCodec, audioCodec) = OutputFor(stats);
             var video = _encoders.ResolveVideo(videoCodec, allowHardware: true);
             var (audioEncoder, audioBitrate) = EncoderResolver.ResolveAudio(audioCodec);
@@ -764,7 +789,7 @@ public class StreamSessionService
                 {
                     var position = anchorUtc + TimeSpan.FromSeconds(produced);
                     var (index, offset) = ScheduleCalculator.CurrentProgram(rebuilt, position, ScheduleCalculator.AnchorFor(rebuilt));
-                    wait = TimeSpan.FromTicks(rebuilt[index].DurationTicks) - offset;
+                    wait = TimeSpan.FromTicks(ProgramLoop.SlotTicks(rebuilt, index)) - offset;
                 }
 
                 _logger.LogDebug("Channel {Name}: schedule rebuilt; switching over in {Seconds:F0}s at the next boundary", label, wait.TotalSeconds);
@@ -884,6 +909,35 @@ public class StreamSessionService
             var step = resume ?? schedule.Current;
             resume = null;
             var program = step.Program;
+
+            // A slot that opens with an Up Next bumper plays it (or black) up to the item's start, then the item
+            // from its start; a slot joined past the bumper plays the item from where the clock is. The item never
+            // moves: whatever part of the bumper is not shown is black, never skipped ahead of.
+            if (!resuming && step.Lead > TimeSpan.Zero)
+            {
+                var preroll = step.Lead - step.Offset;
+                if (preroll > TimeSpan.Zero)
+                {
+                    timeline = await StreamPrerollAsync(ffmpeg, channel, step, preroll, timeline, output, BurstNow, stats, cancellationToken).ConfigureAwait(false);
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                }
+
+                step = ContentStep(step);
+                if (step.DurationLimit is { } left && left <= TimeSpan.Zero)
+                {
+                    schedule.Advance();
+                    continue;
+                }
+
+                // The next slot's bumper renders while this item plays.
+                if (_bumpers is not null && schedule.PeekNext() is { } next)
+                {
+                    _bumpers.Prepare(channel, next, OutputFor(stats).Width, stats?.LogoPath);
+                }
+            }
             _logger.LogDebug("Channel {Name}: item {Number} \"{Title}\"", channel.Name, itemsPlayed + 1, program.Title);
 
             var storage = new StorageProbe();
@@ -981,6 +1035,106 @@ public class StreamSessionService
             Offset = step.Offset + played,
             DurationLimit = step.DurationLimit is { } limit ? (limit - played > TimeSpan.Zero ? limit - played : TimeSpan.Zero) : null,
         };
+
+    /// <summary>
+    /// The part of a slot after its Up Next bumper: the item itself, from its start when the slot was joined before
+    /// or during the bumper, else from where the clock is, with any playback cap shortened by the bumper part it
+    /// included. A step with no bumper is returned unchanged.
+    /// </summary>
+    /// <param name="step">The slot, its offset measured from the slot's start.</param>
+    /// <returns>The item's step, its offset measured from the item's start.</returns>
+    internal static StreamStep ContentStep(StreamStep step)
+    {
+        if (step.Lead <= TimeSpan.Zero)
+        {
+            return step;
+        }
+
+        var intoItem = step.Offset - step.Lead;
+        var preroll = intoItem < TimeSpan.Zero ? -intoItem : TimeSpan.Zero;
+        return step with
+        {
+            Offset = intoItem > TimeSpan.Zero ? intoItem : TimeSpan.Zero,
+            DurationLimit = step.DurationLimit is { } limit ? limit - preroll : null,
+            Lead = TimeSpan.Zero,
+        };
+    }
+
+    /// <summary>Whether the guide time falls in an item's Up Next bumper, the head of its slot before the item starts.</summary>
+    /// <param name="timeline">The channel's timeline around the time.</param>
+    /// <param name="atUtc">The time.</param>
+    /// <returns>Whether a bumper is on at that time.</returns>
+    internal static bool DuringBumper(IReadOnlyList<ScheduledProgram> timeline, DateTime atUtc)
+    {
+        ArgumentNullException.ThrowIfNull(timeline);
+        foreach (var slot in timeline)
+        {
+            if (slot.Start <= atUtc && atUtc < slot.Stop)
+            {
+                return atUtc < slot.ContentStart;
+            }
+        }
+
+        return false;
+    }
+
+    // Whether a tune-in now lands in an Up Next bumper. Resolving the loop here costs the tune-in nothing extra: the
+    // schedule is resolved right after the card anyway, and this leaves it in memory for that.
+    private bool DuringBumper(Channel channel, DateTime nowUtc)
+    {
+        try
+        {
+            var programs = _channels.ResolvePrograms(channel);
+            return programs.Count > 0
+                && ProgramLoop.LeadOf(programs) > 0
+                && DuringBumper(_channels.BuildTimeline(channel, programs, nowUtc, nowUtc.AddTicks(1)), nowUtc);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Live Channels: {Name}: could not tell whether a bumper is on; opening as usual", channel.Name);
+            return false;
+        }
+    }
+
+    // Plays the head of a slot before its item: the item's Up Next bumper when the slot is played from its start and
+    // the bumper was rendered in time, otherwise black, for exactly the time left before the item starts. Returns
+    // the timeline the item chains from. Should neither play, the item follows straight on (a little early, which
+    // the per-item pacing absorbs) rather than the slot stalling.
+    private async Task<TimeSpan> StreamPrerollAsync(string ffmpeg, Channel channel, StreamStep step, TimeSpan length, TimeSpan timeline, Stream output, Func<double> burstSeconds, SessionStats? stats, CancellationToken cancellationToken)
+    {
+        if (_bumpers is null)
+        {
+            return timeline;
+        }
+
+        var width = OutputFor(stats).Width;
+        var bumper = step.Offset <= TimeSpan.Zero ? _bumpers.TryGetCached(channel, step.Program, width, stats?.LogoPath) : null;
+        if (bumper is not null)
+        {
+            var (played, end, _) = await StreamItemAsync(ffmpeg, channel, BumperService.ClipEntry(bumper, "Up Next: " + step.Program.Title, width, BumperService.BumperLength.TotalSeconds), TimeSpan.Zero, timeline, output, burstSeconds, cancellationToken, stats, length, softwareDecodeOnly: true).ConfigureAwait(false);
+            if (played || cancellationToken.IsCancellationRequested)
+            {
+                return played ? NextTimeline(timeline, length, end) : timeline;
+            }
+        }
+        else
+        {
+            stats?.AppendLog((step.Offset > TimeSpan.Zero ? "Joined partway into" : "No rendered") + " Up Next bumper for \"" + step.Program.Title + "\"; black for " + length.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture) + "s");
+        }
+
+        var black = await _bumpers.EnsureBlackAsync(width, cancellationToken).ConfigureAwait(false);
+        if (black is not null)
+        {
+            var (played, end, _) = await StreamItemAsync(ffmpeg, channel, BumperService.ClipEntry(black, "black before " + step.Program.Title, width, BumperService.BumperLength.TotalSeconds + 1), TimeSpan.Zero, timeline, output, burstSeconds, cancellationToken, stats, length, softwareDecodeOnly: true).ConfigureAwait(false);
+            if (played)
+            {
+                return NextTimeline(timeline, length, end);
+            }
+        }
+
+        _logger.LogWarning("Live Channels: {Name}: could not play the head of \"{Title}\"'s slot; the item starts early", channel.Name, step.Program.Title);
+        return timeline;
+    }
 
     /// <summary>
     /// How far into an item its producer got when it failed partway: <c>null</c> for a clean exit, a cancelled

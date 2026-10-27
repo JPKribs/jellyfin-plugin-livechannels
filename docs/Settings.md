@@ -97,6 +97,7 @@ The Channel Settings section covers playback, guide tags, episode grouping, cont
 | **Category** | Tags the whole channel in the guide as **News** or **Sports**. Kids is set per rating block, and the movie tag applies automatically while a movie is playing, so a channel can carry up to three tags at once. | None |
 | **Content types** | What airs: **Episodes** (on), **Movies** (on), **Specials** (season 0, off), **Music videos** (on), **Home videos** (off). | see left |
 | **Episodes per block** | Consecutive episodes of one series before moving on. 1 disables grouping. | 1 |
+| **Show Up Next cards** | Plays a 15 second card before each item: its artwork (the episode's thumbnail, else the series backdrop, else the poster, in a frame shaped like the image, or none), its title, season and episode (season 0 shows **Special**, a double episode shows its first number), episode name or tagline, year, genres, runtime and review score, with the parental rating in the top right (an episode shows its series' rating) and a countdown. The card is part of the item's slot in the guide, so items still start on schedule; switching it on or off moves the guide by 15 seconds per item from then on but never moves what is airing. Cards render while the previous item plays and are cached in the [stream file location](#sessions), and a slot whose card was not ready in time shows black until its item starts. | on |
 | **Keep multipart episodes together** | Holds every part of a multipart story ("The Trap (1)", "(2)", "(3)", and so on) in the same block so it never splits, even when that runs past the episodes per block. | on |
 | **Loop order** | **Shuffle** is deterministic and repeatable, so the guide and the stream always agree, and each series contributes one block per loop pass so nothing dominates. **Alphabetical** plays by name. **Chronological** plays oldest to newest by release date. | Shuffle |
 | **Episode order** | Within a series, **Air order** or **Random**. | Air order |
@@ -124,6 +125,7 @@ The Popular tab with its Channel section open.
 | **Icon** | A Material Symbols name for the generated logo (this channel always uses the Symbol style). | diversity_1 |
 | **Show channel name on the generated logo** | As on the Channels tab. | on |
 | **Subtitle burn in** | As on the Channels tab. | Never |
+| **Show Up Next cards** | As on the Channels tab. | on |
 | **Rating limits** and **Transition window** | Rating limits select the population, so the channel keeps the top titles that are valid for the cap. | none |
 | **Category** | News or Sports tag. | None |
 | **Episodes per block**, **Episode order**, **Keep multipart episodes together** | As on the Channels tab. | 4, Air order, on |
@@ -217,7 +219,7 @@ The Sessions section caps how many streams encode and where their files go.
 | --- | --- | --- |
 | **Maximum concurrent streams** | The most channels that may encode at once. Over the cap, the oldest stream nobody is watching is closed to make room. Streams being watched are never closed for it, so the count can run over while everything is in use. 0 means no limit. The [stress test](#troubleshooting) measures the right value for your server. | 3 |
 | **Stream time limit (minutes)** | Closes any stream open longer than this once nobody is watching it, a backstop for clients that never send a stop. 0 turns it off. | 0 |
-| **Stream file location** | Where each channel's playlist and rolling stream segments are written while playing, taking effect on restart. Blank uses Jellyfin's cache. Pick a new or empty folder: the plugin cleans up old stream files inside its folder automatically, so it refuses a directory that already contains other content. Only a short rolling window of segments is kept per channel, so disk use stays small regardless of watch time. | blank |
+| **Stream file location** | Where each channel's playlist and rolling stream segments are written while playing, along with everything else the plugin can rebuild (tune-in cards, Up Next cards, generated logos and fonts), taking effect on restart. Blank uses Jellyfin's cache. Schedules and learned item lengths live in Jellyfin's data folder instead, so clearing the cache never moves what is on air. Pick a new or empty folder: the plugin cleans up old stream files inside its folder automatically, so it refuses a directory that already contains other content. Only a short rolling window of segments is kept per channel, so disk use stays small regardless of watch time. | blank |
 
 ### Troubleshooting
 

@@ -24,6 +24,7 @@ public sealed class SessionStats
     private long _timelineBits;
     private long _anchorTicks;
     private Models.OutputSettings? _output;
+    private string? _logoPath;
 
     /// <summary>
     /// Gets or sets the most recent encode speed as a realtime multiple, parsed from the producer ffmpeg's
@@ -94,6 +95,16 @@ public sealed class SessionStats
     /// <c>null</c> to disable logging (e.g. tests).
     /// </summary>
     public string? LogPath { get; set; }
+
+    /// <summary>
+    /// Gets or sets the channel logo the session resolved (uploaded or generated), or <c>null</c> until it has one.
+    /// The Up Next bumpers this session renders show it in their header.
+    /// </summary>
+    public string? LogoPath
+    {
+        get => Volatile.Read(ref _logoPath);
+        set => Volatile.Write(ref _logoPath, value);
+    }
 
     /// <summary>
     /// Records how far the session's output has reached on the channel timeline, keeping the furthest reading

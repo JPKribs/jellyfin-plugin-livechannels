@@ -26,12 +26,14 @@ public static class ScheduleCalculator
     private const int MaxProgrammes = 10000;
 
     /// <summary>
-    /// Finds which item is airing at <paramref name="nowUtc"/> and how far into it the clock is.
+    /// Finds which item's slot is airing at <paramref name="nowUtc"/> and how far into the slot the clock is. A
+    /// slot is the loop's bumper lead (see <see cref="ProgramLoop.LeadTicks"/>) followed by the item, so an offset
+    /// below the lead falls in the bumper.
     /// </summary>
     /// <param name="programs">The looped item list. Every entry must have a positive duration.</param>
     /// <param name="nowUtc">The current UTC time.</param>
     /// <param name="epochUtc">The loop anchor.</param>
-    /// <returns>The index of the airing item and the offset into it, or <c>(0, zero)</c> when the list is empty.</returns>
+    /// <returns>The index of the airing item and the offset into its slot, or <c>(0, zero)</c> when the list is empty.</returns>
     public static (int Index, TimeSpan Offset) CurrentProgram(IReadOnlyList<ProgramEntry> programs, DateTime nowUtc, DateTime epochUtc)
     {
         ArgumentNullException.ThrowIfNull(programs);
@@ -40,10 +42,11 @@ public static class ScheduleCalculator
             return (0, TimeSpan.Zero);
         }
 
+        var lead = ProgramLoop.LeadOf(programs);
         long cycle = 0;
         foreach (var p in programs)
         {
-            cycle += p.DurationTicks;
+            cycle += p.DurationTicks + lead;
         }
 
         if (cycle <= 0)
@@ -57,7 +60,7 @@ public static class ScheduleCalculator
         long accumulated = 0;
         for (var i = 0; i < programs.Count; i++)
         {
-            var dur = programs[i].DurationTicks;
+            var dur = programs[i].DurationTicks + lead;
             if (position < accumulated + dur)
             {
                 return (i, TimeSpan.FromTicks(position - accumulated));
@@ -96,6 +99,7 @@ public static class ScheduleCalculator
 
         var (index, offset) = CurrentProgram(programs, nowUtc, epochUtc);
         var start = nowUtc - offset;
+        var lead = ProgramLoop.LeadOf(programs);
 
         while (start < endUtc && schedule.Count < MaxProgrammes)
         {
@@ -105,8 +109,8 @@ public static class ScheduleCalculator
                 break;
             }
 
-            var stop = start + TimeSpan.FromTicks(program.DurationTicks);
-            schedule.Add(new ScheduledProgram(program, start, stop));
+            var stop = start + TimeSpan.FromTicks(program.DurationTicks + lead);
+            schedule.Add(new ScheduledProgram(program, start, stop) { Lead = TimeSpan.FromTicks(lead) });
             start = stop;
             index = (index + 1) % programs.Count;
         }
