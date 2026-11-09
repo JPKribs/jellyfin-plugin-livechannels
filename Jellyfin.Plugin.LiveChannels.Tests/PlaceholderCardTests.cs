@@ -66,6 +66,55 @@ public class PlaceholderCardTests
     }
 
     [Fact]
+    public void EveryStyle_EndsInSquarePixels()
+    {
+        foreach (var style in Enum.GetValues<PlaceholderStyle>())
+        {
+            var layers = PlaceholderArguments.Layers(PlaceholderArguments.EffectiveStyle(style, null), "/tmp/p", 1280, 720);
+            var args = PlaceholderArguments.BuildSceneArguments(layers, null, null, true, true, "/tmp/out.mp4");
+
+            var filter = args[args.IndexOf("-filter_complex") + 1];
+
+            Assert.Contains("setsar=1,format=yuv420p[v]", filter, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void EveryStyle_RendersSquarePixelsAtFullWidth()
+    {
+        var ffmpeg = FfmpegHarness.Instance;
+        if (ffmpeg is null)
+        {
+            return;
+        }
+
+        var dir = Path.Combine(Path.GetTempPath(), "lc-sar-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            foreach (var style in Enum.GetValues<PlaceholderStyle>().Where(s => s != PlaceholderStyle.Custom))
+            {
+                var layers = PlaceholderArguments.Layers(style, Path.Combine(dir, style.ToString()), 1280, 720);
+                if (PlaceholderArguments.BuildPrepassArguments(layers) is { } prepass)
+                {
+                    ffmpeg.Exec(prepass.ToArray());
+                }
+
+                var output = Path.Combine(dir, style + ".mp4");
+                ffmpeg.Exec(PlaceholderArguments.BuildSceneArguments(layers, null, null, true, true, output).ToArray());
+
+                var video = ffmpeg.Stream(output, "video")!.Value;
+                Assert.True(video.GetProperty("width").GetInt32() == 1280, style + " width");
+                Assert.True(video.GetProperty("sample_aspect_ratio").GetString() == "1:1", style + " sample aspect " + video.GetProperty("sample_aspect_ratio").GetString());
+            }
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void NoStyle_FadesInOrOut_SoTheClipLoops()
     {
         foreach (var style in Enum.GetValues<PlaceholderStyle>())

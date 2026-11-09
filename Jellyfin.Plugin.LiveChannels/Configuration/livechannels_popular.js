@@ -212,6 +212,8 @@ export default function (view) {
             var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
             read.then(function (t) {
                 Shared.setStatus('popularStatus', t ? t.replace(/^"|"$/g, '') : 'Save failed.', true);
+            }, function () {
+                Shared.setStatus('popularStatus', 'Save failed.', true);
             });
         });
     }

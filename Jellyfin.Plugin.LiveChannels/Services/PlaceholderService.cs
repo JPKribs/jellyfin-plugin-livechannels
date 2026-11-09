@@ -28,7 +28,7 @@ public sealed class PlaceholderService : IDisposable
     public static readonly TimeSpan CardLength = TimeSpan.FromSeconds(PlaceholderArguments.Seconds);
 
     // Bump whenever a scene's rendering changes, so cached scenes regenerate.
-    private const int Revision = 5;
+    private const int Revision = 6;
 
     // Scenes no block uses any more, and message files nobody has drawn, are deleted once unused for this long when
     // the cards next render: a session still open on an older look or output size keeps playing its own scene.

@@ -207,6 +207,8 @@ export default function (view) {
             var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
             read.then(function (t) {
                 Shared.setStatus('settingsStatus', t ? t.replace(/^"|"$/g, '') : 'Save failed.', true);
+            }, function () {
+                Shared.setStatus('settingsStatus', 'Save failed.', true);
             });
         });
     }
@@ -366,7 +368,9 @@ export default function (view) {
         }).catch(function (err) {
             var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
             read.then(function (t) {
-                Shared.setStatus('stressStatus', t ? t.replace(/^"|"$/g, '') : 'Could not start the test (are streams still running?).', true);
+                Shared.setStatus('stressStatus', t ? t.replace(/^"|"$/g, '') : 'Could not start the test. Stop running streams first.', true);
+            }, function () {
+                Shared.setStatus('stressStatus', 'Could not start the test. Stop running streams first.', true);
             });
         });
     }

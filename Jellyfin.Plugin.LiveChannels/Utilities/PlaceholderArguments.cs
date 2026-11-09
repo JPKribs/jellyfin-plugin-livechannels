@@ -347,7 +347,10 @@ internal static class PlaceholderArguments
             stage = "[withlogo]";
         }
 
-        filter.Append(stage).Append(TextOverlay(layers.Style, layers.Height, logoPath, title, body) ?? string.Empty).Append("format=yuv420p[v]");
+        // Layers drawn small and scaled up keep their own display aspect through scale, so a 16-pixel-wide sky
+        // stretched to the frame would mark every pixel 1:20 and the channel encoder would squeeze the card into a
+        // sliver. The card is always square pixels.
+        filter.Append(stage).Append(TextOverlay(layers.Style, layers.Height, logoPath, title, body) ?? string.Empty).Append("setsar=1,format=yuv420p[v]");
         args.AddRange(["-f", "lavfi", "-i", Silence()]);
         filter.Append(";[").Append(I(next)).Append(":a]aformat=sample_rates=48000:channel_layouts=stereo[a]");
 
