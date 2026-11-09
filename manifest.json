@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "12.4.2.1",
+        "changelog": "\n## Fixed\n- Night sky, Lava lamp, and Aurora placeholder cards fill the screen instead of showing as a thin strip. Cached cards render again\n- Settings and Popular show a failure message when a save fails without a reason\n\n## Developer\n- Built with JPKribs.Jellyfin.Base 2026.10.28.",
+        "targetAbi": "12.4.0.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v12.4.2.1/jellyfin-plugin-livechannels-12.4.2.1.zip",
+        "checksum": "a61137e1ef07f8e03d33c2938f21fb86",
+        "timestamp": "2026-11-09T16:04:18Z"
+      },
+      {
         "version": "12.4.2.0",
         "changelog": "\n## Features\n- Placeholder blocks take a channel off air for a time window, showing one program in the guide (named \"-\" unless you name it) and looping a 10 second card with your message\n- Ten silent card styles that loop without a seam - Default, Static, Error, Ocean, Night sky, Lava lamp, Rain, Embers, Aurora, and Custom (your own image, GIF or video)\n- The card's message can name when the channel resumes and what it resumes with ({time} and {contentName}), and changes with every airing without rendering again\n- Placeholder cards render with the other buffer cards, only for channels that have a placeholder block, and again after you save one",
         "targetAbi": "12.4.0.0",
