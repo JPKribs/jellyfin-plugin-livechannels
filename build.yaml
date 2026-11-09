@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "12.4.2.0"
+version: "12.4.2.1"
 targetAbi: "12.4.0.0"
 framework: "net10.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -15,8 +15,8 @@ owner: "JPKribs"
 artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
-  features:
-  - Placeholder blocks take a channel off air for a time window, showing one program in the guide (named "-" unless you name it) and looping a 10 second card with your message
-  - Ten silent card styles that loop without a seam - Default, Static, Error, Ocean, Night sky, Lava lamp, Rain, Embers, Aurora, and Custom (your own image, GIF or video)
-  - The card's message can name when the channel resumes and what it resumes with ({time} and {contentName}), and changes with every airing without rendering again
-  - Placeholder cards render with the other buffer cards, only for channels that have a placeholder block, and again after you save one
+  fixed:
+  - Night sky, Lava lamp, and Aurora placeholder cards fill the screen instead of showing as a thin strip. Cached cards render again
+  - Settings and Popular show a failure message when a save fails without a reason
+  developer:
+  - Built with JPKribs.Jellyfin.Base 2026.10.28.
