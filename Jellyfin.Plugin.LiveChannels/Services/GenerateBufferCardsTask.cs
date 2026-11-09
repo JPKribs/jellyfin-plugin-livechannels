@@ -10,7 +10,8 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// <summary>
 /// A scheduled task (Dashboard &gt; Scheduled Tasks, Live TV category) that renders the buffer cards of every enabled
 /// channel that does not have current ones in the cache: the tune-in card in full, and the layer every Up Next card
-/// of the channel shares, so the bumper render at an item boundary only adds the item's text, artwork and ratings.
+/// of the channel shares, so the bumper render at an item boundary only adds the item's text, artwork and ratings,
+/// and the scene of each placeholder block, whose message is drawn on while it plays.
 /// It works from the plugin's configuration, not the guide, so cards and guide are built independently; it runs at
 /// start-up, after Reset schedule, and on demand. A tune-in never renders a card itself: it plays the cached one, or
 /// opens straight on content.
@@ -38,7 +39,7 @@ public sealed class GenerateBufferCardsTask : PluginScheduledTask
     public override string Key => TaskKey;
 
     /// <inheritdoc />
-    public override string Description => "Renders the tune-in card and the shared Up Next layer of every enabled Live Channels channel that does not have current ones, so tuning in never waits on a render and an Up Next card only adds the item.";
+    public override string Description => "Renders the tune-in card, the shared Up Next layer and the placeholder cards of every enabled Live Channels channel that does not have current ones, so tuning in never waits on a render, an Up Next card only adds the item, and a placeholder only adds its message.";
 
     /// <inheritdoc />
     public override string Category => "Live TV";

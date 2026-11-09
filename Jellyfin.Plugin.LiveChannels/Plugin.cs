@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Jellyfin.Plugin.LiveChannels.Configuration;
+using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Services;
 using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
@@ -113,9 +115,45 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
     {
         ArgumentNullException.ThrowIfNull(incoming);
         ArgumentNullException.ThrowIfNull(stored);
-        return !string.Equals(JsonSerializer.Serialize(incoming.Channels), JsonSerializer.Serialize(stored.Channels), StringComparison.Ordinal)
-            || !string.Equals(JsonSerializer.Serialize(incoming.PopularChannel), JsonSerializer.Serialize(stored.PopularChannel), StringComparison.Ordinal);
+        return !string.Equals(JsonSerializer.Serialize(incoming.Channels, ScheduleJson), JsonSerializer.Serialize(stored.Channels, ScheduleJson), StringComparison.Ordinal)
+            || !string.Equals(JsonSerializer.Serialize(incoming.PopularChannel, ScheduleJson), JsonSerializer.Serialize(stored.PopularChannel, ScheduleJson), StringComparison.Ordinal);
     }
+
+    private static readonly HashSet<string> CardOnly = new(StringComparer.Ordinal)
+    {
+        nameof(RatingBlock.PlaceholderName),
+        nameof(RatingBlock.PlaceholderStyle),
+        nameof(RatingBlock.PlaceholderTitle),
+        nameof(RatingBlock.PlaceholderBody),
+        nameof(RatingBlock.PlaceholderMediaPath),
+    };
+
+    // The channels as the schedule sees them: a placeholder block's name and card (style, file, message) change
+    // only what the guide and the card show, never what airs when, so editing them keeps every schedule.
+    private static readonly JsonSerializerOptions ScheduleJson = new()
+    {
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver
+        {
+            Modifiers =
+            {
+                static info =>
+                {
+                    if (info.Type != typeof(RatingBlock))
+                    {
+                        return;
+                    }
+
+                    for (var i = info.Properties.Count - 1; i >= 0; i--)
+                    {
+                        if (CardOnly.Contains(info.Properties[i].Name))
+                        {
+                            info.Properties.RemoveAt(i);
+                        }
+                    }
+                }
+            }
+        }
+    };
 
     /// <inheritdoc />
     public override IEnumerable<PluginPageInfo> GetPages()
@@ -174,6 +212,13 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
         {
             Name = "livechannels_sessions.js",
             EmbeddedResourcePath = $"{ns}.Configuration.livechannels_sessions.js"
+        };
+
+        // The placeholder block editor, shared by the Channels and Popular pages.
+        yield return new PluginPageInfo
+        {
+            Name = "livechannels_placeholder.js",
+            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_placeholder.js"
         };
 
         yield return new PluginPageInfo

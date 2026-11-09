@@ -1,4 +1,5 @@
 import { createConfigPage, confirmDialog, downloadJson, pickJsonFile } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { buildPlaceholderCard, newPlaceholderBlock, minutesToTime, timeToMinutes } from './configurationpage?name=livechannels_placeholder.js';
 
 export default function (view) {
     'use strict';
@@ -907,19 +908,6 @@ export default function (view) {
 
     // MARK: Rating blocks (time-of-day rating limits)
 
-    function pad2(n) { return (n < 10 ? '0' : '') + n; }
-
-    function minutesToTime(m) {
-        m = ((m % 1440) + 1440) % 1440;
-        return pad2(Math.floor(m / 60)) + ':' + pad2(m % 60);
-    }
-
-    function timeToMinutes(text) {
-        var parts = (text || '').split(':');
-        var mins = ((parseInt(parts[0], 10) || 0) * 60) + (parseInt(parts[1], 10) || 0);
-        return ((mins % 1440) + 1440) % 1440;
-    }
-
     function newRatingBlock() {
         return { MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, IsKids: false, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 };
     }
@@ -927,11 +915,12 @@ export default function (view) {
     // Existing channels store a single band in the legacy fields; show it as one all-day block so it stays visible
     // and editable. A channel already using blocks keeps them.
     function migrateRatingBlocks(ch) {
-        if (ch.RatingBlocks && ch.RatingBlocks.length) return ch.RatingBlocks;
+        var blocks = ch.RatingBlocks || [];
+        if (blocks.some(function (b) { return !b.IsPlaceholder; })) return blocks;
         if (ch.MinOfficialRating || ch.MaxOfficialRating || ch.IncludeUnrated === false) {
-            return [{ MinOfficialRating: ch.MinOfficialRating || '', MaxOfficialRating: ch.MaxOfficialRating || '', IncludeUnrated: ch.IncludeUnrated !== false, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 }];
+            return [{ MinOfficialRating: ch.MinOfficialRating || '', MaxOfficialRating: ch.MaxOfficialRating || '', IncludeUnrated: ch.IncludeUnrated !== false, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 }].concat(blocks);
         }
-        return [];
+        return blocks;
     }
 
     function renderRatingBlocks() {
@@ -944,7 +933,11 @@ export default function (view) {
             host.innerHTML = '<div class="jpk-empty-section">No rating blocks. Any rating airs at any time. Add one to restrict by rating or time of day.</div>';
             return;
         }
-        ch.RatingBlocks.forEach(function (block, index) { host.appendChild(buildBlockCard(block, index)); });
+        ch.RatingBlocks.forEach(function (block, index) {
+            host.appendChild(block.IsPlaceholder
+                ? buildPlaceholderCard(block, function () { editing.RatingBlocks.splice(index, 1); renderRatingBlocks(); })
+                : buildBlockCard(block, index));
+        });
     }
 
     // Builds one rating-block card: min/max rating, include-unrated, and an all-day/custom period whose start and
@@ -1170,11 +1163,16 @@ export default function (view) {
     }
 
     // Trigger Jellyfin's built-in guide refresh so channel changes propagate to Live TV (re-pull the
-    // channels and guide) without the user having to run it by hand.
+    // channels and guide) without the user having to run it by hand, and, when any channel has a placeholder
+    // block, the buffer cards task so a changed placeholder card is rendered before its window.
     function refreshLiveTv() {
         return ApiClient.getScheduledTasks().then(function (tasks) {
             var task = (tasks || []).filter(function (t) { return t.Key === 'RefreshGuide'; })[0];
-            if (task) return ApiClient.startScheduledTask(task.Id);
+            var cards = (tasks || []).filter(function (t) { return t.Key === 'LiveChannelsGenerateBufferCards'; })[0];
+            var started = [];
+            if (task) started.push(ApiClient.startScheduledTask(task.Id));
+            if (cards && (channels || []).some(function (c) { return (c.RatingBlocks || []).some(function (b) { return b.IsPlaceholder; }); })) started.push(ApiClient.startScheduledTask(cards.Id));
+            return Promise.all(started);
         }).catch(function () { /* best effort */ });
     }
 
@@ -1394,6 +1392,12 @@ export default function (view) {
             if (!editing) return;
             editing.RatingBlocks = editing.RatingBlocks || [];
             editing.RatingBlocks.push(newRatingBlock());
+            renderRatingBlocks();
+        });
+        el('addPlaceholderBlock').addEventListener('click', function () {
+            if (!editing) return;
+            editing.RatingBlocks = editing.RatingBlocks || [];
+            editing.RatingBlocks.push(newPlaceholderBlock());
             renderRatingBlocks();
         });
         el('btnNewChannel').addEventListener('click', addChannel);

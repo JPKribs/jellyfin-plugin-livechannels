@@ -31,7 +31,8 @@ public partial class ChannelService
         ArgumentNullException.ThrowIfNull(programs);
 
         var blocks = ResolveRatingBlocks(channel);
-        if (!HasTimeOfDayRating(blocks))
+        var placeholders = PlaceholderWindowsFor(channel);
+        if (!HasTimeOfDayRating(blocks) && placeholders.IsEmpty)
         {
             return (ScheduleCalculator.BuildSchedule(programs, fromUtc, toUtc, ScheduleCalculator.AnchorFor(programs)), default);
         }
@@ -47,7 +48,7 @@ public partial class ChannelService
             anchorUtc = fromUtc;
         }
 
-        var schedule = DaypartSchedule.BuildResumable(programs, blocks, channel.TransitionWindowMinutes, TimeZoneInfo.Local, anchorUtc, fromUtc, toUtc, channel.Id, resume, out var state, MaxDaypartBlock(channel), exactStart: spliced is not null, keepMultiPart: channel.KeepMultiPartTogether);
+        var schedule = DaypartSchedule.BuildResumable(programs, blocks, channel.TransitionWindowMinutes, TimeZoneInfo.Local, anchorUtc, fromUtc, toUtc, channel.Id, resume, out var state, MaxDaypartBlock(channel), exactStart: spliced is not null, keepMultiPart: channel.KeepMultiPartTogether, placeholders: placeholders);
         return (schedule, state);
     }
 
@@ -58,12 +59,22 @@ public partial class ChannelService
         => channel.EffectiveLoopMode() == LoopMode.Shuffle ? int.MaxValue : Math.Max(1, channel.EpisodesPerBlock);
 
     /// <summary>
-    /// Whether the channel's rating limits vary by time of day (it carries at least one custom block), so it needs
-    /// the daypart schedule and the per-item stream path rather than the free-running loop.
+    /// Whether the channel's rating limits vary by time of day (it carries at least one custom block) or it has a
+    /// placeholder window, so it needs the daypart schedule and the per-item stream path rather than the
+    /// free-running loop.
     /// </summary>
     /// <param name="channel">The channel.</param>
     /// <returns><c>true</c> when the channel has a time-of-day rating block.</returns>
-    internal bool IsTimeOfDayChannel(Channel channel) => HasTimeOfDayRating(ResolveRatingBlocks(channel));
+    internal bool IsTimeOfDayChannel(Channel channel) => HasTimeOfDayRating(ResolveRatingBlocks(channel)) || !PlaceholderWindowsFor(channel).IsEmpty;
+
+    /// <summary>The channel's placeholder windows in the server's local time.</summary>
+    /// <param name="channel">The channel.</param>
+    /// <returns>The windows.</returns>
+    internal static PlaceholderWindows PlaceholderWindowsFor(Channel channel)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        return new PlaceholderWindows(channel.PlaceholderBlocks(), TimeZoneInfo.Local);
+    }
 
     /// <summary>
     /// Whether a kids-tagged rating block is active at the given UTC instant (in the server's local time), so the
@@ -102,8 +113,8 @@ public partial class ChannelService
             result.Add(new ResolvedRatingBlock(
                 window,
                 block.Period == RatingBlockPeriod.AllDay,
-                NormalizeMinute(block.StartMinutes),
-                NormalizeMinute(block.EndMinutes)));
+                RatingSchedule.NormalizeMinute(block.StartMinutes),
+                RatingSchedule.NormalizeMinute(block.EndMinutes)));
         }
 
         return result;
@@ -132,6 +143,4 @@ public partial class ChannelService
         return new RatingFilter(window.Min, window.Max, window.IncludeUnrated);
     }
 
-    private static int NormalizeMinute(int minute)
-        => ((minute % RatingSchedule.MinutesPerDay) + RatingSchedule.MinutesPerDay) % RatingSchedule.MinutesPerDay;
 }

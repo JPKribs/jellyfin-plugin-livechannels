@@ -78,8 +78,11 @@
                                     <button is="emby-button" type="button" id="popularAddRatingBlock" class="raised jpk-icon-btn jpk-button-submit" title="Add a rating block">
                                         <span class="material-icons" aria-hidden="true">add</span><span>Add rating block</span>
                                     </button>
+                                    <button is="emby-button" type="button" id="popularAddPlaceholderBlock" class="raised jpk-icon-btn jpk-button-submit" title="Add a placeholder block">
+                                        <span class="material-icons" aria-hidden="true">tv_off</span><span>Add placeholder block</span>
+                                    </button>
                                 </div>
-                                <div class="fieldDescription">Limit which ratings air, optionally by time of day. No blocks means anything airs. On overlap, the lowest min and max win. The top titles are picked from what the rating allows.</div>
+                                <div class="fieldDescription">Limit which ratings air, optionally by time of day. No blocks means anything airs. On overlap, the lowest min and max win. The top titles are picked from what the rating allows. A placeholder block takes the channel off air for its window: the guide shows one program by the block's name and the channel loops a card with your message. Whatever is airing when the window opens is cut there, and when the window ends the channel goes on with the next item in its loop.</div>
                             </div>
                             <div class="inputContainer">
                                 <label for="popularTransitionWindow">Transition window (minutes)</label>
@@ -173,6 +176,7 @@
         .lc-block-title { flex: 1; min-width: 0; font-weight: 600; }
         .lc-block-times { display: flex; gap: 12px; }
         .lc-block-times .inputContainer { flex: 1; margin: 0; }
+        .lc-placeholderblock .lc-block-times { margin-bottom: 1em; }
     </style>
 
     <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">

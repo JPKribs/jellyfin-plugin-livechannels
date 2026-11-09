@@ -83,6 +83,37 @@ public static class RatingSchedule
     /// <summary>The number of minutes in a day.</summary>
     public const int MinutesPerDay = 1440;
 
+    /// <summary>A minute of the day folded into 0-1439, so a stray value outside the day still names a real minute.</summary>
+    /// <param name="minute">The minute.</param>
+    /// <returns>The minute of the day.</returns>
+    public static int NormalizeMinute(int minute)
+        => ((minute % MinutesPerDay) + MinutesPerDay) % MinutesPerDay;
+
+    /// <summary>
+    /// The minutes of the day a custom window covers, as at most two half-open spans within the day: one, or two
+    /// when it wraps past midnight. A window whose start and end are the same covers nothing.
+    /// </summary>
+    /// <param name="startMinutes">The window's start.</param>
+    /// <param name="endMinutes">The window's end, exclusive.</param>
+    /// <returns>The spans.</returns>
+    public static IEnumerable<(int From, int To)> Spans(int startMinutes, int endMinutes)
+    {
+        var start = NormalizeMinute(startMinutes);
+        var end = NormalizeMinute(endMinutes);
+        if (start < end)
+        {
+            yield return (start, end);
+        }
+        else if (start > end)
+        {
+            yield return (start, MinutesPerDay);
+            if (end > 0)
+            {
+                yield return (0, end);
+            }
+        }
+    }
+
     /// <summary>
     /// The effective rating window at a minute of the day: the combined constraint of every block active then,
     /// or <see cref="RatingWindow.Unrestricted"/> when none is active.

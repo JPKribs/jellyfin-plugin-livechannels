@@ -165,7 +165,7 @@ public sealed class PerformancePassTests : IDisposable
 
         var still = IntroService.LogoInput(png, 15)!.Value;
         Assert.True(still.Still);
-        Assert.Equal(["-f", "image2", "-i", png], still.Args);
+        Assert.Equal(["-f", "image2", "-pattern_type", "none", "-i", png], still.Args);
         Assert.Null(IntroService.LogoInput(Path.Combine(_dir, "missing.png"), 15));
     }
 

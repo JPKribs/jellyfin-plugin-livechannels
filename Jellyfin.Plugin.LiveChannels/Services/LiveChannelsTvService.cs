@@ -219,6 +219,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
                 var logo = await EnsureLogoAsync(channel, cancellationToken).ConfigureAwait(false);
                 await _intros.EnsureAsync(channel, logo).ConfigureAwait(false);
                 await _streams.PrepareBumperLayerAsync(channel, logo, cancellationToken).ConfigureAwait(false);
+                await _streams.PreparePlaceholdersAsync(channel, logo, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -229,12 +230,34 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
     }
 
-    /// <summary>Deletes every cached tune-in card and Up Next layer, so the next "Generate Buffer Cards" run renders them all afresh.</summary>
+    /// <summary>Deletes every cached tune-in card, Up Next layer and placeholder card, so the next "Generate Buffer Cards" run renders them all afresh.</summary>
     public void ClearBufferCards()
     {
         _intros.ClearCache();
         _streams.ClearBumperLayers();
+        _streams.ClearPlaceholders();
     }
+
+    // A placeholder window's guide entry: only the block's name and the window. No year, episode, rating, genres or
+    // artwork, and never new. Its show id is fixed per channel and name, so Jellyfin groups its airings together.
+    internal static ProgramInfo PlaceholderProgram(Channel channel, string channelId, ScheduledProgram slot)
+        => new()
+        {
+            Id = channelId + "_" + slot.Start.Ticks.ToString(CultureInfo.InvariantCulture),
+            ChannelId = channelId,
+            Name = slot.Program.Title,
+            StartDate = slot.Start,
+            EndDate = slot.Stop,
+            ShowId = PlaceholderShowId(channelId, slot.Program.Title),
+            IsSports = channel.Category == ChannelCategory.Sports,
+            IsNews = channel.Category == ChannelCategory.News,
+            IsRepeat = true,
+            HasImage = false,
+        };
+
+    // A stable id for a channel's placeholder by name, shaped like the item ids the other entries use.
+    private static string PlaceholderShowId(string channelId, string name)
+        => new Guid(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("placeholder|" + channelId + "|" + name)).AsSpan(0, 16)).ToString("N", CultureInfo.InvariantCulture);
 
     /// <inheritdoc />
     public async Task<IEnumerable<ChannelInfo>> GetChannelsAsync(CancellationToken cancellationToken)
@@ -291,6 +314,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         foreach (var slot in schedule)
         {
             var p = slot.Program;
+            if (p.IsPlaceholder)
+            {
+                list.Add(PlaceholderProgram(channel, channelId, slot));
+                continue;
+            }
 
             // For episodes, hand Jellyfin the series as the program name and the episode's own name as the
             // episode title, so the guide renders "Andor — Reckoning · S1E3" instead of a single blurred string.

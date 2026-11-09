@@ -289,12 +289,24 @@ public partial class ChannelService
             return new ProgramLoop(built, null, leadTicks);
         }
 
+        // During a placeholder window the new loop carries on with what was due after it. It is still anchored at
+        // the window's start: the chain places the window first, then that item, so nothing on air moves.
+        var content = airing;
+        if (airing.Program.IsPlaceholder)
+        {
+            content = BuildTimeline(channel, previous, airing.Stop, airing.Stop.AddDays(2)).FirstOrDefault(s => !s.Program.IsPlaceholder && s.Start >= airing.Stop);
+            if (content is null)
+            {
+                return new ProgramLoop(built, null, leadTicks);
+            }
+        }
+
         // An item the rebuild dropped (deleted, or filtered out) cannot continue; the new loop then simply starts
         // at the old program's slot, which still keeps every later program on the new loop's own boundaries.
         var index = 0;
         for (var i = 0; i < built.Count; i++)
         {
-            if (built[i].ItemId == airing.Program.ItemId)
+            if (built[i].ItemId == content.Program.ItemId)
             {
                 index = i;
                 break;
@@ -306,7 +318,7 @@ public partial class ChannelService
         var rotated = index == 0 ? items : items.Skip(index).Concat(items.Take(index)).ToList();
         var anchor = airing.Start;
         var newLead = TimeSpan.FromTicks(Math.Max(0, leadTicks));
-        if (newLead != airing.Lead && nowUtc >= airing.ContentStart)
+        if (!airing.Program.IsPlaceholder && newLead != airing.Lead && nowUtc >= airing.ContentStart)
         {
             anchor = airing.ContentStart - newLead;
         }

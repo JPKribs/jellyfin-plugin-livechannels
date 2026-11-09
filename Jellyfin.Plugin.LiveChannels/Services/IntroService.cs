@@ -479,7 +479,8 @@ public sealed class IntroService : IDisposable
             return (["-f", "gif", "-stream_loop", "-1", .. length, "-i", logoPath!], false);
         }
 
-        return (["-f", "image2", "-i", logoPath!], true);
+        // A single file, never an image sequence: a "%" in its path is part of the name.
+        return (["-f", "image2", "-pattern_type", "none", "-i", logoPath!], true);
     }
 
     // Renders the card's visual as a plain 8-bit progressive video at the channel's frame size and rate with the

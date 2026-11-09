@@ -564,10 +564,7 @@ public sealed class BumperService : IDisposable
             {
                 // Named by content, so a line already written is reused, and the prune clears old ones.
                 var file = Path.Combine(texts, Hash(text) + ".txt");
-                if (!File.Exists(file))
-                {
-                    File.WriteAllText(file, text);
-                }
+                AtomicFiles.WriteOnce(file, text);
 
                 Touch(file);
                 return file;

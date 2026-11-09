@@ -1,4 +1,5 @@
 import { createConfigPage } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { buildPlaceholderCard, newPlaceholderBlock, minutesToTime, timeToMinutes } from './configurationpage?name=livechannels_placeholder.js';
 
 export default function (view) {
     'use strict';
@@ -48,19 +49,17 @@ export default function (view) {
 
     // MARK: Rating blocks (shared design with the channel editor)
 
-    function pad2(n) { return (n < 10 ? '0' : '') + n; }
-    function minutesToTime(m) { m = ((m % 1440) + 1440) % 1440; return pad2(Math.floor(m / 60)) + ':' + pad2(m % 60); }
-    function timeToMinutes(text) { var p = (text || '').split(':'); var mins = ((parseInt(p[0], 10) || 0) * 60) + (parseInt(p[1], 10) || 0); return ((mins % 1440) + 1440) % 1440; }
     function newRatingBlock() { return { MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, IsKids: false, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 }; }
     function ratingValue(name) { if (!name) return null; for (var i = 0; i < ratings.length; i++) { if (ratings[i].Name === name) return ratings[i].Value; } return null; }
     function coerceBand(minEl, maxEl, changed) { var mn = ratingValue(minEl.value), mx = ratingValue(maxEl.value); if (mn === null || mx === null || mn <= mx) return; if (changed === 'min') { maxEl.value = minEl.value; } else { minEl.value = maxEl.value; } }
 
     function migrateRatingBlocks(pc) {
-        if (pc.RatingBlocks && pc.RatingBlocks.length) return pc.RatingBlocks;
+        var blocks = pc.RatingBlocks || [];
+        if (blocks.some(function (b) { return !b.IsPlaceholder; })) return blocks;
         if (pc.MinOfficialRating || pc.MaxOfficialRating || pc.IncludeUnrated === false) {
-            return [{ MinOfficialRating: pc.MinOfficialRating || '', MaxOfficialRating: pc.MaxOfficialRating || '', IncludeUnrated: pc.IncludeUnrated !== false, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 }];
+            return [{ MinOfficialRating: pc.MinOfficialRating || '', MaxOfficialRating: pc.MaxOfficialRating || '', IncludeUnrated: pc.IncludeUnrated !== false, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 }].concat(blocks);
         }
-        return [];
+        return blocks;
     }
 
     function renderRatingBlocks() {
@@ -72,7 +71,11 @@ export default function (view) {
             host.innerHTML = '<div class="jpk-empty-section">No rating blocks. Any rating airs at any time. Add one to restrict by rating or time of day.</div>';
             return;
         }
-        popularConfig.RatingBlocks.forEach(function (block, index) { host.appendChild(buildBlockCard(block, index)); });
+        popularConfig.RatingBlocks.forEach(function (block, index) {
+            host.appendChild(block.IsPlaceholder
+                ? buildPlaceholderCard(block, function () { popularConfig.RatingBlocks.splice(index, 1); renderRatingBlocks(); })
+                : buildBlockCard(block, index));
+        });
     }
 
     function buildBlockCard(block, index) {
@@ -157,11 +160,16 @@ export default function (view) {
         el('popularLoopMode').value = pc.LoopMode || (pc.Shuffle === false ? 'Alphabetical' : 'Shuffle');
     }
 
-    // Triggers Jellyfin's built-in guide refresh so a save propagates to Live TV right away.
+    // Triggers Jellyfin's built-in guide refresh so a save propagates to Live TV right away, and the buffer cards
+    // task when the channel has a placeholder block, so a changed placeholder card is rendered before its window.
     function refreshGuide() {
         return ApiClient.getScheduledTasks().then(function (tasks) {
             var task = (tasks || []).filter(function (t) { return t.Key === 'RefreshGuide'; })[0];
-            if (task) return ApiClient.startScheduledTask(task.Id);
+            var cards = (tasks || []).filter(function (t) { return t.Key === 'LiveChannelsGenerateBufferCards'; })[0];
+            var started = [];
+            if (task) started.push(ApiClient.startScheduledTask(task.Id));
+            if (cards && !!(popularConfig && (popularConfig.RatingBlocks || []).some(function (b) { return b.IsPlaceholder; }))) started.push(ApiClient.startScheduledTask(cards.Id));
+            return Promise.all(started);
         }).catch(function () { /* best effort */ });
     }
 
@@ -214,6 +222,12 @@ export default function (view) {
             if (!popularConfig) return;
             popularConfig.RatingBlocks = popularConfig.RatingBlocks || [];
             popularConfig.RatingBlocks.push(newRatingBlock());
+            renderRatingBlocks();
+        });
+        el('popularAddPlaceholderBlock').addEventListener('click', function () {
+            if (!popularConfig) return;
+            popularConfig.RatingBlocks = popularConfig.RatingBlocks || [];
+            popularConfig.RatingBlocks.push(newPlaceholderBlock());
             renderRatingBlocks();
         });
     }

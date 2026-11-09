@@ -39,6 +39,7 @@
     <EmbeddedResource Include="Configuration\livechannels_popular.js" />
     <EmbeddedResource Include="Configuration\livechannels_sessions.html" />
     <EmbeddedResource Include="Configuration\livechannels_sessions.js" />
+    <EmbeddedResource Include="Configuration\livechannels_placeholder.js" />
   </ItemGroup>
 
   <ItemGroup>

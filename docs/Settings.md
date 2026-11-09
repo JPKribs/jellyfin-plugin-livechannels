@@ -73,6 +73,21 @@ Rating blocks limit which ratings air, optionally by time of day. With no blocks
 
 Where two blocks overlap, the lowest minimum and the lowest maximum win. A channel with any custom (time of day) block schedules itself by the clock, so what airs at 3 PM really is what the daytime block allows.
 
+#### Placeholder blocks
+
+A placeholder block takes the channel off air for a window of the day. The guide shows one program for the whole window, and the channel loops a 10 second card with a message. Whatever is airing when the window opens is cut there (the rest of it does not air), and when the window ends the channel goes on with the next item in its loop. An item that would air for less than 30 seconds before the window cuts it does not start at all: the window opens then instead (an item that ends before the window is unaffected). Changes you save while a window is on air reach viewers within about ten minutes: a new look or message shows once its card is rendered, and a window you remove, shorten or move ends then, joining whatever the guide now shows at that moment. Placeholder blocks never limit ratings, and two of them may not overlap.
+
+| Setting | What it does | Default |
+| --- | --- | --- |
+| **Start time** and **End time** | The window. It may wrap past midnight (23:30 to 06:00 works). | 00:00 to 06:00 |
+| **Guide name** | What the guide calls the window. It shows no year, episode or rating. | `-` |
+| **Style** | The card's look: **Default** (the tune-in card's flowing lines), **Static**, **Error** (colour bars), **Ocean**, **Night sky**, **Lava lamp**, **Rain**, **Embers**, **Aurora**, or **Custom**. Every card is silent. | Default |
+| **Image, GIF or video** | For **Custom**, a path on the server (required for Custom). A GIF or video should be exactly 10 seconds long and end where it starts, so it loops cleanly; a shorter one repeats and a longer one is cut at 10 seconds. A file that is missing when the cards render falls back to the Default look. | none |
+| **Title** | The large line of the message. Leave it empty to leave it off. | Thank you for watching! |
+| **Message** | The smaller line. `{time}` becomes the time the channel resumes and `{contentName}` what it resumes with (an episode by its series name). | We will resume at {time} with {contentName}. |
+
+The cards render with the other buffer cards (**Generate Buffer Cards** in Scheduled Tasks, which runs at startup, after **Reset schedule**, and after you save a channel that has a placeholder block), and only for channels that have one. The message is drawn on while the card plays, so each airing names its own time and content without another render. Until a card is rendered, or if it will not play, its window shows the message over black. Changing only a placeholder's name, style or message keeps every channel's schedule as it is.
+
 #### Everything else
 
 | Setting | What it does | Default |

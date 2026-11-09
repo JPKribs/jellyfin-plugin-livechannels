@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace Jellyfin.Plugin.LiveChannels.Models;
 
@@ -27,8 +28,23 @@ public sealed class ProgramEntry
     /// <summary>Gets the Jellyfin item id.</summary>
     public Guid ItemId { get; }
 
+    /// <summary>
+    /// Gets the placeholder block this entry stands for, or <c>null</c> for content. A placeholder entry is never
+    /// part of a loop: the daypart schedule makes one for each placeholder window it places, so it is not cached.
+    /// </summary>
+    [JsonIgnore]
+    public RatingBlock? Placeholder { get; init; }
+
+    /// <summary>Gets a value indicating whether the entry is a placeholder window rather than content.</summary>
+    [JsonIgnore]
+    public bool IsPlaceholder => Placeholder is not null;
+
     /// <summary>Gets the program title.</summary>
     public string Title { get; }
+
+    /// <summary>Gets the name the guide gives the program: the series for an episode, otherwise its title.</summary>
+    [JsonIgnore]
+    public string GuideName => SeriesId.HasValue && !string.IsNullOrWhiteSpace(SeriesName) ? SeriesName! : Title;
 
     /// <summary>Gets the program description, or <c>null</c>.</summary>
     public string? Overview { get; }
@@ -211,4 +227,23 @@ public sealed class ScheduledProgram
 
     /// <summary>Gets the UTC time the item itself starts: the slot start plus the bumper lead.</summary>
     public DateTime ContentStart => Start + Lead;
+
+    /// <summary>
+    /// A placeholder window's guide entry: the block's name, no library item, lasting the whole window.
+    /// </summary>
+    /// <param name="block">The placeholder block.</param>
+    /// <param name="start">The window's UTC start.</param>
+    /// <param name="stop">The window's UTC end.</param>
+    /// <returns>The scheduled placeholder.</returns>
+    public static ScheduledProgram ForPlaceholder(RatingBlock block, DateTime start, DateTime stop)
+    {
+        ArgumentNullException.ThrowIfNull(block);
+        var name = string.IsNullOrWhiteSpace(block.PlaceholderName) ? RatingBlock.DefaultPlaceholderName : block.PlaceholderName.Trim();
+        var entry = new ProgramEntry(Guid.Empty, name, null, (stop - start).Ticks, null)
+        {
+            Placeholder = block,
+            ItemKind = "Placeholder",
+        };
+        return new ScheduledProgram(entry, start, stop);
+    }
 }

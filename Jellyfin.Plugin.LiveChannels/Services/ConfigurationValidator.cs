@@ -144,6 +144,10 @@ public static class ConfigurationValidator
         {
             block.MinOfficialRating ??= string.Empty;
             block.MaxOfficialRating ??= string.Empty;
+            block.PlaceholderName = string.IsNullOrWhiteSpace(block.PlaceholderName) ? RatingBlock.DefaultPlaceholderName : block.PlaceholderName.Trim();
+            block.PlaceholderTitle = (block.PlaceholderTitle ?? string.Empty).Trim();
+            block.PlaceholderBody = (block.PlaceholderBody ?? string.Empty).Trim();
+            block.PlaceholderMediaPath = (block.PlaceholderMediaPath ?? string.Empty).Trim();
         }
 
         channel.Sources ??= new List<LibrarySource>();
@@ -327,7 +331,61 @@ public static class ConfigurationValidator
                 throw new ArgumentException("Custom rating block needs different start and end times: " + Describe(channel));
             }
         }
+
+        ValidatePlaceholders(channel);
     }
+
+    /// <summary>The longest placeholder name, title or body accepted, in characters.</summary>
+    internal const int MaxPlaceholderText = 200;
+
+    // A placeholder block takes the channel off air for its window, so it needs a window (all day would take the
+    // channel off air for good), its windows must not overlap one another, its texts stay short enough to fit the
+    // card, and a custom one names its picture or video.
+    private static void ValidatePlaceholders(Channel channel)
+    {
+        var placeholders = channel.RatingBlocks.Where(b => b.IsPlaceholder).ToList();
+        foreach (var block in placeholders)
+        {
+            if (block.Period != RatingBlockPeriod.Custom)
+            {
+                throw new ArgumentException("Placeholder block needs start and end times: " + Describe(channel));
+            }
+
+            if ((block.PlaceholderName?.Length ?? 0) > MaxPlaceholderText || (block.PlaceholderTitle?.Length ?? 0) > MaxPlaceholderText || (block.PlaceholderBody?.Length ?? 0) > MaxPlaceholderText)
+            {
+                throw new ArgumentException("Placeholder name, title and message must be at most " + MaxPlaceholderText + " characters: " + Describe(channel));
+            }
+
+            if (!Enum.IsDefined(block.PlaceholderStyle))
+            {
+                throw new ArgumentException("Placeholder style is not recognised: " + Describe(channel));
+            }
+
+            // Only that a file is named: one that is missing (a share offline) falls back to the default look when
+            // the cards render, and must not block saving anything else.
+            if (block.PlaceholderStyle == PlaceholderStyle.Custom && string.IsNullOrWhiteSpace(block.PlaceholderMediaPath))
+            {
+                throw new ArgumentException("Custom placeholder needs the path of an image, GIF or video on the server: " + Describe(channel));
+            }
+        }
+
+        for (var i = 0; i < placeholders.Count; i++)
+        {
+            for (var j = i + 1; j < placeholders.Count; j++)
+            {
+                if (Overlap(placeholders[i], placeholders[j]))
+                {
+                    throw new ArgumentException("Placeholder blocks must not overlap: " + Describe(channel));
+                }
+            }
+        }
+    }
+
+    // Whether two custom windows share any minute of the day, each wrapping past midnight when its end is before
+    // its start.
+    internal static bool Overlap(RatingBlock a, RatingBlock b)
+        => RatingSchedule.Spans(a.StartMinutes, a.EndMinutes)
+            .Any(x => RatingSchedule.Spans(b.StartMinutes, b.EndMinutes).Any(y => x.From < y.To && y.From < x.To));
 
     private static string Describe(Channel channel)
         => string.IsNullOrWhiteSpace(channel.Name) ? "channel " + channel.Number : channel.Name;

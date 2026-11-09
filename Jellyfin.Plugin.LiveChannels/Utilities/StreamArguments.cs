@@ -100,6 +100,7 @@ public static class StreamArguments
     /// <param name="toneMapStage">The software tone-map filter for an HDR item outside the GPU-resident pipeline (jellyfin-ffmpeg's tonemapx with the server's settings), or <c>null</c> for the portable zscale chain.</param>
     /// <param name="inputMatrix">The colour matrix the item's pixels are in (see <see cref="InputMatrix"/>), so an SDR item is converted to the channel's bt709; <c>auto</c> leaves it to ffmpeg.</param>
     /// <param name="overlayFilter">Filters drawn onto the picture before it is scaled, ending in a comma (an Up Next card's Then line), or <c>null</c>. Applied on the software path only, which is the one cards play through.</param>
+    /// <param name="loopInput">Whether the input plays over and over (a placeholder card through its window): the offset is where the first play starts, each later one starts from the top, and <paramref name="durationLimit"/> ends the whole run.</param>
     /// <returns>The ffmpeg argument list.</returns>
     public static List<string> Build(
         string path,
@@ -122,7 +123,8 @@ public static class StreamArguments
         TimeSpan? silentAudio = null,
         string? toneMapStage = null,
         string inputMatrix = "auto",
-        string? overlayFilter = null)
+        string? overlayFilter = null,
+        bool loopInput = false)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(video);
@@ -235,6 +237,11 @@ public static class StreamArguments
         else
         {
             Add(args, "-readrate", RealtimeReadRate);
+        }
+
+        if (loopInput)
+        {
+            Add(args, "-stream_loop", "-1");
         }
 
         args.Add("-i");

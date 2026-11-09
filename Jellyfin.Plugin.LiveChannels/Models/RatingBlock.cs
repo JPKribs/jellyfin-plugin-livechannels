@@ -20,6 +20,37 @@ public class RatingBlock
     /// <summary>Gets or sets a value indicating whether the guide tags the channel as kids content while this block is active.</summary>
     public bool IsKids { get; set; }
 
+    /// <summary>
+    /// Gets or sets a value indicating whether the block is a placeholder: while it is active the channel airs a looping
+    /// card instead of content, and the guide shows one program named <see cref="PlaceholderName"/> for the window. A
+    /// placeholder block's rating fields are ignored, and it never limits what airs outside its window.
+    /// </summary>
+    public bool IsPlaceholder { get; set; }
+
+    /// <summary>Gets or sets the program name the guide shows for a placeholder block's window.</summary>
+    public string PlaceholderName { get; set; } = DefaultPlaceholderName;
+
+    /// <summary>Gets or sets the look of a placeholder block's card.</summary>
+    public PlaceholderStyle PlaceholderStyle { get; set; } = PlaceholderStyle.Default;
+
+    /// <summary>Gets or sets the large line of a placeholder block's message. Empty leaves it out.</summary>
+    public string PlaceholderTitle { get; set; } = DefaultPlaceholderTitle;
+
+    /// <summary>Gets or sets the smaller line of a placeholder block's message. <c>{time}</c> becomes the time the channel resumes and <c>{contentName}</c> what it resumes with. Empty leaves it out.</summary>
+    public string PlaceholderBody { get; set; } = DefaultPlaceholderBody;
+
+    /// <summary>Gets or sets the image, GIF or video on the server a <see cref="PlaceholderStyle.Custom"/> placeholder shows. A GIF or video should be ten seconds long to loop cleanly.</summary>
+    public string PlaceholderMediaPath { get; set; } = string.Empty;
+
+    /// <summary>The guide name a new placeholder block starts with.</summary>
+    public const string DefaultPlaceholderName = "-";
+
+    /// <summary>The message title a new placeholder block starts with.</summary>
+    public const string DefaultPlaceholderTitle = "Thank you for watching!";
+
+    /// <summary>The message body a new placeholder block starts with.</summary>
+    public const string DefaultPlaceholderBody = "We will resume at {time} with {contentName}.";
+
     /// <summary>Gets or sets whether the block applies all day or only during its custom window.</summary>
     public RatingBlockPeriod Period { get; set; } = RatingBlockPeriod.AllDay;
 

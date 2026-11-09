@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "12.4.1.3"
+version: "12.4.2.0"
 targetAbi: "12.4.0.0"
 framework: "net10.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -16,5 +16,7 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   features:
-  - Up Next cards for music videos show the artist under the title, and the Then line names the next music video's artist (after the next guide refresh)
-  - Up Next cards for music videos show only the year, or no details line when the year is missing
+  - Placeholder blocks take a channel off air for a time window, showing one program in the guide (named "-" unless you name it) and looping a 10 second card with your message
+  - Ten silent card styles that loop without a seam - Default, Static, Error, Ocean, Night sky, Lava lamp, Rain, Embers, Aurora, and Custom (your own image, GIF or video)
+  - The card's message can name when the channel resumes and what it resumes with ({time} and {contentName}), and changes with every airing without rendering again
+  - Placeholder cards render with the other buffer cards, only for channels that have a placeholder block, and again after you save one

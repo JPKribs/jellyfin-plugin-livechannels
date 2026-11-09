@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Jellyfin.Plugin.LiveChannels.Models;
 
@@ -130,15 +131,16 @@ public class Channel
         => LoopMode == LoopMode.Shuffle && !Shuffle ? LoopMode.Alphabetical : LoopMode;
 
     /// <summary>
-    /// Returns the channel's rating blocks, migrating the legacy single-band fields into one all-day block when no
-    /// blocks are configured. An empty result means every rating is allowed at every time.
+    /// Returns the channel's rating blocks (placeholder blocks aside), migrating the legacy single-band fields into
+    /// one all-day block when no blocks are configured. An empty result means every rating is allowed at every time.
     /// </summary>
     /// <returns>The effective rating blocks.</returns>
     public IReadOnlyList<RatingBlock> EffectiveRatingBlocks()
     {
-        if (RatingBlocks.Count > 0)
+        var limits = RatingBlocks.Where(b => !b.IsPlaceholder).ToList();
+        if (limits.Count > 0)
         {
-            return RatingBlocks;
+            return limits;
         }
 
         if (!string.IsNullOrEmpty(MinOfficialRating) || !string.IsNullOrEmpty(MaxOfficialRating) || !IncludeUnrated)
@@ -157,4 +159,12 @@ public class Channel
 
         return Array.Empty<RatingBlock>();
     }
+
+    /// <summary>
+    /// The channel's placeholder blocks that take effect: those with a custom time window. While one is active the
+    /// channel airs its looping card instead of content.
+    /// </summary>
+    /// <returns>The placeholder blocks.</returns>
+    public IReadOnlyList<RatingBlock> PlaceholderBlocks()
+        => RatingBlocks.Where(b => b is { IsPlaceholder: true, Period: RatingBlockPeriod.Custom }).ToList();
 }

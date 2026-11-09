@@ -274,6 +274,10 @@ internal sealed class DaypartStreamSchedule : IStreamSchedule
     // from the anchor (each successive re-walk of a long-running session would otherwise get longer).
     private DaypartChainState? _chain;
 
+    // The slots just past the refilled window, worked out once when something asks that far ahead, until the next
+    // refill moves the window on.
+    private List<ScheduledProgram>? _beyond;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="DaypartStreamSchedule"/> class.
     /// </summary>
@@ -323,7 +327,50 @@ internal sealed class DaypartStreamSchedule : IStreamSchedule
     }
 
     public (ProgramEntry Program, DateTime StartUtc)? Following(int ahead)
-        => _pos + ahead < _window.Count ? (_window[_pos + ahead].Program, _window[_pos + ahead].Start) : null;
+    {
+        if (_pos + ahead < _window.Count)
+        {
+            return (_window[_pos + ahead].Program, _window[_pos + ahead].Start);
+        }
+
+        // Past this refill's horizon (a long placeholder window can end exactly on it): look on into the chain from
+        // where it stopped, without moving playback.
+        var beyond = _pos + ahead - _window.Count;
+        if (_window.Count == 0 || beyond < 0)
+        {
+            return null;
+        }
+
+        if (_beyond is null)
+        {
+            var from = _window[^1].Stop;
+            var (more, _) = _channels.BuildTimelineResumable(_channel, _pool, from, from + Horizon, _chain);
+            _beyond = more.Where(s => s.Start >= from).ToList();
+        }
+
+        return beyond < _beyond.Count ? (_beyond[beyond].Program, _beyond[beyond].Start) : null;
+    }
+
+    /// <summary>
+    /// Rejoins the schedule partway into the current slot, on the channel as configured now: a placeholder window
+    /// that a save removed, shortened or moved ends where playback has reached, and whatever the rebuilt schedule
+    /// airs then (content, or the window as it is now) plays from there.
+    /// </summary>
+    /// <param name="intoSlot">How far into the current slot playback has reached.</param>
+    /// <param name="current">The channel as configured now, or <c>null</c> to keep the one in use.</param>
+    public void RejoinAfter(TimeSpan intoSlot, Channel? current)
+    {
+        var at = _window[_pos].Start + intoSlot;
+        if (_follower?.TryTakeNewer(RefreshWait) is { } fresh)
+        {
+            _pool = fresh;
+        }
+
+        _channel = current ?? _follower?.Channel ?? _channel;
+        _chain = null;
+        Refill(at);
+        JoinAt(at);
+    }
 
     public void Advance()
     {
@@ -364,6 +411,7 @@ internal sealed class DaypartStreamSchedule : IStreamSchedule
     {
         var (schedule, chain) = _channels.BuildTimelineResumable(_channel, _pool, fromUtc, fromUtc + Horizon, _chain);
         _chain = chain;
+        _beyond = null;
         _window = schedule.ToList();
         if (_window.Count == 0)
         {

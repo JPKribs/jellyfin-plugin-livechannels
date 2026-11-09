@@ -562,7 +562,7 @@ public sealed partial class RecordingService : IDisposable
             return null;
         }
 
-        bool Named(ProgramEntry p) => string.Equals(GuideName(p), ruleName, StringComparison.OrdinalIgnoreCase);
+        bool Named(ProgramEntry p) => string.Equals(p.GuideName, ruleName, StringComparison.OrdinalIgnoreCase);
         if (anchorProgram is not null && Named(anchorProgram))
         {
             return KeyOf(anchorProgram);
@@ -571,10 +571,6 @@ public sealed partial class RecordingService : IDisposable
         var keys = programs.Where(Named).Select(KeyOf).Distinct().Take(2).ToList();
         return keys.Count == 1 ? keys[0] : null;
     }
-
-    // The name the guide gives a program, which a rule created from it copies: the series for an episode.
-    private static string GuideName(ProgramEntry program)
-        => program.SeriesId.HasValue && !string.IsNullOrWhiteSpace(program.SeriesName) ? program.SeriesName! : program.Title;
 
     // The channel and series a rule records. A stamped rule needs nothing but its program id's channel; an
     // unstamped (older) one is matched once by name and then stamped, so it stops depending on its anchor slot.
@@ -689,7 +685,8 @@ public sealed partial class RecordingService : IDisposable
                 slot.Program.Title);
         }
 
-        return slot is null ? null : new ResolvedProgram(channel, parsed.Value.ChannelId, slot);
+        // A placeholder window has nothing to record.
+        return slot is null || slot.Program.IsPlaceholder ? null : new ResolvedProgram(channel, parsed.Value.ChannelId, slot);
     }
 
     /// <summary>

@@ -42,6 +42,13 @@ public static class DaypartSchedule
     /// reaches over five years past the anchor.</summary>
     private const int MaxWalk = 1_000_000;
 
+    // An item that would air for less than this before a placeholder window cuts it is not started: the window opens
+    // early instead. An item that ends before the window is never affected.
+    private static readonly TimeSpan MinimumCutSlot = TimeSpan.FromSeconds(30);
+
+    // A slot cut by a placeholder window keeps its Up Next bumper only when at least this much of the item follows.
+    private static readonly TimeSpan MinimumCutContent = TimeSpan.FromMinutes(1);
+
     /// <summary>
     /// Simulates the chain from the anchor and returns the programmes covering <c>[fromUtc, toUtc)</c>.
     /// </summary>
@@ -94,6 +101,10 @@ public static class DaypartSchedule
     /// <param name="exactStart">When <c>true</c> the chain starts exactly at <paramref name="anchorUtc"/> with the
     /// loop's first item (a spliced loop, rotated so the item airing when it was rebuilt comes first), instead of at
     /// local midnight of the anchor's day with a seeded lead item.</param>
+    /// <param name="placeholders">The channel's placeholder windows, or <c>null</c> for none. Each window airs as one
+    /// placeholder slot; an item that would run into one is cut at its start (one that would start less than
+    /// <see cref="MinimumCutSlot"/> before it does not start: the window opens early), and the loop goes on with the
+    /// next item after the window.</param>
     /// <returns>The ordered, contiguous programmes covering the window (the first may start before <paramref name="fromUtc"/>; nothing precedes the anchor).</returns>
     internal static IReadOnlyList<ScheduledProgram> BuildResumable(
         IReadOnlyList<ProgramEntry> loop,
@@ -108,7 +119,8 @@ public static class DaypartSchedule
         out DaypartChainState state,
         int maxBlock = int.MaxValue,
         bool exactStart = false,
-        bool keepMultiPart = false)
+        bool keepMultiPart = false,
+        PlaceholderWindows? placeholders = null)
     {
         ArgumentNullException.ThrowIfNull(loop);
         ArgumentNullException.ThrowIfNull(blocks);
@@ -167,6 +179,23 @@ public static class DaypartSchedule
 
         for (var walked = 0; walked < MaxWalk && t < toUtc && schedule.Count < MaxPrograms; walked++)
         {
+            // A placeholder window airs whole, before any pick: the cursor and a spliced first item wait for it to
+            // end. A block it interrupts is not finished afterwards on the strength of its earlier check: the rest
+            // of it is picked afresh under whatever rating window is active when the placeholder ends.
+            if (placeholders is not null && placeholders.TryFindAt(t, out var windowEnd, out var placeholder))
+            {
+                if (windowEnd > fromUtc)
+                {
+                    schedule.Add(ScheduledProgram.ForPlaceholder(placeholder, t, windowEnd));
+                }
+
+                t = windowEnd;
+                pending = 0;
+                continue;
+            }
+
+            // Where the pick starts from, so a pick the next window would cut to a sliver can be put back.
+            var (pickCursor, pickForced) = (cursor, forceFirst);
             ProgramEntry item;
             if (forceFirst)
             {
@@ -205,9 +234,36 @@ public static class DaypartSchedule
                 break; // Defensive: a non-positive duration would not advance the clock.
             }
 
+            // An item running into a placeholder window is cut where the window opens; the loop goes on with the next
+            // item after the window. A cut slot with little of the item left drops its bumper, so what there is
+            // shows the item itself rather than its Up Next card and a moment of it.
+            var lead = TimeSpan.FromTicks(bumper);
+            if (placeholders?.NextStartAfter(t) is { } opens && opens < stop)
+            {
+                // Too little of the item would air before the window: it is not started, the window opens now, and
+                // the item is picked again (afresh) when the window ends.
+                if (opens - t < MinimumCutSlot && placeholders.TryFindAt(opens, out var earlyEnd, out var early))
+                {
+                    (cursor, forceFirst, pending) = (pickCursor, pickForced, 0);
+                    if (earlyEnd > fromUtc)
+                    {
+                        schedule.Add(ScheduledProgram.ForPlaceholder(early, t, earlyEnd));
+                    }
+
+                    t = earlyEnd;
+                    continue;
+                }
+
+                stop = opens;
+                if (stop - t - lead < MinimumCutContent)
+                {
+                    lead = TimeSpan.Zero;
+                }
+            }
+
             if (stop > fromUtc)
             {
-                schedule.Add(new ScheduledProgram(item, t, stop) { Lead = TimeSpan.FromTicks(bumper) });
+                schedule.Add(new ScheduledProgram(item, t, stop) { Lead = lead });
             }
 
             t = stop;

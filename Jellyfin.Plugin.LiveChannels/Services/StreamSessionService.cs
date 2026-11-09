@@ -52,6 +52,7 @@ public class StreamSessionService
     private readonly EncoderResolver _encoders;
     private readonly IntroService _intros;
     private readonly BumperService? _bumpers;
+    private readonly PlaceholderService? _placeholders;
     private readonly ILogger<StreamSessionService> _logger;
     private readonly FailureReports _reports;
 
@@ -68,7 +69,8 @@ public class StreamSessionService
     /// <param name="appPaths">The server paths; failure reports are written to its log directory.</param>
     /// <param name="logger">The logger.</param>
     /// <param name="bumpers">The Up Next bumpers, played at the head of every slot of a channel that shows them; <c>null</c> plays black there instead.</param>
-    public StreamSessionService(IMediaEncoder encoder, ChannelService channels, EncoderResolver encoders, IntroService intros, IApplicationPaths appPaths, ILogger<StreamSessionService> logger, BumperService? bumpers = null)
+    /// <param name="placeholders">The placeholder cards, looped through placeholder windows; <c>null</c> plays the message over black there instead.</param>
+    public StreamSessionService(IMediaEncoder encoder, ChannelService channels, EncoderResolver encoders, IntroService intros, IApplicationPaths appPaths, ILogger<StreamSessionService> logger, BumperService? bumpers = null, PlaceholderService? placeholders = null)
     {
         ArgumentNullException.ThrowIfNull(appPaths);
         _encoder = encoder;
@@ -76,6 +78,7 @@ public class StreamSessionService
         _encoders = encoders;
         _intros = intros;
         _bumpers = bumpers;
+        _placeholders = placeholders;
         _logger = logger;
         _reports = new FailureReports(appPaths.LogDirectoryPath);
         _workDir = PluginPaths.WorkDir(appPaths);
@@ -376,7 +379,11 @@ public class StreamSessionService
         }
 
         LogEncodePlan(channel, programs.Count, planIndex, perItem, uniform, hasHdr, stats);
-        return await StreamPerItemLoopAsync(ffmpeg, channel, schedule, output, cancellationToken, stats, timelineBase, headCredit).ConfigureAwait(false);
+
+        // The free-running loop cannot place a time-of-day window: a save that gives the channel one (a placeholder
+        // block, or a custom rating block) hands back to the planner at the next boundary, which takes the daypart path.
+        Func<bool>? replan = timeOfDay ? null : () => _channels.IsTimeOfDayChannel(follower.Channel);
+        return await StreamPerItemLoopAsync(ffmpeg, channel, schedule, output, cancellationToken, stats, timelineBase, headCredit, replan).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -595,7 +602,7 @@ public class StreamSessionService
                     // The pipeline was chosen for the items at tune-in. A rebuild (the daily guide refresh, a save)
                     // can bring in an item this path cannot play (another format, HDR, 4K, no audio), so it hands
                     // back to the planner, which picks the path again from here.
-                    if (!ConcatSuits(programs))
+                    if (!ConcatSuits(programs) || _channels.IsTimeOfDayChannel(follower.Channel))
                     {
                         _logger.LogInformation("Live Channels: {Name}: the rebuilt schedule cannot stream continuously; switching to item by item", channel.Name);
                         return new StandbyRequest(timeline, null);
@@ -882,7 +889,7 @@ public class StreamSessionService
     // boundaries stay invisible without ever running two encoders at once.
     // Returns null once the session is cancelled, or the timeline position standby should start from when item
     // after item fails to play.
-    private async Task<StandbyRequest?> StreamPerItemLoopAsync(string ffmpeg, Channel channel, IStreamSchedule schedule, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan timelineBase = default, TimeSpan headCredit = default)
+    private async Task<StandbyRequest?> StreamPerItemLoopAsync(string ffmpeg, Channel channel, IStreamSchedule schedule, Stream output, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan timelineBase = default, TimeSpan headCredit = default, Func<bool>? replan = null)
     {
         var consecutiveFailures = 0;
         var itemsPlayed = 0;
@@ -907,9 +914,53 @@ public class StreamSessionService
         while (!cancellationToken.IsCancellationRequested)
         {
             var resuming = resume.HasValue;
+            if (!resuming && itemsPlayed > 0 && replan?.Invoke() == true)
+            {
+                _logger.LogInformation("Live Channels: {Name}: the channel now has a time-of-day window; planning again", channel.Name);
+                return new StandbyRequest(timeline, null);
+            }
+
             var step = resume ?? schedule.Current;
             resume = null;
             var program = step.Program;
+
+            // A placeholder window loops its card until the window ends, and the next item's bumper and file are
+            // made ready meanwhile, as they would be during an item.
+            if (!resuming && program.IsPlaceholder)
+            {
+                var span = step.DurationLimit ?? (TimeSpan.FromTicks(program.DurationTicks) - step.Offset);
+                var resumesWith = ContentAfter(schedule);
+                if (resumesWith is { } coming)
+                {
+                    PrepareNextItem(channel, coming.Program, span, cancellationToken);
+                    if (_bumpers is not null && channel.ShowBumpers)
+                    {
+                        _bumpers.Prepare(channel, coming.Program, OutputFor(stats).Width, stats?.LogoPath, BumperService.PrepareDelayFor(span), cancellationToken);
+                    }
+                }
+
+                _logger.LogDebug("Channel {Name}: placeholder \"{Title}\" for {Seconds:F0}s", channel.Name, program.Title, span.TotalSeconds);
+                var (reached, played, changed) = await StreamPlaceholderAsync(ffmpeg, channel, program, step.Offset, span, resumesWith, timeline, output, BurstNow, stats, cancellationToken).ConfigureAwait(false);
+                timeline = reached;
+                consecutiveFailures = 0;
+                itemsPlayed++;
+                if (changed && schedule is DaypartStreamSchedule daypart)
+                {
+                    // A save changed the window while it aired: pick the schedule up from where playback reached, on
+                    // the channel as saved (a channel disabled or deleted meanwhile ends the stream).
+                    _logger.LogInformation("Live Channels: {Name}: the placeholder \"{Title}\" was changed while it aired; rejoining the schedule", channel.Name, program.Title);
+                    if (CurrentChannel(channel) is not { } saved)
+                    {
+                        return null;
+                    }
+
+                    daypart.RejoinAfter(step.Offset + played, saved);
+                    continue;
+                }
+
+                schedule.Advance();
+                continue;
+            }
 
             // A slot that opens with an Up Next bumper plays it (or black) up to the item's start, then the item
             // from its start; a slot joined past the bumper plays the item from where the clock is. The item never
@@ -935,7 +986,7 @@ public class StreamSessionService
 
                 // The next slot's bumper renders while this item plays, once the item has settled in rather than
                 // while its own encoder is starting up.
-                if (_bumpers is not null && schedule.Following(1) is { } next)
+                if (_bumpers is not null && schedule.Following(1) is { } next && !next.Program.IsPlaceholder)
                 {
                     var remaining = step.DurationLimit ?? (TimeSpan.FromTicks(program.DurationTicks) - step.Offset);
                     _bumpers.Prepare(channel, next.Program, OutputFor(stats).Width, stats?.LogoPath, BumperService.PrepareDelayFor(remaining), cancellationToken);
@@ -1172,8 +1223,177 @@ public class StreamSessionService
     }
 
     // The Then line for the slot a schedule has at some distance ahead: what airs then and when its slot starts.
+    // A placeholder window has no Then line: the card's room for it stays empty.
     internal static BumperThen? ThenFor((ProgramEntry Program, DateTime StartUtc)? following)
-        => following is { } f ? BumperThen.For(f.Program, f.StartUtc, TimeZoneInfo.Local) : null;
+        => following is { } f && !f.Program.IsPlaceholder ? BumperThen.For(f.Program, f.StartUtc, TimeZoneInfo.Local) : null;
+
+    // The first content slot after the current one, past any placeholder windows straight after it: what a
+    // placeholder's message says the channel resumes with, and when.
+    internal static (ProgramEntry Program, DateTime StartUtc)? ContentAfter(IStreamSchedule schedule)
+    {
+        for (var ahead = 1; ahead <= 4; ahead++)
+        {
+            if (schedule.Following(ahead) is not { } next)
+            {
+                return null;
+            }
+
+            if (!next.Program.IsPlaceholder)
+            {
+                return next;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Plays a placeholder window: its card looped through <paramref name="length"/> on the wall clock from the
+    /// window's start, with the block's message drawn on. A tune-in partway through a play of the card finishes that
+    /// play on its own, then the card loops from its top (a looping input that starts partway in would replay from
+    /// the wrong point) in chunks of whole plays. Between chunks the block is looked up again: a new look or message
+    /// shows from the next chunk, and a window a save removed, shortened or moved ends there. A card that is not
+    /// rendered, or will not play, is replaced by the black filler with the message centred on it, and should that
+    /// not play either, by the standby slate until the window ends, so the next item still starts when the guide
+    /// says.
+    /// </summary>
+    /// <returns>The timeline the next item chains from, how much of the window played, and whether it ended early
+    /// because the window was changed.</returns>
+    private async Task<(TimeSpan Timeline, TimeSpan Played, bool Changed)> StreamPlaceholderAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan length, (ProgramEntry Program, DateTime StartUtc)? resumesWith, TimeSpan timeline, Stream output, Func<double> burstSeconds, SessionStats? stats, CancellationToken cancellationToken)
+    {
+        var placed = program.Placeholder!;
+        var width = OutputFor(stats).Width;
+        var resumeLocal = TimeZoneInfo.ConvertTimeFromUtc(resumesWith?.StartUtc ?? DateTime.UtcNow + length, TimeZoneInfo.Local);
+        var content = resumesWith?.Program.GuideName;
+        var played = TimeSpan.Zero;
+        var failures = 0;
+        var useScene = true;
+        var minimum = TimeSpan.FromMilliseconds(100);
+        var block = placed;
+        (string Path, PlaceholderStyle Style)? scene = null;
+        while (length - played > minimum && !cancellationToken.IsCancellationRequested)
+        {
+            // The block as configured now: gone (or its times changed) ends the slot; a new look plays once its card
+            // is rendered (started here when the cards task has not got to it yet), the card already on air until then.
+            var (current, found) = ConfiguredPlaceholder(channel, placed);
+            if (!found && played > TimeSpan.Zero)
+            {
+                return (timeline, played, true);
+            }
+
+            if (useScene)
+            {
+                var latest = _placeholders?.TryGetCached(channel, current, width, stats?.LogoPath);
+                if (latest is not null || scene is null)
+                {
+                    (block, scene) = (current, latest);
+                }
+
+                if (latest is null && _placeholders is not null && found && CurrentChannel(channel) is { } saved)
+                {
+                    _ = _placeholders.EnsureAsync(saved, width, stats?.LogoPath, CancellationToken.None);
+                }
+            }
+            else
+            {
+                (block, scene) = (current, null);
+            }
+
+            if (scene is null && played == TimeSpan.Zero)
+            {
+                stats?.AppendLog("No playable placeholder card for \"" + program.Title + "\"; its message plays over black");
+            }
+
+            var clip = scene?.Path ?? (_bumpers is null ? null : await _bumpers.EnsureBlackAsync(width, cancellationToken).ConfigureAwait(false));
+            if (clip is null)
+            {
+                break;
+            }
+
+            var overlay = _placeholders?.TextOverlay(block, width, stats?.LogoPath, resumeLocal, content, scene?.Style);
+            var cardLength = scene is not null ? PlaceholderService.CardLength : BumperService.BumperLength;
+            var into = scene is not null ? PlaceholderStart(offset + played, cardLength) : TimeSpan.Zero;
+            var left = length - played;
+            var piece = into > TimeSpan.Zero ? cardLength - into : PlaceholderChunk;
+            if (piece > left)
+            {
+                piece = left;
+            }
+
+            var entry = BumperService.ClipEntry(clip, "Placeholder: " + program.Title, width, cardLength.TotalSeconds);
+            var (streamed, end, cut) = await StreamItemAsync(ffmpeg, channel, entry, into, timeline, output, burstSeconds, cancellationToken, stats, piece, softwareDecodeOnly: true, overlayFilter: overlay, loopInput: into == TimeSpan.Zero).ConfigureAwait(false);
+            if (streamed)
+            {
+                var got = cut ?? piece;
+                timeline = NextTimeline(timeline, got, end);
+                played += got;
+                if (cut is null)
+                {
+                    failures = 0;
+                    continue;
+                }
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            if (++failures >= 2 && scene is not null)
+            {
+                _logger.LogWarning("Live Channels: {Name}: the placeholder card \"{Title}\" will not play; showing its message over black", channel.Name, program.Title);
+                useScene = false;
+                failures = 0;
+            }
+            else if (failures >= 3)
+            {
+                break;
+            }
+        }
+
+        var rest = length - played;
+        if (rest > minimum && !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("Live Channels: {Name}: the placeholder \"{Title}\" would not play; showing standby until it ends", channel.Name, program.Title);
+            timeline = await StreamSlateAsync(ffmpeg, timeline, output, cancellationToken, stats, rest, PlaceholderStandbyMessage).ConfigureAwait(false) ?? timeline;
+            played = length;
+        }
+
+        return (timeline, played, false);
+    }
+
+    // How much of a placeholder window one producer loops before the block is looked up again: whole plays of the
+    // card, so each chunk starts the card from its top exactly where the wall-clock loop is. A save made during the
+    // window reaches viewers within this long.
+    internal static readonly TimeSpan PlaceholderChunk = TimeSpan.FromMinutes(10);
+
+    // The standby line under a placeholder whose card will not play: plain words, as the slate needs.
+    private const string PlaceholderStandbyMessage = "This channel will be back soon";
+
+    // The placeholder block a slot was placed for, as configured now (the block with the same window), and whether it
+    // still is: a save that removed the block or changed its times ends the slot. A channel that cannot be looked
+    // up is left to the session's own handling, so it counts as unchanged.
+    private (RatingBlock Block, bool Found) ConfiguredPlaceholder(Channel channel, RatingBlock placed)
+    {
+        if (_channels.FindChannel(channel.Id) is not { } current)
+        {
+            return (placed, true);
+        }
+
+        var block = current.PlaceholderBlocks().FirstOrDefault(b => b.StartMinutes == placed.StartMinutes && b.EndMinutes == placed.EndMinutes);
+        return block is null ? (placed, false) : (block, true);
+    }
+
+    /// <summary>
+    /// Where in the card a placeholder's playback starts for a point in its window: the card loops on the wall
+    /// clock from the window's start, so a tune-in partway lands on the frame the loop shows then.
+    /// </summary>
+    /// <param name="intoWindow">How far into the window playback starts.</param>
+    /// <param name="card">The card's length.</param>
+    /// <returns>The position in the card.</returns>
+    internal static TimeSpan PlaceholderStart(TimeSpan intoWindow, TimeSpan card)
+        => intoWindow > TimeSpan.Zero && card > TimeSpan.Zero ? TimeSpan.FromTicks(intoWindow.Ticks % card.Ticks) : TimeSpan.Zero;
+
 
     // Whether a tune-in now lands in an Up Next bumper. Resolving the loop here costs the tune-in nothing extra: the
     // schedule is resolved right after the card anyway, and this leaves it in memory for that.
@@ -1293,6 +1513,23 @@ public class StreamSessionService
     /// <summary>Deletes every channel's cached Up Next layer.</summary>
     public void ClearBumperLayers() => _bumpers?.ClearLayers();
 
+    /// <summary>
+    /// Renders the scenes of the channel's placeholder blocks that are missing, at the current output size, and
+    /// drops the ones no block uses any more. Does nothing for a channel without placeholder blocks.
+    /// </summary>
+    /// <param name="channel">The channel.</param>
+    /// <param name="logoPath">The channel's logo, or <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancels the renders still to start.</param>
+    /// <returns>A task that completes when the channel's placeholder cards are current.</returns>
+    public Task PreparePlaceholdersAsync(Channel channel, string? logoPath, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        return _placeholders is null ? Task.CompletedTask : _placeholders.EnsureAsync(channel, CurrentOutput().Width, logoPath, cancellationToken);
+    }
+
+    /// <summary>Deletes every cached placeholder card.</summary>
+    public void ClearPlaceholders() => _placeholders?.Clear();
+
     internal static OutputSettings OutputFor(SessionStats? stats) => stats?.PinOutput(CurrentOutput) ?? CurrentOutput();
 
     // Logs, once per tune-in, exactly how the channel will be encoded — resolution, codec, the resolved
@@ -1350,7 +1587,7 @@ public class StreamSessionService
     // hardware attempt burned wall clock that retry should recover). Returns whether the item produced output
     // and the producer's final output timestamp in seconds (-1 when none was parsed), which the loop chains
     // the next item's timeline from.
-    private async Task<(bool Streamed, double EndSeconds, TimeSpan? CutShortAfter)> StreamItemAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan timeline, Stream output, Func<double> burstSeconds, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan? durationLimit = null, bool softwareDecodeOnly = false, StorageProbe? storage = null, string? overlayFilter = null)
+    private async Task<(bool Streamed, double EndSeconds, TimeSpan? CutShortAfter)> StreamItemAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan timeline, Stream output, Func<double> burstSeconds, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan? durationLimit = null, bool softwareDecodeOnly = false, StorageProbe? storage = null, string? overlayFilter = null, bool loopInput = false)
     {
         if (string.IsNullOrEmpty(program.Path) || !(storage ?? new StorageProbe()).Exists(program.Path))
         {
@@ -1389,7 +1626,7 @@ public class StreamSessionService
             }
         }
 
-        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: softwareDecodeOnly || MustDecodeInSoftware(program, subtitle) || !_encoders.CanHardwareDecode(program), program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts, SilenceFor(program, offset, durationLimit), program.SourceColorSpace, stats, overlayFilter);
+        var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: softwareDecodeOnly || MustDecodeInSoftware(program, subtitle) || !_encoders.CanHardwareDecode(program), program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts, SilenceFor(program, offset, durationLimit), program.SourceColorSpace, stats, overlayFilter, loopInput);
         var (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats, new SpeedTracker(timeline.TotalSeconds)).ConfigureAwait(false);
 
         // The per-item path has no continuous decoder to fall back, so retry a hardware-decode that produced
@@ -1397,7 +1634,7 @@ public class StreamSessionService
         if (total == 0 && hardwareDecode && !cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning("Channel {Name}: hardware decode produced no output for \"{Title}\"; retrying in software", channel.Name, program.Title);
-            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts, SilenceFor(program, offset, durationLimit), program.SourceColorSpace, stats, overlayFilter);
+            var (swArgs, _) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: true, program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts, SilenceFor(program, offset, durationLimit), program.SourceColorSpace, stats, overlayFilter, loopInput);
             (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, swArgs, program.Title, output, cancellationToken, stats, new SpeedTracker(timeline.TotalSeconds)).ConfigureAwait(false);
         }
 
@@ -1773,7 +2010,7 @@ public class StreamSessionService
     public (List<string> Args, bool HardwareDecode) BuildStressArguments(string path, int sourceHeight, bool isHdr, TimeSpan offset, TimeSpan duration)
         => BuildArguments(path, offset, TimeSpan.Zero, null, sourceHeight, null, softwareDecode: false, isHdr, null, initialBurstSeconds: 0, duration);
 
-    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal, double initialBurstSeconds, TimeSpan? durationLimit = null, string? subtitleFontsDir = null, TimeSpan? silentAudio = null, string? colorSpace = null, SessionStats? stats = null, string? overlayFilter = null)
+    private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal, double initialBurstSeconds, TimeSpan? durationLimit = null, string? subtitleFontsDir = null, TimeSpan? silentAudio = null, string? colorSpace = null, SessionStats? stats = null, string? overlayFilter = null, bool loopInput = false)
     {
         var (width, bitrate, videoCodec, audioCodec) = OutputFor(stats);
         var subtitleStyle = ResolveSubtitleStyle();
@@ -1808,7 +2045,7 @@ public class StreamSessionService
         // Outside the GPU-resident pipeline an HDR item tone-maps in software: with jellyfin-ffmpeg's tonemapx and
         // the server's own settings when this ffmpeg has it, else with the portable zscale chain.
         var toneMap = isHdr && !intelGpu && _encoder.SupportsFilter("tonemapx") ? _encoders.SoftwareToneMap() : null;
-        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurstSeconds, durationLimit, subtitleStyle, subtitleFontsDir, silentAudio, toneMap, StreamArguments.InputMatrix(colorSpace, sourceHeight), overlayFilter);
+        var args = StreamArguments.Build(path, offset, timeline, width, bitrate, video, audioEncoder, audioBitrate, forcedSubtitle, externalSubtitlePath, forceSoftware, isHdr, audioOrdinal, initialBurstSeconds, durationLimit, subtitleStyle, subtitleFontsDir, silentAudio, toneMap, StreamArguments.InputMatrix(colorSpace, sourceHeight), overlayFilter, loopInput);
         return (args, hardwareDecode);
     }
 
