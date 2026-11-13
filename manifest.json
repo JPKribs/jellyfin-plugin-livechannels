@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "12.4.2.2",
+        "changelog": "\n## Changed\n- The code and documentation are cleaned up, with no change to what the plugin does",
+        "targetAbi": "12.4.0.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v12.4.2.2/jellyfin-plugin-livechannels-12.4.2.2.zip",
+        "checksum": "df0219c5259d6a9131bfa829e09444cd",
+        "timestamp": "2026-11-13T09:01:16Z"
+      },
+      {
         "version": "12.4.2.1",
         "changelog": "\n## Fixed\n- Night sky, Lava lamp, and Aurora placeholder cards fill the screen instead of showing as a thin strip. Cached cards render again\n- Settings and Popular show a failure message when a save fails without a reason\n\n## Developer\n- Built with JPKribs.Jellyfin.Base 2026.10.28.",
         "targetAbi": "12.4.0.0",
