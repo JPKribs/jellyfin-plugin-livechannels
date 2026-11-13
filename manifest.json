@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "12.4.2.4",
+        "changelog": "\n## Fixed\n- The arrows on collapsible sections are back to their usual size\n\n## Developer\n- Uses JPKribs.Jellyfin.Base 2026.11.13.3",
+        "targetAbi": "12.4.0.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v12.4.2.4/jellyfin-plugin-livechannels-12.4.2.4.zip",
+        "checksum": "0da012dae2e8535cb4be79df1e578021",
+        "timestamp": "2026-11-13T20:06:55Z"
+      },
+      {
         "version": "12.4.2.3",
         "changelog": "\n## Changed\n- Activity log entries are summed per outcome and share one shape. Channel starts become \"3 Channels Started\", idle stops \"3 Channels Stopped\", and completed recordings \"3 Recordings Completed\", each listing the channels or recordings with counts; a stream stopped from the dashboard reads \"Channel Stopped for <channel>\"\n\n## Developer\n- Uses JPKribs.Jellyfin.Base 2026.11.13.2",
         "targetAbi": "12.4.0.0",
