@@ -26,6 +26,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<StressTestService>();
         serviceCollection.AddSingleton<DefaultLogoService>();
         serviceCollection.AddActivityLogger();
+        serviceCollection.AddSingleton<LiveChannelsActivity>();
         serviceCollection.AddSingleton<TimerService>();
         serviceCollection.AddSingleton<RecordingService>();
 

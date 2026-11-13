@@ -61,7 +61,7 @@ public sealed partial class RecordingService : IDisposable
     private readonly IServerConfigurationManager _config;
     private readonly IFileSystem _fileSystem;
     private readonly IApplicationPaths _appPaths;
-    private readonly ActivityLogger _activity;
+    private readonly LiveChannelsActivity _activity;
     private readonly ILogger<RecordingService> _logger;
 
     // Each channel's loop as the current pass read it, keyed by channel number (see ProgramsFor).
@@ -95,7 +95,7 @@ public sealed partial class RecordingService : IDisposable
     /// <param name="appPaths">The application paths, used for the default recording folder.</param>
     /// <param name="activity">The activity logger, used to record completed recordings in Jellyfin's activity log.</param>
     /// <param name="logger">The logger.</param>
-    public RecordingService(ChannelService channels, TimerService timers, ILibraryManager libraryManager, IProviderManager providerManager, IServerConfigurationManager config, IFileSystem fileSystem, IApplicationPaths appPaths, ActivityLogger activity, ILogger<RecordingService> logger)
+    public RecordingService(ChannelService channels, TimerService timers, ILibraryManager libraryManager, IProviderManager providerManager, IServerConfigurationManager config, IFileSystem fileSystem, IApplicationPaths appPaths, LiveChannelsActivity activity, ILogger<RecordingService> logger)
     {
         _channels = channels;
         _timers = timers;
@@ -438,10 +438,7 @@ public sealed partial class RecordingService : IDisposable
         }
 
         _logger.LogInformation("Live Channels: recorded \"{Name}\" to {Path} ({Method})", timer.Name, target.File, linked ? "hardlink" : "copy");
-        _activity.Log(
-            "Live Channel recording: " + (string.IsNullOrEmpty(timer.Name) ? program.Title : timer.Name),
-            "LiveChannels.RecordingCompleted",
-            overview: "Saved to " + target.File);
+        _activity.RecordingComplete((string.IsNullOrEmpty(timer.Name) ? program.Title : timer.Name) ?? string.Empty);
 
         await EnsureRecordingLibraryAsync(target).ConfigureAwait(false);
         TriggerRefresh(target.File);

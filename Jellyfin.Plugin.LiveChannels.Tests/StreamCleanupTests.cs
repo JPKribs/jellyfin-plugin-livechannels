@@ -169,7 +169,7 @@ public sealed class StreamCleanupTests : IDisposable
             NullLogger<ChannelService>.Instance);
         var intros = new IntroService(encoder, encoders, paths, NullLogger<IntroService>.Instance);
         var streams = new StreamSessionService(encoder, channels, encoders, intros, paths, NullLogger<StreamSessionService>.Instance);
-        var activity = new ActivityLogger(Substitute.For<IActivityManager>(), NullLogger<ActivityLogger>.Instance);
+        var activity = new LiveChannelsActivity(new ActivityLogger(Substitute.For<IActivityManager>(), NullLogger<ActivityLogger>.Instance));
         var timers = new TimerService(paths, NullLogger<TimerService>.Instance);
         var recordings = new RecordingService(channels, timers, library, Substitute.For<IProviderManager>(), config, Substitute.For<IFileSystem>(), paths, activity, NullLogger<RecordingService>.Instance);
         var stress = new StressTestService(encoder, streams, library, Substitute.For<IMediaSourceManager>(), NullLogger<StressTestService>.Instance);

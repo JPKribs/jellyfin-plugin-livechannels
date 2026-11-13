@@ -85,7 +85,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     private readonly StreamSessionService _streams;
     private readonly DefaultLogoService _defaultLogo;
     private readonly IntroService _intros;
-    private readonly ActivityLogger _activity;
+    private readonly LiveChannelsActivity _activity;
     private readonly TimerService _timers;
     private readonly RecordingService _recordings;
     private readonly StressTestService _stress;
@@ -133,7 +133,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <param name="appHost">The application host, used to build the internal live stream endpoint URL each opened source points at.</param>
     /// <param name="appPaths">The application paths, used to default the stream directory under Jellyfin's cache.</param>
     /// <param name="logger">The logger.</param>
-    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, IntroService intros, ActivityLogger activity, TimerService timers, RecordingService recordings, StressTestService stress, ISessionManager sessionManager, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
+    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, IntroService intros, LiveChannelsActivity activity, TimerService timers, RecordingService recordings, StressTestService stress, ISessionManager sessionManager, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
     {
         _channels = channels;
         _streams = streams;
@@ -582,10 +582,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         // Only the open that started the encoder logs it; one that joined a session raced in by another open did not.
         if (started)
         {
-            _activity.Log(
-                "Live Channel: " + channel.Name + " has started",
-                "LiveChannels.ChannelStarted",
-                overview: "This channel is now being encoded.");
+            _activity.ChannelStart(channel.Name);
         }
 
         return (session, liveStreamId);
@@ -664,10 +661,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             return;
         }
 
-        _activity.Log(
-            "Live Channel: " + session.ChannelName + " has stopped",
-            "LiveChannels.ChannelStopped",
-            overview: "Stream stopped from the dashboard.");
+        _activity.StreamKilled(session.ChannelName);
 
         _logger.LogInformation("Live Channels: session {Id} ({Name}) killed from the dashboard", session.Id, session.ChannelName);
     }
@@ -695,10 +689,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
 
             if (TeardownSession(session, onlyIfIdle: true))
             {
-                _activity.Log(
-                    "Live Channel: " + session.ChannelName + " has stopped",
-                    "LiveChannels.ChannelStopped",
-                    overview: "This channel has no viewers so encoding has been stopped.");
+                _activity.ChannelIdleStop(session.ChannelName);
 
                 _logger.LogInformation("Live Channels: closing session {Id} ({Name}) after the linger grace", session.Id, session.ChannelName);
                 return;
