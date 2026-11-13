@@ -64,7 +64,7 @@ public partial class ChannelService
     /// free-running loop.
     /// </summary>
     /// <param name="channel">The channel.</param>
-    /// <returns><c>true</c> when the channel has a time-of-day rating block.</returns>
+    /// <returns><c>true</c> when the channel has a time-of-day rating block or a placeholder window.</returns>
     internal bool IsTimeOfDayChannel(Channel channel) => HasTimeOfDayRating(ResolveRatingBlocks(channel)) || !PlaceholderWindowsFor(channel).IsEmpty;
 
     /// <summary>The channel's placeholder windows in the server's local time.</summary>
@@ -142,5 +142,4 @@ public partial class ChannelService
         var window = RatingSchedule.EffectiveWindow(blocks, 0);
         return new RatingFilter(window.Min, window.Max, window.IncludeUnrated);
     }
-
 }

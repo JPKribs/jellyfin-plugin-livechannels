@@ -159,7 +159,6 @@
                                 <div class="fieldDescription">Closes any stream open longer than this, even one you are watching. 0 turns it off.</div>
                             </div>
 
-
                             <div class="inputContainer">
                                 <label for="streamDirectory">Stream file location</label>
                                 <input is="emby-input" type="text" id="streamDirectory" autocomplete="off" placeholder="Leave blank for the Jellyfin cache" />
@@ -216,8 +215,8 @@
     </div>
 
     <style>
-        /* Language chip, matched to the channel editor's pickers (blue capsule) so the default-language chip is
-           not the unstyled grey default. */
+        /* Language and test-item chips, matched to the channel editor's pickers (blue capsule) so they are not the
+           unstyled grey default. */
         .jpk-chip-select .jpk-tags { gap: 6px; margin: 0 0 8px 0; }
         .jpk-chip-select .jpk-tags:empty { display: none; margin: 0; }
         .jpk-chip-select .jpk-tag {

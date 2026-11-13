@@ -110,7 +110,6 @@ internal static class BumperArguments
     public static List<string> BuildLayerArguments(LineStrips strips, string scrim, (List<string> Args, bool Still)? logoInput, string captionFont, string captionFile, double scale, string output)
     {
         ArgumentNullException.ThrowIfNull(strips);
-        var fps = Fps.ToString(CultureInfo.InvariantCulture);
         var seconds = F(Seconds);
         int P(double design) => (int)Math.Round(design * scale);
 
@@ -138,15 +137,14 @@ internal static class BumperArguments
         string? logoPad = null;
         if (logoInput is { } logoRead)
         {
+            args.AddRange(logoRead.Args);
             if (logoRead.Still)
             {
-                args.AddRange(logoRead.Args);
                 held.Append(IntroService.Held(next++, "logoimg", Seconds));
                 logoPad = "[logoimg]";
             }
             else
             {
-                args.AddRange(logoRead.Args);
                 logoPad = "[" + I(next++) + ":v]";
             }
         }

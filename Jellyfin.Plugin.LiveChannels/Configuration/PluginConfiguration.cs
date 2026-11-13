@@ -18,7 +18,6 @@ public class PluginConfiguration : BasePluginConfiguration
     /// simulation walk stays short) until the next save re-anchors it. Stamped server-side on every save.</summary>
     public DateTime ScheduleAnchorUtc { get; set; }
 
-
     /// <summary>Gets or sets the target output width. Every item is encoded to this width (height derived from a 16:9 frame) so the single continuous stream stays one uniform format across item boundaries.</summary>
     public int TranscodeWidth { get; set; } = 1280;
 

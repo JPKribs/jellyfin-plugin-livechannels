@@ -16,7 +16,7 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.LiveChannels.Services;
 
 /// <summary>
-/// The Up Next bumper: 15 seconds before each item showing its artwork, title, episode, details, review score and
+/// The Up Next bumper: 10 seconds before each item showing its artwork, title, episode, details, review score and
 /// parental rating over the tune-in card's look, with a countdown and the soft chord. A bumper is part of its item's
 /// slot on the schedule, so it never pushes the item later. Bumpers are rendered only while someone watches: when
 /// an item starts playing, the next item's bumper renders in the background, and plays when the item ends if it is
@@ -42,7 +42,7 @@ public sealed class BumperService : IDisposable
     // The black filler runs a little past a bumper's length, so it can always cover a whole slot lead.
     private const double BlackSeconds = BumperArguments.Seconds + 1;
 
-    // A pass renders 15 seconds of video, at idle priority behind every live encode (see IntroService.RunProcessAsync), so a busy server
+    // A pass renders 10 seconds of video, at idle priority behind every live encode (see IntroService.RunProcessAsync), so a busy server
     // can stretch it to minutes; only past this is it hung rather than starved.
     private static readonly TimeSpan RenderPassTimeout = TimeSpan.FromMinutes(10);
 
@@ -565,7 +565,6 @@ public sealed class BumperService : IDisposable
                 // Named by content, so a line already written is reused, and the prune clears old ones.
                 var file = Path.Combine(texts, Hash(text) + ".txt");
                 AtomicFiles.WriteOnce(file, text);
-
                 Touch(file);
                 return file;
             });

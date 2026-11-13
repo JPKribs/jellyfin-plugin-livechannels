@@ -24,7 +24,6 @@ export default function (view) {
 
     var MAX_LOGO_BYTES = 2 * 1024 * 1024;
 
-    var config = null;
     var channels = [];
     var currentIndex = -1;
     // The channel being edited: a deep COPY of channels[currentIndex]. Every editor control (fields, source
@@ -275,12 +274,12 @@ export default function (view) {
                 rows = rows || [];
                 if (!rows.length) { results.style.display = 'none'; return; }
                 rows.forEach(function (row) {
-                    var el = document.createElement('div');
-                    el.className = 'jpk-table-row';
-                    el.style.cursor = 'pointer';
-                    el.textContent = row.label;
-                    el.addEventListener('click', function () { add(row); });
-                    results.appendChild(el);
+                    var rowEl = document.createElement('div');
+                    rowEl.className = 'jpk-table-row';
+                    rowEl.style.cursor = 'pointer';
+                    rowEl.textContent = row.label;
+                    rowEl.addEventListener('click', function () { add(row); });
+                    results.appendChild(rowEl);
                 });
                 results.style.display = '';
             }).catch(hideResults);
@@ -304,7 +303,7 @@ export default function (view) {
                     .map(function (s) { return { key: s.key, label: s.label }; });
                 renderChips();
                 hideResults();
-                if (search) search.value = '';
+                search.value = '';
             }
         };
     }
@@ -379,8 +378,6 @@ export default function (view) {
         return [];
     }
 
-    // A 1:1 pastel square (number centred, title on one or two bottom rows), drawn client-side so the box
-    // updates live as the name/number change. Mirrors the server-generated logo.
     // Whether the Material Symbols font actually has a glyph for this ligature name. Draws it on a scratch
     // canvas and checks for any ink, so an unknown name falls back to the number in the preview like the server.
     function symbolRenders(symbol) {
@@ -403,6 +400,8 @@ export default function (view) {
         }
     }
 
+    // A 1:1 pastel square (number centred, title on one or two bottom rows), drawn client-side so the box
+    // updates live as the name/number change. Mirrors the server-generated logo.
     function defaultLogoDataUrl(number, name, style, symbol, showName) {
         var hue = logoHue(name);
         var size = 256;
@@ -855,10 +854,9 @@ export default function (view) {
                 if (r && r.Name && !seen[r.Name]) { seen[r.Name] = true; ratings.push({ Name: r.Name, Value: score || 0 }); }
             });
             ratings.sort(function (a, b) { return a.Value - b.Value; });
-            var opts = ratings.map(function (r) {
+            ratingOptions = ratings.map(function (r) {
                 return '<option value="' + Shared.escapeHtml(r.Name) + '">' + Shared.escapeHtml(r.Name) + '</option>';
             }).join('');
-            ratingOptions = opts;
         }).catch(function () {
             ratingOptions = '';
         });
@@ -1186,9 +1184,8 @@ export default function (view) {
                 throw conflict;
             }
             fresh.Channels = stripInternal(candidate);
-            return Shared.saveConfig(fresh).then(function () { return fresh; });
-        }).then(function (saved) {
-            config = saved;
+            return Shared.saveConfig(fresh);
+        }).then(function () {
             channels = candidate;
             if (newIndex !== undefined) currentIndex = newIndex;
             renderSelect();
@@ -1420,9 +1417,8 @@ export default function (view) {
         Promise.all([loadLibraries(), loadCollections(), loadRatings(), loadLanguages()]).then(function () {
             return Shared.getConfig();
         }).then(function (cfg) {
-            config = cfg;
-            serverChannels = JSON.stringify(config.Channels || []);
-            channels = (config.Channels || []).map(function (ch) {
+            serverChannels = JSON.stringify(cfg.Channels || []);
+            channels = (cfg.Channels || []).map(function (ch) {
                 ch.Sources = ch.Sources || [];
                 return ch;
             });
@@ -1434,5 +1430,4 @@ export default function (view) {
             Shared.setStatus('channelStatus', 'Could not load the channels. Reload the page to try again.', true);
         });
     }
-
 }

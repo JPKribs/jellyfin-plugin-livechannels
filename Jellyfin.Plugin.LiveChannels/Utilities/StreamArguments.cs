@@ -338,8 +338,8 @@ public static class StreamArguments
             args.Add("-vf");
             args.Add(scale + gpuTail);
 
-            // Map the first video stream and the audio track Jellyfin marks as default, so we play the same track
-            // the user would hear in normal playback instead of letting ffmpeg pick by channel count. Any -map
+            // Map the first video stream and the audio track Jellyfin marks as default, so the channel plays the same
+            // track the user would hear in normal playback instead of letting ffmpeg pick by channel count. Any -map
             // disables ffmpeg's automatic stream selection, so the video must be mapped explicitly too.
             args.Add("-map");
             args.Add("0:v:0");
@@ -476,7 +476,7 @@ public static class StreamArguments
         // Mark the first packets as a discontinuity: the self-heal loop restarts ffmpeg and appends to the same
         // stream the reader is following, so the fresh output's reset continuity counters/PCR must be flagged or
         // the reader sees a broken seam.
-        // ffmpeg writes to stdout (pipe:1) and our process pumps that to the file. -y overwrites without prompting.
+        // ffmpeg writes to stdout (pipe:1), which the plugin pumps into the HLS segmenter. -y overwrites without prompting.
         Add(args, "-y", "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-muxpreload", "0", "-muxdelay", "0", "pipe:1");
 
         return args;
@@ -712,7 +712,7 @@ public static class StreamArguments
         // Force the encoder to signal progressive in the sequence header. yadif + setparams clear the per-frame
         // interlaced flag, but hardware encoders (notably h264_qsv) write the field order into the SPS from the
         // codec context at init and ignore the frame flag, so the output is tagged 1080i. Jellyfin then re-probes
-        // our stream as interlaced and inserts a deinterlace_vaapi pass that fails on QSV. Setting the field order
+        // the stream as interlaced and inserts a deinterlace_vaapi pass that fails on QSV. Setting the field order
         // at the encoder makes the output genuinely progressive, so Jellyfin remuxes it instead of re-transcoding.
         Add(args, "-field_order", "progressive");
 

@@ -306,11 +306,8 @@ internal sealed class DaypartStreamSchedule : IStreamSchedule
             var slot = _window[_pos];
 
             // The joined item starts partway through; every later item starts at its own boundary.
+            // SnapOffset turns any offset below the tolerance, a negative one included, into zero.
             var offset = _joinUtc is { } join ? StreamScheduleMath.SnapOffset(join - slot.Start) : TimeSpan.Zero;
-            if (offset < TimeSpan.Zero)
-            {
-                offset = TimeSpan.Zero;
-            }
 
             // Cap playback only if the schedule shortened this slot. The continuous chain never does; this stays
             // as a defensive bound so a schedule bug cannot make an item overrun its slot forever.
@@ -336,7 +333,7 @@ internal sealed class DaypartStreamSchedule : IStreamSchedule
         // Past this refill's horizon (a long placeholder window can end exactly on it): look on into the chain from
         // where it stopped, without moving playback.
         var beyond = _pos + ahead - _window.Count;
-        if (_window.Count == 0 || beyond < 0)
+        if (_window.Count == 0)
         {
             return null;
         }

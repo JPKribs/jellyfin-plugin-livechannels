@@ -89,8 +89,7 @@ public sealed class PlaceholderService : IDisposable
     /// <summary>
     /// Renders every placeholder block's scene of the channel that is not cached already, one at a time and at idle
     /// priority, and deletes the channel's scenes no block uses any more. A channel without placeholder blocks
-    /// renders nothing. Never throws for a failed render; the
-    /// block then plays its message over black.
+    /// renders nothing. Never throws for a failed render; the block then plays its message over black.
     /// </summary>
     /// <param name="channel">The channel.</param>
     /// <param name="width">The channel's output width.</param>
@@ -330,7 +329,7 @@ public sealed class PlaceholderService : IDisposable
         }
     }
 
-    // Deletes the channel's scenes no current block has used for a while, and renders an interruption left behind.
+    // Deletes the channel's scenes no current block has used for a while, and any render an interruption left behind.
     private void RemoveUnused(Channel channel, HashSet<string> keep)
     {
         var directory = ChannelDir(channel);
@@ -498,7 +497,6 @@ public sealed class PlaceholderService : IDisposable
             _logger.LogDebug(ex, "Live Channels: could not delete {Path}", path);
         }
     }
-
 
     // What a rendered scene records beside itself: the style it was rendered in and the custom file it shows.
     private sealed record SceneSidecar(PlaceholderStyle Style, string MediaStamp);

@@ -5,7 +5,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
-using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.LiveChannels.Models;
 using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
@@ -24,8 +23,10 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// The implementation is split across partial files by concern: <c>ChannelService.Resolution.cs</c> (library
 /// sources to a probed program loop), <c>ChannelService.Popular.cs</c> (the built-in Popular channel),
 /// <c>ChannelService.Filters.cs</c> (the per-item content filters), <c>ChannelService.Cache.cs</c> (the on-disk
-/// schedule and observed-durations persistence), and <c>ChannelService.Subtitles.cs</c> (burn-in subtitle
-/// selection and extraction). This file holds the constructor and the public facade.
+/// schedule and observed-durations persistence), <c>ChannelService.Schedule.cs</c> (projecting a loop onto the
+/// wall clock), <c>ChannelService.Guide.cs</c> (pruning stale guide programs), and
+/// <c>ChannelService.Subtitles.cs</c> (burn-in subtitle selection and extraction). This file holds the
+/// constructor and the public facade.
 /// </remarks>
 public partial class ChannelService
 {

@@ -50,8 +50,19 @@ export default function (view) {
     // MARK: Rating blocks (shared design with the channel editor)
 
     function newRatingBlock() { return { MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, IsKids: false, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 }; }
-    function ratingValue(name) { if (!name) return null; for (var i = 0; i < ratings.length; i++) { if (ratings[i].Name === name) return ratings[i].Value; } return null; }
-    function coerceBand(minEl, maxEl, changed) { var mn = ratingValue(minEl.value), mx = ratingValue(maxEl.value); if (mn === null || mx === null || mn <= mx) return; if (changed === 'min') { maxEl.value = minEl.value; } else { minEl.value = maxEl.value; } }
+
+    function ratingValue(name) {
+        if (!name) return null;
+        for (var i = 0; i < ratings.length; i++) { if (ratings[i].Name === name) return ratings[i].Value; }
+        return null;
+    }
+
+    // Keeps the minimum from passing the maximum by dragging the other end to meet the one just changed.
+    function coerceBand(minEl, maxEl, changed) {
+        var mn = ratingValue(minEl.value), mx = ratingValue(maxEl.value);
+        if (mn === null || mx === null || mn <= mx) return;
+        if (changed === 'min') { maxEl.value = minEl.value; } else { minEl.value = maxEl.value; }
+    }
 
     function migrateRatingBlocks(pc) {
         var blocks = pc.RatingBlocks || [];
@@ -168,7 +179,7 @@ export default function (view) {
             var cards = (tasks || []).filter(function (t) { return t.Key === 'LiveChannelsGenerateBufferCards'; })[0];
             var started = [];
             if (task) started.push(ApiClient.startScheduledTask(task.Id));
-            if (cards && !!(popularConfig && (popularConfig.RatingBlocks || []).some(function (b) { return b.IsPlaceholder; }))) started.push(ApiClient.startScheduledTask(cards.Id));
+            if (cards && popularConfig && (popularConfig.RatingBlocks || []).some(function (b) { return b.IsPlaceholder; })) started.push(ApiClient.startScheduledTask(cards.Id));
             return Promise.all(started);
         }).catch(function () { /* best effort */ });
     }

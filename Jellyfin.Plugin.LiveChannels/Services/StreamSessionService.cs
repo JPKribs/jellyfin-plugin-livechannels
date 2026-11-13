@@ -89,7 +89,7 @@ public class StreamSessionService
     /// in-process Live TV service can run a separate encode per viewer; cancelling stops the encode.
     /// </summary>
     /// <param name="channel">The channel to stream.</param>
-    /// <param name="output">The destination stream (the temp file Jellyfin reads).</param>
+    /// <param name="output">The destination stream (in production, the HLS segmenter's input).</param>
     /// <param name="cancellationToken">Cancelled when the live stream is closed.</param>
     /// <param name="stats">The shared per-session stats sink, or <c>null</c>.</param>
     /// <param name="timelineBase">Where on the channel timeline this producer's output starts. Non-zero only when a producer is restarted under a viewer who is still watching, so the timestamps it appends continue forward instead of rewinding to zero.</param>
@@ -752,8 +752,8 @@ public class StreamSessionService
                     shortRuns = 0;
                 }
 
-                // Jellyfin keeps reading the same growing file, so a fresh ffmpeg resumes seamlessly where this
-                // one's output ended.
+                // The segmenter keeps reading the same input stream, so a fresh ffmpeg resumes seamlessly where
+                // this one's output ended.
                 _logger.LogDebug("Channel {Name}: continuous stream ended; resuming at the current position", channel.Name);
             }
 
@@ -819,7 +819,6 @@ public class StreamSessionService
     // How often a continuous producer checks whether its loop was rebuilt.
     private static readonly TimeSpan RebuildPollInterval = TimeSpan.FromSeconds(60);
 
-
     /// <summary>
     /// Finds where playback starts: the airing item at its offset when its file exists, otherwise the start of the
     /// next item whose file does. Files are checked one at a time from the airing item onward, stopping at the
@@ -882,9 +881,9 @@ public class StreamSessionService
     internal static IEnumerable<ProgramEntry> Rotate(IReadOnlyList<ProgramEntry> items, int startIndex)
         => items.Skip(startIndex).Concat(items.Take(startIndex));
 
-    // Streams item-by-item (one ffmpeg per item, timestamps stitched with -output_ts_offset). Used only for
-    // subtitle burn-in, high-resolution, HDR, or GPU-upload encoders, which need a per-item pipeline the concat
-    // path cannot provide. Every item cold-starts at its boundary; the wall clock a cold start costs is healed by
+    // Streams item-by-item (one ffmpeg per item, timestamps stitched with -output_ts_offset). Used whenever the
+    // concat path cannot play the channel (subtitle burn-in, high-resolution, HDR or video-only items, mixed
+    // formats, a GPU-upload encoder, time-of-day scheduling, or Up Next bumpers; see StreamScheduleAsync). Every item cold-starts at its boundary; the wall clock a cold start costs is healed by
     // that producer's deficit burst, and the viewer rides the tune-in head start well behind the live edge, so
     // boundaries stay invisible without ever running two encoders at once.
     // Returns null once the session is cancelled, or the timeline position standby should start from when item
@@ -998,6 +997,7 @@ public class StreamSessionService
             {
                 PrepareNextItem(channel, upcoming.Program, step.DurationLimit ?? (TimeSpan.FromTicks(program.DurationTicks) - step.Offset), cancellationToken);
             }
+
             _logger.LogDebug("Channel {Name}: item {Number} \"{Title}\"", channel.Name, itemsPlayed + 1, program.Title);
 
             var storage = new StorageProbe();
@@ -1394,7 +1394,6 @@ public class StreamSessionService
     internal static TimeSpan PlaceholderStart(TimeSpan intoWindow, TimeSpan card)
         => intoWindow > TimeSpan.Zero && card > TimeSpan.Zero ? TimeSpan.FromTicks(intoWindow.Ticks % card.Ticks) : TimeSpan.Zero;
 
-
     // Whether a tune-in now lands in an Up Next bumper. Resolving the loop here costs the tune-in nothing extra: the
     // schedule is resolved right after the card anyway, and this leaves it in memory for that.
     private bool DuringBumper(Channel channel, DateTime nowUtc)
@@ -1487,8 +1486,6 @@ public class StreamSessionService
         => Plugin.Instance?.ReadConfiguration(c => new OutputSettings(c.TranscodeWidth, c.TranscodeVideoBitrateKbps, c.VideoCodec, c.AudioCodec))
             ?? new OutputSettings(1280, 4000, Models.VideoCodec.H264, Models.AudioCodec.Aac);
 
-    // The output settings a session encodes with: pinned on its stats at its first producer, so a codec or size
-    // saved mid-session never switches the stream its viewers are decoding (see OutputSettings).
     /// <summary>
     /// Renders what every Up Next card of the channel shares (its layer, and the black filler for the output size)
     /// when missing, at the current output size. Does nothing for a channel with Up Next cards off.
@@ -1530,6 +1527,8 @@ public class StreamSessionService
     /// <summary>Deletes every cached placeholder card.</summary>
     public void ClearPlaceholders() => _placeholders?.Clear();
 
+    // The output settings a session encodes with: pinned on its stats at its first producer, so a codec or size
+    // saved mid-session never switches the stream its viewers are decoding (see OutputSettings).
     internal static OutputSettings OutputFor(SessionStats? stats) => stats?.PinOutput(CurrentOutput) ?? CurrentOutput();
 
     // Logs, once per tune-in, exactly how the channel will be encoded — resolution, codec, the resolved
@@ -1586,7 +1585,7 @@ public class StreamSessionService
     // evaluated at the moment each producer actually starts (the software retry re-evaluates it: the failed
     // hardware attempt burned wall clock that retry should recover). Returns whether the item produced output
     // and the producer's final output timestamp in seconds (-1 when none was parsed), which the loop chains
-    // the next item's timeline from.
+    // the next item's timeline from, and how far it got when it failed partway (see CutShort).
     private async Task<(bool Streamed, double EndSeconds, TimeSpan? CutShortAfter)> StreamItemAsync(string ffmpeg, Channel channel, ProgramEntry program, TimeSpan offset, TimeSpan timeline, Stream output, Func<double> burstSeconds, CancellationToken cancellationToken, SessionStats? stats = null, TimeSpan? durationLimit = null, bool softwareDecodeOnly = false, StorageProbe? storage = null, string? overlayFilter = null, bool loopInput = false)
     {
         if (string.IsNullOrEmpty(program.Path) || !(storage ?? new StorageProbe()).Exists(program.Path))
@@ -2042,6 +2041,7 @@ public class StreamSessionService
         // Every hardware pipeline reports as such, so a no-output failure retries the item in software
         // (StreamItemAsync) instead of blanking the channel.
         var hardwareDecode = intelGpu || (!forceSoftware && !string.IsNullOrEmpty(video.DecodeHwaccel));
+
         // Outside the GPU-resident pipeline an HDR item tone-maps in software: with jellyfin-ffmpeg's tonemapx and
         // the server's own settings when this ffmpeg has it, else with the portable zscale chain.
         var toneMap = isHdr && !intelGpu && _encoder.SupportsFilter("tonemapx") ? _encoders.SoftwareToneMap() : null;

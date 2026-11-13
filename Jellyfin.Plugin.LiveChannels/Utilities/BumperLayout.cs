@@ -156,7 +156,7 @@ internal sealed class BumperLayout
         var right = width - P(72);
 
         PixelBox? art = null;
-        var columnRight = right;
+        int columnRight;
         if (shape != ArtShape.None)
         {
             var (artW, artH) = shape switch

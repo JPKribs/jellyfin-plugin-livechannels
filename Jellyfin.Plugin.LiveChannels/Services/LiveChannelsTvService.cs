@@ -159,10 +159,10 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         // playlist in the path, the 10.11.10+ probe container normalisation has nothing to break.
         _appHost = appHost;
 
-        // Where each channel's growing stream file is written (and where the schedule cache lives). Configurable,
-        // since the file lives for the whole watch and the system temp is often small or RAM-backed; defaults to a
-        // livechannels folder in Jellyfin's cache. Resolved by ChannelService so both agree on the same root. A
-        // change takes effect on the next restart (active streams keep using the directory they started in).
+        // Where each channel's growing stream file is written. Configurable, since the file lives for the whole
+        // watch and the system temp is often small or RAM-backed; defaults to a livechannels folder in Jellyfin's
+        // cache. Resolved by ChannelService so both agree on the same root. A change takes effect on the next
+        // restart (active streams keep using the directory they started in).
         _streamRoot = ChannelService.ResolveStreamRoot(appPaths);
 
         // A fresh process owns no live streams, so anything left in the stream root is an orphan from a previous
@@ -184,11 +184,6 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             state: null,
             TimeSpan.FromMinutes(1),
             TimeSpan.FromMinutes(1));
-
-        // Render every enabled channel's tune-in card as soon as the server has settled. Every guide refresh
-        // sweeps them too (see GetChannelsAsync), but Jellyfin does not refresh the guide at start-up on its own,
-        // so without this a fresh install or update would open every channel without a card until the daily
-        // refresh or a save. Runs in the background, one channel at a time.
     }
 
     /// <inheritdoc />
@@ -1934,7 +1929,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <summary>
     /// Writes a file so no reader ever sees it half-written and concurrent writers of the same path cannot collide:
     /// each writes its own uniquely named temp file beside the target, then moves it into place. The guide refresh,
-    /// the start-up warm and a tune-in can all resolve the same channel's logo at once; written in place, the
+    /// the buffer card task and a tune-in can all resolve the same channel's logo at once; written in place, the
     /// losers threw a sharing violation (swallowed, so the channel showed no image) and a reader could catch a
     /// truncated file. The bytes for one path are identical whoever wins, so the last move simply replaces it.
     /// </summary>

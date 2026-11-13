@@ -180,8 +180,9 @@ public static class ProgramLoopBuilder
             var order = ShuffleKey(options.ChannelId, "order:" + g.Ordered[0].GroupKey);
             if (g.Slots <= 1)
             {
-                // A once-only item (a movie or video): drop it into a round chosen by its phase so the standalone
-                // items scatter through the loop instead of all landing in the first round.
+                // A group with a single slot (a movie or video, or any series outside a favoured type): drop it into
+                // a round chosen by its phase so these scatter through the loop instead of all landing in the first
+                // round.
                 var round = Math.Min(maxRounds - 1, (int)(g.Phase * maxRounds));
                 placements.Add((round, order, g.Ordered[0]));
             }
@@ -256,7 +257,7 @@ public static class ProgramLoopBuilder
     }
 
     // Splits a title into its base and trailing part number (e.g. "The Trap (1)" -> "The Trap", 1). False when the
-    // name has no part marker. A short, non-empty base guards against false matches.
+    // name has no part marker, or when the base is shorter than two characters (a guard against false matches).
     internal static bool TryParsePart(string? name, out string baseTitle, out int part)
     {
         baseTitle = string.Empty;

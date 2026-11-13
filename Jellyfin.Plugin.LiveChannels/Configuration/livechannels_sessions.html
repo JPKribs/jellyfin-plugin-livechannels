@@ -46,7 +46,7 @@
     <style>
         /* Layout glue only; surfaces, text, and buttons come from the base (jpkribs_shared). */
         #sessionList { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
-        .lc-session { padding: 14px 16px; }
+        .lc-session { padding: 14px 16px; cursor: pointer; transition: border-color 0.15s; }
         .lc-session-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
         .lc-session-logo {
             width: 56px; height: 56px; border-radius: 8px; object-fit: cover; flex: 0 0 auto;
@@ -57,7 +57,6 @@
         .lc-session-number { color: rgba(255, 255, 255, 0.55); margin-right: 8px; }
         .lc-session-rows .jpk-record-row { padding: 4px 0; }
         .lc-speed-dot { font-size: 1.15em; line-height: 1; }
-        .lc-session { cursor: pointer; transition: border-color 0.15s; }
         .lc-session:hover { border-color: var(--jpk-accent); }
         .lc-log-dialog { width: min(900px, 95vw); }
         .lc-log-text {

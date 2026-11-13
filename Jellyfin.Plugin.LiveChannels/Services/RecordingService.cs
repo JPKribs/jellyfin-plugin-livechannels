@@ -64,12 +64,14 @@ public sealed partial class RecordingService : IDisposable
     private readonly ActivityLogger _activity;
     private readonly ILogger<RecordingService> _logger;
 
-    // Non-reentrancy gate for the maintenance pass: the heartbeat and the post-create kick may overlap, and a
-    // long copy must not stack a second pass behind it.
+    // Each channel's loop as the current pass read it, keyed by channel number (see ProgramsFor).
     private readonly ConcurrentDictionary<int, (long Generation, IReadOnlyList<ProgramEntry> Programs)> _passPrograms = new();
 
     // Set only on the recording pass's own flow (see ProgramsFor).
     private readonly AsyncLocal<bool> _inPass = new();
+
+    // Non-reentrancy gate for the maintenance pass: the heartbeat and the post-create kick may overlap, and a
+    // long copy must not stack a second pass behind it.
     private int _running;
 
     // Cancelled at shutdown so a long copy stops instead of holding the server up (its temp file is removed).
@@ -648,11 +650,11 @@ public sealed partial class RecordingService : IDisposable
         timer.ProviderIds[ScheduledItemKey] = itemId.ToString("N", CultureInfo.InvariantCulture);
     }
 
-    // Resolves a guide program id ("<channelId>_<startTicks>") back to its channel and the slot that time holds
-    // in the CURRENT schedule. A rebuild can put a different item into a past slot, so callers that must know
-    // what was scheduled carry their own stamp (the timer's item, the rule's series) rather than trusting it. When the timer
-    // carries the item it was scheduled for, that item is what resolves, even if a reschedule since (durations
-    // healed, channel edited) moved something else into the slot; see PickSlot.
+    // Resolves a guide program id ("<channelId>_<startTicks>") back to the slot that time holds in its
+    // channel's CURRENT schedule. A rebuild can put a different item into a past slot, so callers that must know
+    // what was scheduled carry their own stamp (the timer's item, the rule's series) rather than trusting it.
+    // When the timer carries the item it was scheduled for, that item is what resolves, even if a reschedule
+    // since (durations healed, channel edited) moved something else into the slot; see PickSlot.
     private ResolvedProgram? Resolve(string? programId, Guid? scheduledItem = null)
     {
         var parsed = ParseProgramId(programId);
@@ -686,7 +688,7 @@ public sealed partial class RecordingService : IDisposable
         }
 
         // A placeholder window has nothing to record.
-        return slot is null || slot.Program.IsPlaceholder ? null : new ResolvedProgram(channel, parsed.Value.ChannelId, slot);
+        return slot is null || slot.Program.IsPlaceholder ? null : new ResolvedProgram(slot);
     }
 
     /// <summary>
@@ -1045,7 +1047,7 @@ public sealed partial class RecordingService : IDisposable
     /// <param name="CollectionType">The library collection type, or <c>null</c> for the mixed default.</param>
     internal sealed record RecordingTarget(string File, string LibraryRoot, string LibraryName, CollectionTypeOptions? CollectionType);
 
-    private sealed record ResolvedProgram(Channel Channel, string ChannelId, ScheduledProgram Slot);
+    private sealed record ResolvedProgram(ScheduledProgram Slot);
 
     private static partial class NativeMethods
     {

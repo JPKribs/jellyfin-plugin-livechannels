@@ -332,7 +332,8 @@
            uses Jellyfin's native "block" class for full width and centred text. */
         .lc-save-actions { margin-top: 16px; }
 
-        /* Genre chips: selected chips above the picker, styled like UserManagement's tags. */
+        /* Picker chips (genres, studios, people, audio language): selected chips above the picker, styled like
+           UserManagement's tags. */
         .jpk-chip-select .jpk-tags { gap: 6px; margin: 0 0 8px 0; }
         .jpk-chip-select .jpk-tags:empty { display: none; margin: 0; }
         .jpk-chip-select .jpk-tag {
@@ -359,15 +360,12 @@
         .lc-source-icon { color: rgba(255, 255, 255, 0.45); flex: 0 0 auto; }
         .lc-source-library { width: 100%; margin: 0; }
         .lc-matchall-label { display: flex; align-items: center; margin-top: 10px; }
-        .lc-filter-header { display: flex; align-items: center; gap: 12px; margin-bottom: 0.6em; }
-        .lc-filter-header label { font-weight: 600; white-space: nowrap; margin: 0; }
-        .lc-filter-header select { max-width: 260px; }
         #librarySources .jpk-table-body { max-height: 360px; overflow-y: auto; margin-top: 0.6em; }
         #librarySources .jpk-table-row { cursor: pointer; }
         #librarySources .jpk-table-row.selected { background: rgba(0, 164, 220, 0.12); }
 
         /* Each rating block is its own bordered container; a lighter empty box suits this nested filter, and the
-           block title pushes Remove to the right like the source library select does. */
+           block title pushes Remove to the right like the source title does. */
         #ratingBlocks .jpk-empty-section { padding: 20px 24px; font-size: 1em; }
         .lc-ratingblock {
             border: 1px solid var(--jpk-border); border-radius: 8px;

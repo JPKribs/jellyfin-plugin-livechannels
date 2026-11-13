@@ -180,7 +180,7 @@ public partial class ChannelService
     /// Deletes the cached schedule. Called when the plugin configuration changes so a channel edit is never served
     /// from a stale cache; the next guide refresh (or tune-in) rebuilds it.
     /// </summary>
-    /// <param name="paths">The application paths, used to locate the stream root the cache lives in.</param>
+    /// <param name="paths">The application paths, used to locate the schedule directory the cache lives in.</param>
     public static void ClearScheduleCache(IApplicationPaths paths)
     {
         // Invalidate in-flight builds and reads before anything is deleted, so none of them can write or pin the
@@ -257,9 +257,9 @@ public partial class ChannelService
     internal static long CacheGeneration => Interlocked.Read(ref _cacheGeneration);
 
     /// <summary>
-    /// Resolves the directory the live streams (and the schedule cache) are written to: the configured stream
-    /// directory, or a livechannels folder under Jellyfin's cache by default. Shared with the live-TV service so
-    /// both agree on where the schedule cache lives.
+    /// Resolves the directory the live streams are written to: the configured stream directory, or a livechannels
+    /// folder under Jellyfin's cache by default. Shared with the live-TV service so both agree on the stream root,
+    /// and used to find the schedule directory earlier versions kept under it.
     /// </summary>
     /// <param name="paths">The application paths.</param>
     /// <returns>The stream root directory.</returns>

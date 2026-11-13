@@ -276,9 +276,9 @@ public static class DaypartSchedule
     // The first block at or after the cursor (wrapping once) that airs whole under the rating window covering its
     // entire airtime: from its start until its last item's start plus the transition buffer, the same span each of
     // its items would be checked against on its own, so placing the block whole is never less strict than placing
-    // it item by item. A block is a run of one series' consecutive episodes (at most maxBlock long, plus the rest of a multi-part
-    // story it ends inside); a movie or
-    // other standalone item is a block of one. A block that does not fit is skipped whole.
+    // it item by item. A block is a run of one series' consecutive episodes (at most maxBlock long, plus the rest of
+    // a multi-part story it ends inside); a movie or other standalone item is a block of one. A block that does not
+    // fit is skipped whole.
     private static bool PickBlock(IReadOnlyList<ProgramEntry> loop, int cursor, IReadOnlyList<ResolvedRatingBlock> blocks, int minute, int transitionMinutes, int maxBlock, bool keepMultiPart, out int start, out int length)
     {
         var scanned = 0;

@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Services;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Model.Tasks;
@@ -13,8 +12,9 @@ namespace Jellyfin.Plugin.LiveChannels.Api;
 /// <summary>
 /// A small admin-only helper for the configuration page. All channel content (channels, guide, streams,
 /// and logos) is served in-process through Jellyfin's Live TV; this controller exposes no content endpoints,
-/// only the encoder check and the active-session list the configuration page reads. Every endpoint requires
-/// an elevated (administrator) token, so a session can only be listed or closed from the dashboard.
+/// only what the configuration page uses: the encoder check, the stress test, the schedule reset, and the
+/// active-session list. Every endpoint requires an elevated (administrator) token, so a session can only be
+/// listed or closed from the dashboard.
 /// </summary>
 [ApiController]
 [Authorize(Policy = "RequiresElevation")]

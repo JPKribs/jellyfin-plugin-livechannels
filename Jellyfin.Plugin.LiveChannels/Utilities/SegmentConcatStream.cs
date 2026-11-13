@@ -22,6 +22,7 @@ public sealed class SegmentConcatStream : Stream
     private readonly Func<int> _holdBehind;
     private readonly Action<string>? _log;
     private readonly Action? _onData;
+
     // How many read errors in a row on one segment are retried before it is given up on.
     private const int MaxReadErrors = 3;
 

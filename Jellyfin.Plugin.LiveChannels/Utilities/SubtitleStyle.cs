@@ -13,7 +13,7 @@ namespace Jellyfin.Plugin.LiveChannels.Utilities;
 /// </summary>
 public static class SubtitleStyle
 {
-    /// <summary>The smallest and largest accepted relative size, as a percentage of the subtitle's own size.</summary>
+    /// <summary>The smallest accepted relative size, as a percentage of the subtitle's own size.</summary>
     public const int MinScalePercent = 50;
 
     /// <summary>The largest accepted relative size, as a percentage of the subtitle's own size.</summary>

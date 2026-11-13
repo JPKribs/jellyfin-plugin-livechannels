@@ -23,7 +23,7 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// output format and cached; at tune-in its bytes are written straight into the segmenter as if it were the
 /// first item, and the first real producer chains its timeline from where the card ended, exactly the way
 /// every later item chains from the one before it. Nothing about the card is special to the delivery: it is
-/// just eight seconds of ordinary channel output that happen to exist before the encoder has produced any.
+/// just ten seconds of ordinary channel output that happen to exist before the encoder has produced any.
 /// </summary>
 /// <remarks>
 /// The card is produced in two passes so its elementary streams come out of the SAME encoder and arguments as
@@ -69,6 +69,7 @@ public sealed class IntroService : IDisposable
 
     /// <summary>The soft edge width of the draw-in reveal, in pixels.</summary>
     internal static int DrawInEdge => DrawInEdgePixels;
+
     private const string CaptionText = "Starting Channel";
     private const string LineColorA = "#4fd8ff";
     private const string LineColorB = "#c66bff";
@@ -83,6 +84,7 @@ public sealed class IntroService : IDisposable
         new(0.78, 0.06, 1.4, 1.1, 2.1, 1),
         new(0.55, 0.05, 0.6, 0.5, 0.7, -1),
     ];
+
     // Bounds on each child process of a render. A pass renders a few seconds of video, but at idle priority (see
     // RunProcessAsync) it waits on every live encode, so a busy server can stretch it to minutes; only past this
     // is it hung rather than starved.
@@ -90,6 +92,7 @@ public sealed class IntroService : IDisposable
 
     // How long to wait for a killed process to actually exit before giving up on it.
     internal static readonly TimeSpan ReapTimeout = TimeSpan.FromSeconds(5);
+
     /// <summary>The backdrop's gradient colours and drift, shared with the Up Next bumper.</summary>
     internal const string BackdropColorSpec = "c0=#0b1020:c1=#1a0f33:c2=#0a1c2e:c3=#12082a:nb_colors=4:speed=0.012";
 

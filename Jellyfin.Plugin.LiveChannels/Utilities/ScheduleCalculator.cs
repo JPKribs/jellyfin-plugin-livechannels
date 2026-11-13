@@ -6,8 +6,8 @@ namespace Jellyfin.Plugin.LiveChannels.Utilities;
 
 /// <summary>
 /// Turns a channel's looped item list into a wall-clock schedule. The schedule is a pure function of the
-/// item list and the clock, anchored to a fixed epoch, so the guide and the live stream independently
-/// compute the same "what is on now" without sharing state.
+/// item list and the clock, anchored to a fixed epoch (or a spliced loop's own anchor), so the guide and the
+/// live stream independently compute the same "what is on now" without sharing state.
 /// </summary>
 public static class ScheduleCalculator
 {

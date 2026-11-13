@@ -124,7 +124,7 @@ public static class RatingSchedule
     public static RatingWindow EffectiveWindow(IReadOnlyList<ResolvedRatingBlock> blocks, int minuteOfDay)
     {
         ArgumentNullException.ThrowIfNull(blocks);
-        var minute = Wrap(minuteOfDay);
+        var minute = NormalizeMinute(minuteOfDay);
         RatingWindow? window = null;
         foreach (var block in blocks)
         {
@@ -150,7 +150,7 @@ public static class RatingSchedule
     public static RatingWindow WindowForStart(IReadOnlyList<ResolvedRatingBlock> blocks, int startMinuteOfDay, int transitionMinutes)
     {
         ArgumentNullException.ThrowIfNull(blocks);
-        var start = Wrap(startMinuteOfDay);
+        var start = NormalizeMinute(startMinuteOfDay);
         var window = EffectiveWindow(blocks, start);
 
         var span = Math.Clamp(transitionMinutes, 0, MinutesPerDay);
@@ -181,7 +181,7 @@ public static class RatingSchedule
     // Folds one breakpoint's effective window into the running combination when the span reaches it.
     private static RatingWindow CombineAtBoundary(IReadOnlyList<ResolvedRatingBlock> blocks, RatingWindow window, int boundary, int start, int span)
     {
-        var forward = Wrap(boundary - start);
+        var forward = NormalizeMinute(boundary - start);
         return forward > 0 && forward <= span ? window.Combine(EffectiveWindow(blocks, boundary)) : window;
     }
 
@@ -223,11 +223,5 @@ public static class RatingSchedule
         }
 
         return false;
-    }
-
-    private static int Wrap(int minute)
-    {
-        var m = minute % MinutesPerDay;
-        return m < 0 ? m + MinutesPerDay : m;
     }
 }

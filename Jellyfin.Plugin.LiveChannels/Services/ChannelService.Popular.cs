@@ -291,8 +291,6 @@ public partial class ChannelService
             Limit = count
         });
 
-    // Movies watched most across the whole server: each user's most-played movies are pooled, then ranked by
-    // their play count summed over every user.
     // Movies played most recently across the whole server. Each movie's play time is the most recent across every
     // user, and the newest-played `count` are returned. As anyone watches a movie it rises to the top, so the
     // channel reflects what the server has been watching lately rather than all-time totals.
@@ -333,8 +331,8 @@ public partial class ChannelService
     }
 
     // Series played most recently across the whole server. Every user's recently-played episodes are scanned, each
-    // episode's play time is taken as the most recent across users, and we walk down that newest-played-first list
-    // taking each new series until we have `count` distinct ones -- so the popular shows are whatever was watched
+    // episode's play time is taken as the most recent across users, and that newest-played-first list is walked
+    // taking each new series until there are `count` distinct ones -- so the popular shows are whatever was watched
     // most recently. The whole series is used downstream, not just those episodes, and as people keep watching the
     // schedule refreshes onto the latest shows.
     private List<BaseItem> RecentlyPlayedSeries(List<User> users, int count)

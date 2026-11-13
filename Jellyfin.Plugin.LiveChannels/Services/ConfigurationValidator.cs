@@ -80,7 +80,7 @@ public static class ConfigurationValidator
                 throw new ArgumentException("Enabled channel needs a channel number: " + Describe(channel));
             }
 
-            if (channel.Sources is null || channel.Sources.Count == 0)
+            if (channel.Sources.Count == 0)
             {
                 throw new ArgumentException("Enabled channel has no library sources: " + Describe(channel));
             }
@@ -309,11 +309,6 @@ public static class ConfigurationValidator
     // times. A zero-length custom window would silently never apply, so it is rejected as a mistake.
     private static void ValidateRatingBlocks(Channel channel)
     {
-        if (channel.RatingBlocks is null)
-        {
-            return;
-        }
-
         foreach (var block in channel.RatingBlocks)
         {
             if (block.Period != RatingBlockPeriod.Custom)
@@ -351,7 +346,7 @@ public static class ConfigurationValidator
                 throw new ArgumentException("Placeholder block needs start and end times: " + Describe(channel));
             }
 
-            if ((block.PlaceholderName?.Length ?? 0) > MaxPlaceholderText || (block.PlaceholderTitle?.Length ?? 0) > MaxPlaceholderText || (block.PlaceholderBody?.Length ?? 0) > MaxPlaceholderText)
+            if (block.PlaceholderName.Length > MaxPlaceholderText || block.PlaceholderTitle.Length > MaxPlaceholderText || block.PlaceholderBody.Length > MaxPlaceholderText)
             {
                 throw new ArgumentException("Placeholder name, title and message must be at most " + MaxPlaceholderText + " characters: " + Describe(channel));
             }

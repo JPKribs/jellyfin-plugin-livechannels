@@ -535,8 +535,8 @@ public sealed class TimerService
         handled.Add(ItemKey(item));
     }
 
-    // Moves one rule's handled items onto another. Caller holds _gate and persists. Returns whether anything moved.
-    // Records a recording a series child produced, once per file (a repeat airing adopts the same file).
+    // Records a recording a series child produced, once per file (a repeat airing adopts the same file). Caller
+    // holds _gate and persists.
     private void AddSeriesRecording(string? ruleId, string? path, DateTime recordedUtc)
     {
         if (string.IsNullOrEmpty(ruleId) || string.IsNullOrEmpty(path))
@@ -555,6 +555,8 @@ public sealed class TimerService
         }
     }
 
+    // Moves one rule's handled items and recordings onto another. Caller holds _gate and persists. Returns whether
+    // anything moved.
     private bool MergeSeriesHandled(string fromRuleId, string toRuleId)
     {
         if (string.Equals(fromRuleId, toRuleId, StringComparison.Ordinal))
@@ -641,7 +643,7 @@ public sealed class TimerService
         }
     }
 
-    // The on-disk payload: both timer kinds in one file, so every save is one atomic unit.
+    // The on-disk payload: both timer kinds and the per-rule records in one file, so every save is one atomic unit.
     private sealed class TimerFile
     {
         public List<TimerInfo> Timers { get; set; } = new();

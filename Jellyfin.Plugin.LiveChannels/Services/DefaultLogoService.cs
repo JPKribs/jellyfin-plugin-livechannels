@@ -46,7 +46,7 @@ public class DefaultLogoService
     /// Initializes a new instance of the <see cref="DefaultLogoService"/> class.
     /// </summary>
     /// <param name="encoder">The media encoder, used to locate ffmpeg.</param>
-    /// <param name="appPaths">The application paths; the extracted icon font lives under Jellyfin's cache.</param>
+    /// <param name="appPaths">The application paths; the extracted icon font lives in the assets folder of the plugin's stream root.</param>
     /// <param name="logger">The logger.</param>
     public DefaultLogoService(IMediaEncoder encoder, IApplicationPaths appPaths, ILogger<DefaultLogoService> logger)
     {
@@ -264,9 +264,9 @@ public class DefaultLogoService
         return (textFont, number.ToString(CultureInfo.InvariantCulture), false);
     }
 
-    // Extracts the embedded Material Icons font (once) into the plugin's own cache directory so ffmpeg's
-    // drawtext can read it by path. Always rewritten rather than trusted when present, so a stale or
-    // tampered file from an earlier run is never handed to the font parser.
+    // Extracts the embedded Material Icons font (once per process) into the plugin's assets folder so ffmpeg's
+    // drawtext can read it by path. Rewritten rather than trusted when present, so a stale or tampered file
+    // from an earlier run is never handed to the font parser.
     private static string? GetMaterialIconFontPath(ILogger logger, string assetsDir)
     {
         lock (IconLock)
@@ -419,7 +419,6 @@ public class DefaultLogoService
         return Array.Empty<string>();
     }
 
-    // Removes or neutralises the characters that would break ffmpeg's drawtext text argument.
     /// <summary>
     /// The start of a drawtext filter: the font file (escaped for the filtergraph, so a Windows drive colon or an
     /// apostrophe in the path cannot break the graph) and the sanitised text. Options follow from the caller.
@@ -430,6 +429,7 @@ public class DefaultLogoService
     internal static string DrawText(string fontPath, string text)
         => "drawtext=fontfile=" + StreamArguments.QuoteFilterValue(fontPath) + ":text='" + SanitizeForDrawtext(text) + "'";
 
+    // Removes or neutralises the characters that would break ffmpeg's drawtext text argument.
     private static string SanitizeForDrawtext(string s)
         => s.Replace("\\", string.Empty, StringComparison.Ordinal)
             .Replace("'", string.Empty, StringComparison.Ordinal)

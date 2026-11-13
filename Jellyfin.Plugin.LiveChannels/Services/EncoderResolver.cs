@@ -8,8 +8,6 @@ using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
 
-// Encoder-specific argument runs, hoisted to static fields (the analyzer rejects inline constant arrays).
-
 namespace Jellyfin.Plugin.LiveChannels.Services;
 
 /// <summary>
@@ -20,6 +18,7 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// </summary>
 public class EncoderResolver
 {
+    // Encoder-specific argument runs, hoisted to static fields (the analyzer rejects inline constant arrays).
     private static readonly string[] Empty = Array.Empty<string>();
     private static readonly string[] VideotoolboxExtra = { "-allow_sw", "1" };
     private static readonly string[] QsvInit = { "-init_hw_device", "qsv=hw", "-filter_hw_device", "hw" };
