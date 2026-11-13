@@ -18,4 +18,4 @@ changelog:
   changed:
   - Activity log entries are summed per outcome and share one shape. Channel starts become "3 Channels Started", idle stops "3 Channels Stopped", and completed recordings "3 Recordings Completed", each listing the channels or recordings with counts; a stream stopped from the dashboard reads "Channel Stopped for <channel>"
   developer:
-  - Uses JPKribs.Jellyfin.Base 2026.11.13.1
+  - Uses JPKribs.Jellyfin.Base 2026.11.13.2
