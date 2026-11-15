@@ -1,5 +1,5 @@
 import { createConfigPage } from './configurationpage?name=livechannels_jpkribs_shared.js';
-import { buildPlaceholderCard, newPlaceholderBlock, minutesToTime, timeToMinutes } from './configurationpage?name=livechannels_placeholder.js';
+import { loadRatings, migrateRatingBlocks, newPlaceholderBlock, newRatingBlock, renderBlocks } from './configurationpage?name=livechannels_placeholder.js';
 
 export default function (view) {
     'use strict';
@@ -22,131 +22,17 @@ export default function (view) {
     });
     var Shared = page.shared;
 
-    var ratings = [];          // [{ Name, Value }]
-    var ratingOptions = '';    // cached <option> html for the per-block rating selects
+    var ratings = { options: '', valueOf: function () { return null; } };
     var popularConfig = null;  // the PopularChannel object being edited (holds RatingBlocks)
 
     function el(id) { return view.querySelector('#' + id); }
 
-    // Populates the kids-rating dropdown and caches the rating options for the block editor.
-    function loadRatings() {
-        return ApiClient.getJSON(ApiClient.getUrl('Localization/ParentalRatings')).then(function (list) {
-            var seen = {};
-            ratings = [];
-            (list || []).forEach(function (r) {
-                var score = r.Value;
-                if (score === undefined && r.RatingScore) score = r.RatingScore.Score;
-                if (r && r.Name && !seen[r.Name]) { seen[r.Name] = true; ratings.push({ Name: r.Name, Value: score || 0 }); }
-            });
-            ratings.sort(function (a, b) { return a.Value - b.Value; });
-            ratingOptions = ratings.map(function (r) {
-                return '<option value="' + Shared.escapeHtml(r.Name) + '">' + Shared.escapeHtml(r.Name) + '</option>';
-            }).join('');
-        }).catch(function () {
-            ratingOptions = '';
-        });
-    }
-
-    // MARK: Rating blocks (shared design with the channel editor)
-
-    function newRatingBlock() { return { MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, IsKids: false, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 }; }
-
-    function ratingValue(name) {
-        if (!name) return null;
-        for (var i = 0; i < ratings.length; i++) { if (ratings[i].Name === name) return ratings[i].Value; }
-        return null;
-    }
-
-    // Keeps the minimum from passing the maximum by dragging the other end to meet the one just changed.
-    function coerceBand(minEl, maxEl, changed) {
-        var mn = ratingValue(minEl.value), mx = ratingValue(maxEl.value);
-        if (mn === null || mx === null || mn <= mx) return;
-        if (changed === 'min') { maxEl.value = minEl.value; } else { minEl.value = maxEl.value; }
-    }
-
-    function migrateRatingBlocks(pc) {
-        var blocks = pc.RatingBlocks || [];
-        if (blocks.some(function (b) { return !b.IsPlaceholder; })) return blocks;
-        if (pc.MinOfficialRating || pc.MaxOfficialRating || pc.IncludeUnrated === false) {
-            return [{ MinOfficialRating: pc.MinOfficialRating || '', MaxOfficialRating: pc.MaxOfficialRating || '', IncludeUnrated: pc.IncludeUnrated !== false, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 }].concat(blocks);
-        }
-        return blocks;
-    }
-
+    // renderRatingBlocks
+    // Draws the Popular Channel's rating and placeholder blocks.
     function renderRatingBlocks() {
-        var host = el('popularRatingBlocks');
-        host.innerHTML = '';
         if (!popularConfig) return;
         popularConfig.RatingBlocks = popularConfig.RatingBlocks || [];
-        if (!popularConfig.RatingBlocks.length) {
-            host.innerHTML = '<div class="base-empty-section">No rating blocks. Any rating airs at any time. Add one to restrict by rating or time of day.</div>';
-            return;
-        }
-        popularConfig.RatingBlocks.forEach(function (block, index) {
-            host.appendChild(block.IsPlaceholder
-                ? buildPlaceholderCard(block, function () { popularConfig.RatingBlocks.splice(index, 1); renderRatingBlocks(); })
-                : buildBlockCard(block, index));
-        });
-    }
-
-    function buildBlockCard(block, index) {
-        var card = document.createElement('div');
-        card.className = 'lc-ratingblock';
-        card.innerHTML =
-            '<div class="lc-source-header">' +
-                '<span class="material-icons lc-source-icon" aria-hidden="true">schedule</span>' +
-                '<span class="lc-block-title">Rating block</span>' +
-                '<button is="emby-button" type="button" class="lc-remove raised base-button destructive" title="Remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
-            '</div>' +
-            '<div class="selectContainer"><label class="selectLabel">Minimum age rating</label>' +
-                '<select is="emby-select" class="lc-block-min"><option value="">No minimum</option>' + ratingOptions + '</select></div>' +
-            '<div class="selectContainer"><label class="selectLabel">Maximum age rating</label>' +
-                '<select is="emby-select" class="lc-block-max"><option value="">No limit</option>' + ratingOptions + '</select></div>' +
-            '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
-                '<input type="checkbox" is="emby-checkbox" class="lc-block-unrated" /><span class="checkboxLabel">Include unrated</span></label></div>' +
-            '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
-                '<input type="checkbox" is="emby-checkbox" class="lc-block-kids" /><span class="checkboxLabel">Tag as kids</span></label></div>' +
-            '<div class="selectContainer"><label class="selectLabel">Period</label>' +
-                '<select is="emby-select" class="lc-block-period"><option value="AllDay">All day</option><option value="Custom">Custom</option></select></div>' +
-            '<div class="lc-block-times">' +
-                '<div class="inputContainer"><label class="inputLabel">Start time</label><input is="emby-input" type="time" class="lc-block-start" /></div>' +
-                '<div class="inputContainer"><label class="inputLabel">End time</label><input is="emby-input" type="time" class="lc-block-end" /></div>' +
-            '</div>';
-
-        var min = card.querySelector('.lc-block-min');
-        var max = card.querySelector('.lc-block-max');
-        var unrated = card.querySelector('.lc-block-unrated');
-        var kids = card.querySelector('.lc-block-kids');
-        var period = card.querySelector('.lc-block-period');
-        var times = card.querySelector('.lc-block-times');
-        var start = card.querySelector('.lc-block-start');
-        var end = card.querySelector('.lc-block-end');
-
-        min.value = block.MinOfficialRating || '';
-        max.value = block.MaxOfficialRating || '';
-        unrated.checked = block.IncludeUnrated !== false;
-        kids.checked = block.IsKids === true;
-        period.value = block.Period || 'AllDay';
-        start.value = minutesToTime(block.StartMinutes || 0);
-        end.value = minutesToTime(block.EndMinutes || 0);
-
-        function syncTimes() { times.classList.toggle('hidden', period.value !== 'Custom'); }
-        syncTimes();
-
-        min.addEventListener('change', function () { coerceBand(min, max, 'min'); block.MinOfficialRating = min.value; block.MaxOfficialRating = max.value; });
-        max.addEventListener('change', function () { coerceBand(min, max, 'max'); block.MinOfficialRating = min.value; block.MaxOfficialRating = max.value; });
-        unrated.addEventListener('change', function () { block.IncludeUnrated = unrated.checked; });
-        kids.addEventListener('change', function () { block.IsKids = kids.checked; });
-        period.addEventListener('change', function () { block.Period = period.value; syncTimes(); });
-        start.addEventListener('change', function () { block.StartMinutes = timeToMinutes(start.value); });
-        end.addEventListener('change', function () { block.EndMinutes = timeToMinutes(end.value); });
-
-        card.querySelector('.lc-remove').addEventListener('click', function () {
-            popularConfig.RatingBlocks.splice(index, 1);
-            renderRatingBlocks();
-        });
-
-        return card;
+        renderBlocks(el('popularRatingBlocks'), popularConfig.RatingBlocks, ratings, Shared);
     }
 
     function loadPopular(config) {
@@ -248,7 +134,8 @@ export default function (view) {
     function load() {
         Shared.initCollapsibles();
         // Populate the rating options before applying the saved values to them.
-        loadRatings().then(function () {
+        loadRatings().then(function (info) {
+            ratings = info;
             return Shared.getConfig().then(loadPopular);
         }).catch(function () {
             Shared.setStatus('popularStatus', 'Could not load the settings. Reload the page to try again.', true);

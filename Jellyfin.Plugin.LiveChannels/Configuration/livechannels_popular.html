@@ -73,7 +73,7 @@
                             <h3 class="base-subsection-title">Age ratings</h3>
                             <div class="selectContainer">
                                 <label class="selectLabel">Rating limits</label>
-                                <div id="popularRatingBlocks" class="lc-source-list"></div>
+                                <div id="popularRatingBlocks" class="lc-block-list"></div>
                                 <div class="base-button-row">
                                     <button is="emby-button" type="button" id="popularAddRatingBlock" class="raised base-button primary" title="Add a rating block">
                                         <span class="material-icons" aria-hidden="true">add</span><span>Add rating block</span>
@@ -164,19 +164,16 @@
     </div>
 
     <style>
-        /* Rating block cards, matching the channel editor. */
-        .lc-source-header { display: flex; align-items: center; gap: 10px; margin-bottom: 1em; }
-        .lc-source-icon { color: rgba(255, 255, 255, 0.45); flex: 0 0 auto; }
-        #popularRatingBlocks .base-empty-section { padding: 20px 24px; font-size: 1em; }
-        .lc-ratingblock {
-            border: 1px solid var(--base-border); border-radius: 8px;
-            padding: 1em 1.25em; margin-bottom: 12px; background: rgba(255, 255, 255, 0.02);
-        }
-        .lc-ratingblock:last-child { margin-bottom: 0; }
+        /* lc-block-list */
+        /* The stack of rating and placeholder block cards. */
+        /* Example: <div class="lc-block-list"><div class="base-panel">...</div></div> */
+        .lc-block-list { margin-top: var(--base-gap-narrow); }
+
+        /* lc-block-head */
+        /* A block card's header line, with the title pushing Remove to the end. */
+        /* Example: <div class="lc-block-head"><span class="lc-block-title">Rating block</span><button>Remove</button></div> */
+        .lc-block-head { display: flex; align-items: center; gap: var(--base-gap-narrow); }
         .lc-block-title { flex: 1; min-width: 0; font-weight: 600; }
-        .lc-block-times { display: flex; gap: 12px; }
-        .lc-block-times .inputContainer { flex: 1; margin: 0; }
-        .lc-placeholderblock .lc-block-times { margin-bottom: 1em; }
     </style>
 
     <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">

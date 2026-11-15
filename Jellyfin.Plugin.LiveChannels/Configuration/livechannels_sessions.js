@@ -1,4 +1,4 @@
-import { createConfigPage, bindDialog } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { createConfigPage, createLogViewer, createStatusDot, openDialog } from './configurationpage?name=livechannels_jpkribs_shared.js';
 
 export default function (view) {
     'use strict';
@@ -23,7 +23,7 @@ export default function (view) {
         },
         onHide: function () {
             // Close an open log so its Escape and focus handlers do not outlive the page.
-            if (logDialog) { logDialog.close(); }
+            if (logDialog) { logDialog.dismiss(); }
         }
     });
     var Shared = page.shared;
@@ -34,7 +34,7 @@ export default function (view) {
     // Whole hours and minutes since the stream started, as H:MM.
     function formatElapsed(startedUtc) {
         var started = new Date(startedUtc).getTime();
-        if (isNaN(started)) { return '—'; }
+        if (isNaN(started)) { return '-'; }
         var seconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
         var h = Math.floor(seconds / 3600);
         var m = Math.floor((seconds % 3600) / 60);
@@ -43,25 +43,31 @@ export default function (view) {
 
     function formatStarted(startedUtc) {
         var date = new Date(startedUtc);
-        if (isNaN(date.getTime())) { return '—'; }
+        if (isNaN(date.getTime())) { return '-'; }
         return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     }
 
-    // The encode speed as its ratio followed by a status dot ("1.01x ●"): green keeping up (1.0x and over),
-    // yellow slightly behind (0.95 to 1.0x), red falling behind (under 0.95x), and a muted dot with a dash
-    // until ffmpeg reports a first reading.
+    // speedCell
+    // Shows the encode speed as its ratio and a Status Dot. Green keeps up at 1.0x and over, orange is slightly behind
+    // from 0.95x, red falls behind under that, and gray waits for ffmpeg's first reading.
+    //
+    // Inputs
+    // speed [number]: The encode speed ratio, or nothing before the first reading.
+    //
+    // Output
+    // [string]: The cell markup.
     function speedCell(speed) {
         var color, label, text;
         if (typeof speed !== 'number' || speed <= 0) {
-            color = 'rgba(255,255,255,0.25)'; label = 'Waiting for a reading'; text = '—';
+            color = 'gray'; label = 'Waiting for a Reading'; text = '-';
         } else if (speed >= 1.0) {
-            color = '#3fb950'; label = 'Keeping up'; text = speed.toFixed(2) + 'x';
+            color = 'green'; label = 'Keeping Up'; text = speed.toFixed(2) + 'x';
         } else if (speed >= 0.95) {
-            color = '#d29922'; label = 'Slightly behind'; text = speed.toFixed(2) + 'x';
+            color = 'orange'; label = 'Slightly Behind'; text = speed.toFixed(2) + 'x';
         } else {
-            color = '#f85149'; label = 'Falling behind'; text = speed.toFixed(2) + 'x';
+            color = 'red'; label = 'Falling Behind'; text = speed.toFixed(2) + 'x';
         }
-        return '<span class="base-mono">' + text + '</span> <span class="lc-speed-dot" style="color:' + color + '" title="' + label + '">●</span>';
+        return '<span class="lc-speed"><span class="base-mono">' + text + '</span>' + createStatusDot({ color: color, label: label }).element.outerHTML + '</span>';
     }
 
     function row(label, value) {
@@ -82,7 +88,7 @@ export default function (view) {
             _logoCache[id] = { url: url };
             // The card may have re-rendered while the fetch ran; update whichever img is in the DOM now.
             var img = el('sessionList').querySelector('.lc-session-logo[data-session-id="' + id + '"]');
-            if (img) { img.src = _logoCache[id].url; img.style.visibility = ''; }
+            if (img) { img.src = _logoCache[id].url; img.classList.remove('lc-pending'); }
         }).catch(function () {
             _logoCache[id] = { failed: true };
         });
@@ -104,16 +110,16 @@ export default function (view) {
         var cached = _logoCache[s.Id];
         var logoImg = cached && cached.url
             ? '<img class="lc-session-logo" data-session-id="' + Shared.escapeHtml(s.Id) + '" src="' + cached.url + '" alt="" />'
-            : '<img class="lc-session-logo" data-session-id="' + Shared.escapeHtml(s.Id) + '" alt="" style="visibility:hidden" />';
+            : '<img class="lc-session-logo lc-pending" data-session-id="' + Shared.escapeHtml(s.Id) + '" alt="" />';
         // A winding-down session (its viewer left; the encoder stays warm briefly so a returning viewer re-tunes
         // instantly) is dimmed and labelled with its countdown. Kill still stops it right away.
         var winding = typeof s.StopsInSeconds === 'number';
         var windingNote = winding
-            ? '<div class="lc-session-stopping" style="color:#d29922;font-size:0.82em;margin-top:2px;" title="The viewer left. The encoder stays warm briefly so tuning back in is instant. Kill stops it now.">' +
+            ? '<div class="lc-session-stopping" title="The viewer left, so the encoder stays warm briefly for a quick return.">' +
                 'No viewers. Stopping in ~' + s.StopsInSeconds + 's</div>'
             : '';
-        return '<div class="base-record-card lc-session" data-id="' + Shared.escapeHtml(s.Id) + '" data-name="' + Shared.escapeHtml(s.Name || '') + '"' +
-            (winding ? ' style="opacity:0.6"' : '') + ' title="Show this session\'s ffmpeg logs">' +
+        return '<div class="base-record-card lc-session' + (winding ? ' lc-winding' : '') + '" data-id="' + Shared.escapeHtml(s.Id) + '" data-name="' + Shared.escapeHtml(s.Name || '') + '"' +
+            ' title="Show the ffmpeg log" role="button" tabindex="0">' +
             '<div class="lc-session-head">' +
                 logoImg +
                 '<div class="lc-session-title">' +
@@ -136,7 +142,7 @@ export default function (view) {
         // Hide a logo that fails to load rather than showing a broken-image icon.
         var imgs = el('sessionList').querySelectorAll('.lc-session-logo');
         for (var i = 0; i < imgs.length; i++) {
-            imgs[i].addEventListener('error', function () { this.style.visibility = 'hidden'; });
+            imgs[i].addEventListener('error', function () { this.classList.add('lc-pending'); });
         }
 
         // Drop (and revoke) logos for sessions that have ended, then fetch any this render is missing.
@@ -160,53 +166,71 @@ export default function (view) {
         });
     }
 
-    // --- ffmpeg log modal: selecting a session shows every command it spawned plus each process's exit
-    // summary and stderr tail. Copy puts the whole log on the clipboard; Kill stops the stream from here.
+    // The ffmpeg log dialog. Selecting a session shows every command it ran with each process's exit summary and stderr
+    // tail. The Log Viewer copies the whole log, and Kill stops the stream from here.
 
     var _logSessionId = null;
+    var logViewer = null;
 
+    // loadLog
+    // Reads the open session's ffmpeg log into the Log Viewer.
+    //
+    // Output
+    // [Promise]: Settles once the log is shown.
     function loadLog() {
-        if (!_logSessionId) { return Promise.resolve(); }
+        if (!_logSessionId || !logViewer) { return Promise.resolve(); }
+        var viewer = logViewer;
         return ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('livechannels/sessions/' + encodeURIComponent(_logSessionId) + '/log') })
             .then(function (r) { return r && typeof r.text === 'function' ? r.text() : Promise.resolve(String(r || '')); })
             .then(function (text) {
-                el('lcLogText').textContent = text || 'No log yet — the session is still starting.';
+                viewer.setValue(text ? text.split('\n') : ['No log yet. The session is still starting.']);
             }).catch(function () {
-                el('lcLogText').textContent = 'Could not load the log (the session may have just closed).';
+                viewer.setValue([{ text: 'Could not load the log. The session may have just closed.', level: 'error' }]);
             });
     }
 
+    // openLog
+    // Opens the log dialog for one session.
+    //
+    // Inputs
+    // id [string]: The session id.
+    // name [string]: The channel name, used as the title.
     function openLog(id, name) {
         _logSessionId = id;
-        el('lcLogTitle').textContent = name || 'Session';
-        el('lcLogText').textContent = 'Loading…';
-        logDialog.open();
+        logViewer = createLogViewer({ maxLines: 20000, autoScroll: false, emptyText: 'Loading…', height: '55vh', label: 'ffmpeg log' });
+        logDialog = openDialog({
+            title: name || 'Session',
+            body: logViewer.element,
+            size: 'large',
+            buttons: [
+                { text: 'Kill', className: 'base-button destructive', action: function (close) {
+                    var target = _logSessionId;
+                    close();
+                    if (target) { killSession(target); }
+                } },
+                { text: 'Refresh', className: 'base-button primary', action: function () { loadLog(); } }
+            ],
+            onClose: function () {
+                _logSessionId = null;
+                logDialog = null;
+                if (logViewer) { logViewer.destroy(); logViewer = null; }
+            }
+        });
         loadLog();
     }
 
-    function copyLog() {
-        Shared.copyWithFeedback(el('lcLogCopy'), el('lcLogText').textContent || '');
-    }
-
     function bind() {
-        // Delegate so the cards keep working across re-renders: selecting a session opens its log modal.
+        // Delegate so the cards keep working across re-renders: selecting a session opens its log.
         el('sessionList').addEventListener('click', function (e) {
             var card = e.target.closest('.lc-session');
             if (card) { openLog(card.getAttribute('data-id'), card.getAttribute('data-name')); }
         });
-
-        // The close button, a backdrop click, and Escape all close the modal.
-        logDialog = bindDialog('lcLogDialog', {
-            root: view,
-            onClose: function () { _logSessionId = null; }
-        });
-
-        el('lcLogRefresh').addEventListener('click', loadLog);
-        el('lcLogCopy').addEventListener('click', copyLog);
-        el('lcLogKill').addEventListener('click', function () {
-            var id = _logSessionId;
-            logDialog.close();
-            if (id) { killSession(id); }
+        el('sessionList').addEventListener('keydown', function (e) {
+            var card = e.target.closest('.lc-session');
+            if (card && (e.key === 'Enter' || e.key === ' ')) {
+                e.preventDefault();
+                openLog(card.getAttribute('data-id'), card.getAttribute('data-name'));
+            }
         });
     }
 

@@ -1,4 +1,4 @@
-import { createConfigPage } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { createChipSelect, createConfigPage, createMediaPicker } from './configurationpage?name=livechannels_jpkribs_shared.js';
 
 export default function (view) {
     'use strict';
@@ -21,92 +21,26 @@ export default function (view) {
     });
     var Shared = page.shared;
 
-    var cultures = [];         // cached [{ key: ISO code, label: name }] for the language search
-    var langSelect = null;     // searchable single-select for the default subtitle language
+    var cultures = [];         // cached [{ value: ISO code, label: name }] for the language choices
+    var langSelect = null;     // Chip Select, single, for the default subtitle language
 
     function el(id) { return view.querySelector('#' + id); }
 
     // The display name for a stored language code, falling back to the code itself when cultures are unavailable.
     function cultureLabel(code) {
-        for (var i = 0; i < cultures.length; i++) { if (cultures[i].key === code) return cultures[i].label; }
+        for (var i = 0; i < cultures.length; i++) { if (cultures[i].value === code) return cultures[i].label; }
         return code;
     }
 
-    // A searchable single-select for a language: type to filter the (fixed, long) culture list and pick one, instead
-    // of scrolling a ~180-entry dropdown. Stores and returns the three-letter ISO code.
-    function createLanguageSelect() {
-        var selected = null; // { key, label }
-
-        var wrap = document.createElement('div');
-        wrap.className = 'lc-chip-select';
-        var chips = document.createElement('div');
-        chips.className = 'base-tags';
-        var searchHost = document.createElement('div');
-        searchHost.innerHTML = '<input type="text" class="emby-input" placeholder="Search language…" autocomplete="off" />';
-        var search = searchHost.querySelector('input');
-        var results = document.createElement('div');
-        results.className = 'base-table';
-        results.style.display = 'none';
-        wrap.appendChild(chips);
-        wrap.appendChild(search);
-        wrap.appendChild(results);
-
-        function hideResults() { results.innerHTML = ''; results.style.display = 'none'; }
-
-        function renderChip() {
-            chips.innerHTML = '';
-            if (!selected) { return; }
-            var tag = document.createElement('span');
-            tag.className = 'base-tag';
-            var label = document.createElement('span');
-            label.textContent = selected.label;
-            var remove = document.createElement('span');
-            remove.className = 'base-tag-remove';
-            remove.textContent = '×';
-            remove.title = 'Remove';
-            remove.addEventListener('click', function () { selected = null; renderChip(); });
-            tag.appendChild(label);
-            tag.appendChild(remove);
-            chips.appendChild(tag);
-        }
-
-        var timer = null;
-        search.addEventListener('input', function () {
-            if (timer) clearTimeout(timer);
-            var term = search.value.trim();
-            if (!term) { hideResults(); return; }
-            timer = setTimeout(function () {
-                var lower = term.toLowerCase();
-                var rows = cultures.filter(function (c) { return c.label.toLowerCase().indexOf(lower) >= 0; }).slice(0, 25);
-                results.innerHTML = '';
-                if (!rows.length) { results.style.display = 'none'; return; }
-                rows.forEach(function (c) {
-                    var row = document.createElement('div');
-                    row.className = 'base-table-row';
-                    row.style.cursor = 'pointer';
-                    row.textContent = c.label;
-                    row.addEventListener('click', function () { selected = { key: c.key, label: c.label }; renderChip(); search.value = ''; hideResults(); });
-                    results.appendChild(row);
-                });
-                results.style.display = '';
-            }, 300);
-        });
-
-        renderChip();
-
-        return {
-            element: wrap,
-            getValue: function () { return selected ? selected.key : ''; },
-            setValue: function (code) { selected = code ? { key: code, label: cultureLabel(code) } : null; renderChip(); hideResults(); search.value = ''; }
-        };
-    }
-
-    // Creates (once) the language select and mounts it into the playback section.
+    // ensureLangSelect
+    // Creates the language Chip Select once and mounts it in the Playback section, or refreshes its choices.
     function ensureLangSelect() {
         if (!langSelect) {
-            langSelect = createLanguageSelect();
+            langSelect = createChipSelect({ placeholder: 'Search languages', options: cultures, single: true });
             var mount = view.querySelector('.lc-sublang-mount');
             if (mount) mount.appendChild(langSelect.element);
+        } else {
+            langSelect.setOptions(cultures);
         }
     }
 
@@ -150,11 +84,12 @@ export default function (view) {
         el('subBorder').value = config.SubtitleBorder || 'Default';
         el('subBold').checked = !!config.SubtitleBold;
         ensureLangSelect();
-        langSelect.setValue(config.DefaultSubtitleLanguage || 'eng');
+        var lang = config.DefaultSubtitleLanguage || 'eng';
+        langSelect.setValue([{ value: lang, label: cultureLabel(lang) }]);
         renderAcceleration();
     }
 
-    // Loads the server's known cultures once into a cache of { key: ISO code, label: name } for the language search.
+    // Loads the server's known cultures once into a cache of { value: ISO code, label: name } for the language choices.
     function loadLanguages() {
         return ApiClient.getJSON(ApiClient.getUrl('Localization/Cultures')).then(function (list) {
             var seen = {};
@@ -163,7 +98,7 @@ export default function (view) {
                 if (!code || seen[code]) return false;
                 seen[code] = true; return true;
             }).map(function (c) {
-                return { key: c.ThreeLetterISOLanguageName, label: c.DisplayName || c.Name };
+                return { value: c.ThreeLetterISOLanguageName, label: c.DisplayName || c.Name };
             }).sort(function (a, b) { return a.label.localeCompare(b.label); });
         }).catch(function () { cultures = []; });
     }
@@ -189,7 +124,8 @@ export default function (view) {
             fresh.SessionTimeoutMinutes = isNaN(timeout) ? 0 : Math.max(0, timeout);
             fresh.StreamDirectory = (el('streamDirectory').value || '').trim();
             fresh.DisableHardwareAcceleration = el('disableHwa').checked;
-            fresh.DefaultSubtitleLanguage = (langSelect ? langSelect.getValue() : '') || 'eng';
+            var picked = langSelect ? langSelect.getValue() : [];
+            fresh.DefaultSubtitleLanguage = (picked.length ? String(picked[0]) : '') || 'eng';
             fresh.SubtitleFont = (el('subFont').value || '').trim();
             var scale = parseInt(el('subScale').value, 10);
             fresh.SubtitleFontScalePercent = isNaN(scale) ? 100 : Math.min(300, Math.max(50, scale));
@@ -206,9 +142,9 @@ export default function (view) {
             // The server rejects a colour it cannot parse, so show what it said rather than a bare failure.
             var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
             read.then(function (t) {
-                Shared.setStatus('settingsStatus', t ? t.replace(/^"|"$/g, '') : 'Save failed.', true);
+                Shared.setStatus('settingsStatus', t ? t.replace(/^"|"$/g, '') : 'Could not save the settings.', true);
             }, function () {
-                Shared.setStatus('settingsStatus', 'Save failed.', true);
+                Shared.setStatus('settingsStatus', 'Could not save the settings.', true);
             });
         });
     }
@@ -229,84 +165,16 @@ export default function (view) {
 
     var _stressPoller = null;
 
-    // The stress-test item picker: the same single-select typeahead chip the channel editor uses for its
-    // pickers (search as you type, click a row, the choice becomes a removable chip), so choosing a test item
-    // feels identical to choosing channel content. Searches recursively across all libraries and returns only
-    // individual playable files (movies and episodes). Nothing here is saved — the test is ad hoc.
+    // The stress test item picker, a single Media Picker over movies and episodes. Nothing here is saved.
     var stressPicker = null;
 
+    // ensureStressPicker
+    // Creates the stress test Media Picker once and mounts it in the Stress Test section.
     function ensureStressPicker() {
         if (stressPicker) { return; }
-        var selected = null;
-        var wrap = document.createElement('div');
-        wrap.className = 'lc-chip-select';
-        var chips = document.createElement('div');
-        chips.className = 'base-tags';
-        var searchHost = document.createElement('div');
-        searchHost.innerHTML = '<input type="text" class="emby-input" autocomplete="off" />';
-        var search = searchHost.querySelector('input');
-        search.placeholder = 'Search movies and episodes…';
-        var results = document.createElement('div');
-        results.className = 'base-table';
-        results.style.display = 'none';
-        wrap.appendChild(chips);
-        wrap.appendChild(search);
-        wrap.appendChild(results);
-
-        function hideResults() { results.innerHTML = ''; results.style.display = 'none'; }
-
-        function renderChip() {
-            chips.innerHTML = '';
-            if (!selected) { return; }
-            var tag = document.createElement('span');
-            tag.className = 'base-tag';
-            var label = document.createElement('span');
-            label.textContent = selected.label;
-            var remove = document.createElement('span');
-            remove.className = 'base-tag-remove';
-            remove.textContent = '×';
-            remove.title = 'Remove';
-            remove.addEventListener('click', function () { selected = null; renderChip(); });
-            tag.appendChild(label);
-            tag.appendChild(remove);
-            chips.appendChild(tag);
-        }
-
-        function runSearch(term) {
-            ApiClient.getJSON(ApiClient.getUrl('Items', {
-                searchTerm: term, recursive: true, includeItemTypes: 'Movie,Episode', limit: 25, fields: 'ProductionYear'
-            })).then(function (r) {
-                results.innerHTML = '';
-                var items = (r && r.Items) || [];
-                if (!items.length) { results.style.display = 'none'; return; }
-                items.forEach(function (i) {
-                    var row = document.createElement('div');
-                    row.className = 'base-table-row';
-                    row.style.cursor = 'pointer';
-                    row.textContent = i.Name + (i.ProductionYear ? ' (' + i.ProductionYear + ')' : '') + (i.SeriesName ? ' — ' + i.SeriesName : '');
-                    row.addEventListener('click', function () {
-                        selected = { key: i.Id, label: row.textContent };
-                        renderChip();
-                        search.value = '';
-                        hideResults();
-                    });
-                    results.appendChild(row);
-                });
-                results.style.display = '';
-            }).catch(hideResults);
-        }
-
-        var timer = null;
-        search.addEventListener('input', function () {
-            if (timer) { clearTimeout(timer); }
-            var term = search.value.trim();
-            if (!term) { hideResults(); return; }
-            timer = setTimeout(function () { runSearch(term); }, 300);
-        });
-
+        stressPicker = createMediaPicker({ single: true, itemTypes: ['Movie', 'Episode'], placeholder: 'Search movies and episodes', emptyText: 'No test item selected.' });
         var mount = view.querySelector('.lc-stressitem-mount');
-        if (mount) { mount.appendChild(wrap); }
-        stressPicker = { getId: function () { return selected ? selected.key : ''; } };
+        if (mount) { mount.appendChild(stressPicker.element); }
     }
 
     function renderStress(s) {
@@ -320,7 +188,7 @@ export default function (view) {
         if (!s.Running && typeof s.Recommended === 'number' && (s.Rounds || []).length) {
             html += '<br><b>' + (s.Recommended > 0
                 ? 'Recommended Maximum concurrent streams: ' + s.Recommended
-                : 'Even one stream could not hold realtime with this item; consider lowering resolution or bitrate.') + '</b>';
+                : 'Even one stream could not hold realtime with this item. Lower the resolution or bitrate.') + '</b>';
             if (s.Recommended > 0) {
                 html += ' <a is="emby-linkbutton" href="#" id="stressApply" class="button-link">Apply</a>';
             }
@@ -332,7 +200,7 @@ export default function (view) {
             apply.addEventListener('click', function (e) {
                 e.preventDefault();
                 el('maxSessions').value = s.Recommended;
-                Shared.setStatus('stressStatus', 'Set to ' + s.Recommended + ' — remember to Save.', false);
+                Shared.setStatus('stressStatus', 'Set to ' + s.Recommended + '. Select Save settings to keep it.', false);
             });
         }
         Shared.setVisible('stressCancel', s.Running);
@@ -358,8 +226,9 @@ export default function (view) {
     }
 
     function stressRun() {
-        var id = stressPicker ? stressPicker.getId() : '';
-        if (!id) { Shared.setStatus('stressStatus', 'Search for and pick a test item first.', true); return; }
+        var picked = stressPicker ? stressPicker.getValue() : [];
+        var id = picked.length ? picked[0].Id : '';
+        if (!id) { Shared.setStatus('stressStatus', 'Select a test item.', true); return; }
         Shared.setStatus('stressStatus', 'Starting…', false);
         el('stressResult').innerHTML = '';
         ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('livechannels/stresstest/' + encodeURIComponent(id)) }).then(function () {

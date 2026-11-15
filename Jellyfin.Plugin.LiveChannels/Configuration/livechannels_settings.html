@@ -99,7 +99,7 @@
                             <span class="base-collapsible-icon">&#9660;</span>
                         </button>
                         <div id="sectionSubtitles" class="base-collapsible-content collapsed">
-                            <div class="fieldDescription">How burned-in subtitles look. Channels burn subtitles according to their own subtitle rule; this styles them wherever they appear. Leave everything untouched to render each subtitle exactly as it was authored, including its own bold, italic, and colour tags.</div>
+                            <div class="fieldDescription">How burned-in subtitles look on every channel. Leave everything untouched to render each subtitle as it was authored, with its own bold, italic, and colour tags.</div>
 
                             <div class="inputContainer">
                                 <label for="subFont">Font</label>
@@ -213,24 +213,6 @@
             </form>
         </div>
     </div>
-
-    <style>
-        /* Language and test-item chips, matched to the channel editor's pickers (blue capsule) so they are not the
-           unstyled grey default. */
-        .lc-chip-select .base-tags { gap: 6px; margin: 0 0 8px 0; }
-        .lc-chip-select .base-tags:empty { display: none; margin: 0; }
-        .lc-chip-select .base-tag {
-            gap: 8px; background: var(--base-blue-bg); color: #fff;
-            border: 1px solid rgba(52, 152, 219, 0.5); border-radius: 14px;
-            padding: 3px 4px 3px 12px; font-size: 0.9em; line-height: 1.6;
-        }
-        .lc-chip-select .base-tag-remove {
-            display: inline-flex; align-items: center; justify-content: center;
-            width: 18px; height: 18px; padding: 0; border-radius: 50%;
-            background: rgba(255, 255, 255, 0.12); color: #fff; opacity: 1; font-size: 1em; line-height: 1;
-        }
-        .lc-chip-select .base-tag-remove:hover { background: var(--base-red-fg); color: #fff; opacity: 1; }
-    </style>
 
     <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">
 </div>

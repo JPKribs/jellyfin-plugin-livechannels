@@ -51,7 +51,7 @@
 
                     <span id="ioStatus" class="base-status-text"></span>
 
-                    <div id="emptyState" class="base-empty-section hidden">No channels yet. Click <strong>New</strong> to create one.</div>
+                    <div id="emptyState" class="base-empty-section hidden">No channels yet. Select New to add one.</div>
 
                     <!-- Channel editor -->
                     <div id="channelEditor" class="hidden">
@@ -75,9 +75,9 @@
                                 <h3 class="base-subsection-title">Logo</h3>
                                 <div class="inputContainer">
                                     <label>Logo</label>
-                                    <div class="base-selector">
-                                        <img id="logoPreview" alt="Channel logo" class="lc-logo-preview hidden" style="width:128px;height:128px;border-radius:8px;object-fit:cover;background:rgba(255,255,255,0.04);" />
-                                        <div class="base-selector-actions">
+                                    <div class="lc-logo-row">
+                                        <img id="logoPreview" alt="Channel logo" class="lc-logo-preview hidden" />
+                                        <div class="base-button-row">
                                             <button is="emby-button" type="button" id="btnUploadLogo" class="raised base-button secondary" title="Upload image">
                                                 <span class="material-icons" aria-hidden="true">upload</span><span>Upload</span>
                                             </button>
@@ -119,7 +119,7 @@
                             </button>
                             <div id="sectionContent" class="base-collapsible-content collapsed">
                                 <div class="fieldDescription">This channel will contain content from the libraries configured below.</div>
-                                <div id="librarySources" class="lc-source-list"></div>
+                                <div id="librarySources" class="lc-block-list"></div>
                                 <div class="base-button-row">
                                     <button is="emby-button" type="button" id="btnAddLibrary" class="raised base-button primary" title="Add a source">
                                         <span class="material-icons" aria-hidden="true">add</span><span>Add source</span>
@@ -138,7 +138,7 @@
                                 <h3 class="base-subsection-title">Age ratings</h3>
                                 <div class="selectContainer">
                                     <label class="selectLabel">Rating limits</label>
-                                    <div id="ratingBlocks" class="lc-source-list"></div>
+                                    <div id="ratingBlocks" class="lc-block-list"></div>
                                     <div class="base-button-row">
                                         <button is="emby-button" type="button" id="addRatingBlock" class="raised base-button primary" title="Add a rating block">
                                             <span class="material-icons" aria-hidden="true">add</span><span>Add rating block</span>
@@ -328,54 +328,36 @@
     </div>
 
     <style>
-        /* Full-width save with no extra divider (the last collapsible header already draws one). The button
-           uses Jellyfin's native "block" class for full width and centred text. */
-        .lc-save-actions { margin-top: 16px; }
+        /* lc-save-actions */
+        /* Space above the full width Save under the last section. */
+        /* Example: <div class="lc-save-actions"><button class="raised base-button primary fill">Save channel</button></div> */
+        .lc-save-actions { margin-top: var(--base-gap-wide); }
 
-        /* Picker chips (genres, studios, people, audio language): selected chips above the picker, styled like
-           UserManagement's tags. */
-        .lc-chip-select .base-tags { gap: 6px; margin: 0 0 8px 0; }
-        .lc-chip-select .base-tags:empty { display: none; margin: 0; }
-        .lc-chip-select .base-tag {
-            gap: 8px; background: var(--base-blue-bg); color: #fff;
-            border: 1px solid rgba(52, 152, 219, 0.5); border-radius: 14px;
-            padding: 3px 4px 3px 12px; font-size: 0.9em; line-height: 1.6;
-        }
-        .lc-chip-select .base-tag-remove {
-            display: inline-flex; align-items: center; justify-content: center;
-            width: 18px; height: 18px; padding: 0; border-radius: 50%;
-            background: rgba(255, 255, 255, 0.12); color: #fff; opacity: 1; font-size: 1em; line-height: 1;
-        }
-        .lc-chip-select .base-tag-remove:hover { background: var(--base-red-fg); color: #fff; opacity: 1; }
+        /* lc-logo-row */
+        /* The logo preview beside its Upload and Clear buttons. */
+        /* Example: <div class="lc-logo-row"><img class="lc-logo-preview" /><div class="base-button-row">...</div></div> */
+        .lc-logo-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--base-gap-wide); }
+        .lc-logo-preview { width: 8rem; height: 8rem; border-radius: var(--base-radius-large); object-fit: cover; background: var(--base-wash); }
 
-        /* Library source cards, modelled on ServerSync's mapping card. Rows, thumbs, fields, subsection
-           titles, and buttons all come from the base (jpkribs_shared); this is layout glue only. */
-        .lc-source-list { display: flex; flex-direction: column; margin-top: 8px; }
-        .lc-source {
-            border: 1px solid var(--base-border); border-radius: 8px;
-            padding: 1em 1.25em; margin-bottom: 12px; background: rgba(255, 255, 255, 0.02);
-        }
-        .lc-source:last-child { margin-bottom: 0; }
-        .lc-source-header { display: flex; align-items: center; gap: 10px; margin-bottom: 1em; }
-        .lc-source-icon { color: rgba(255, 255, 255, 0.45); flex: 0 0 auto; }
-        .lc-source-library { width: 100%; margin: 0; }
-        .lc-matchall-label { display: flex; align-items: center; margin-top: 10px; }
-        #librarySources .base-table-body { max-height: 360px; overflow-y: auto; margin-top: 0.6em; }
-        #librarySources .base-table-row { cursor: pointer; }
-        #librarySources .base-table-row.selected { background: rgba(0, 164, 220, 0.12); }
+        /* lc-block-list */
+        /* The stack of source, rating, and placeholder block cards. */
+        /* Example: <div class="lc-block-list"><div class="base-panel">...</div></div> */
+        .lc-block-list { margin-top: var(--base-gap-narrow); }
 
-        /* Each rating block is its own bordered container; a lighter empty box suits this nested filter, and the
-           block title pushes Remove to the right like the source title does. */
-        #ratingBlocks .base-empty-section { padding: 20px 24px; font-size: 1em; }
-        .lc-ratingblock {
-            border: 1px solid var(--base-border); border-radius: 8px;
-            padding: 1em 1.25em; margin-bottom: 12px; background: rgba(255, 255, 255, 0.02);
-        }
-        .lc-ratingblock:last-child { margin-bottom: 0; }
-        .lc-block-title, .lc-source-title { flex: 1; min-width: 0; font-weight: 600; }
-        .lc-block-times { display: flex; gap: 12px; }
-        .lc-block-times .inputContainer { flex: 1; margin: 0; }
-        .lc-placeholderblock .lc-block-times { margin-bottom: 1em; }
+        /* lc-block-head */
+        /* A block card's header line, with the title pushing Remove to the end. */
+        /* Example: <div class="lc-block-head"><span class="lc-block-title">Rating block</span><button>Remove</button></div> */
+        .lc-block-head { display: flex; align-items: center; gap: var(--base-gap-narrow); }
+        .lc-block-title { flex: 1; min-width: 0; font-weight: 600; }
+
+        /* lc-items */
+        /* The scrolling list of library items a Whitelist or Blacklist source picks from. */
+        /* Example: <div class="base-table-body lc-list"><div class="base-table-row lc-item">...</div></div> */
+        .lc-list { max-height: 22.5rem; overflow-y: auto; margin-top: var(--base-gap-narrow); }
+        .lc-item { cursor: pointer; }
+        .lc-item.selected { background: var(--base-accent-wash); }
+        .lc-item.lc-episode { padding-left: 2.25rem; }
+        .lc-matchall-label { display: flex; align-items: center; margin-top: var(--base-gap-narrow); }
     </style>
 
     <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">

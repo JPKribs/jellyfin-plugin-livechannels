@@ -1,5 +1,5 @@
-import { createConfigPage, confirmDialog, downloadJson, pickJsonFile } from './configurationpage?name=livechannels_jpkribs_shared.js';
-import { buildPlaceholderCard, newPlaceholderBlock, minutesToTime, timeToMinutes } from './configurationpage?name=livechannels_placeholder.js';
+import { createChipSelect, createConfigPage, confirmDialog, downloadJson, pickJsonFile } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { loadRatings, migrateRatingBlocks, newPlaceholderBlock, newRatingBlock, renderBlocks } from './configurationpage?name=livechannels_placeholder.js';
 
 export default function (view) {
     'use strict';
@@ -42,12 +42,11 @@ export default function (view) {
     var logoContentType = '';
     var libraries = [];        // [{ Id, Name }]
     var collections = [];      // [{ Id, Name }] box sets, for collection sources
-    var ratings = [];          // [{ Name, Value }]
-    var ratingOptions = '';    // cached <option> html for the per-block rating selects
-    var studioPicker = null;   // channel-level studio typeahead picker (created once)
-    var peoplePicker = null;   // channel-level person typeahead picker (created once)
-    var audioLangPicker = null;// channel-level audio-language single-select typeahead (created once)
-    var cultures = [];         // cached [{ key: ISO code, label: name }] for the language search
+    var ratings = { options: '', valueOf: function () { return null; } };
+    var studioPicker = null;   // channel-level studio Chip Select (created once)
+    var peoplePicker = null;   // channel-level person Chip Select (created once)
+    var audioLangPicker = null;// channel-level audio language Chip Select, single (created once)
+    var cultures = [];         // cached [{ value: ISO code, label: name }] for the language choices
 
     function el(id) { return view.querySelector('#' + id); }
 
@@ -97,9 +96,10 @@ export default function (view) {
     function renderCounts() {
         var enabled = 0, disabled = 0;
         channels.forEach(function (ch) { if (ch.Enabled === false) disabled++; else enabled++; });
-        el('channelCounts').innerHTML =
-            '<div class="base-card green"><span class="base-card-count">' + enabled + '</span><span class="base-card-label">Enabled</span></div>' +
-            '<div class="base-card gray"><span class="base-card-count">' + disabled + '</span><span class="base-card-label">Disabled</span></div>';
+        Shared.renderCards('channelCounts', [
+            { label: 'Enabled', count: enabled, color: 'green' },
+            { label: 'Disabled', count: disabled, color: 'gray' }
+        ]);
     }
 
     function renderSelect() {
@@ -143,201 +143,51 @@ export default function (view) {
         btn.querySelector('.material-icons').textContent = enabled ? 'visibility' : 'visibility_off';
     }
 
-    // MARK: Chip select (genres)
-
-    function createGenreSelect(options) {
-        options = options || {};
-        var available = [];
-        var selected = [];
-
-        var wrap = document.createElement('div');
-        wrap.className = 'lc-chip-select';
-        // Build the emby-select through innerHTML (exactly how the source cards do it) so the customized built-in
-        // upgrades to the styled component. Do NOT use document.createElement('select', { is: 'emby-select' }) here:
-        // that path throws "toLowerCase is not a function" inside Jellyfin's webcomponents polyfill and takes the
-        // whole editor down with it.
-        var pickerHost = document.createElement('div');
-        pickerHost.innerHTML = '<select is="emby-select"></select>';
-        var picker = pickerHost.querySelector('select');
-        var chips = document.createElement('div');
-        chips.className = 'base-tags';
-        // Selected chips sit above the picker (like UserManagement's tags).
-        wrap.appendChild(chips);
-        wrap.appendChild(picker);
-
-        function emit() { if (options.onChange) options.onChange(selected.slice()); }
-
-        function renderChips() {
-            chips.innerHTML = '';
-            selected.forEach(function (name, index) {
-                var tag = document.createElement('span');
-                tag.className = 'base-tag';
-                var label = document.createElement('span');
-                label.textContent = name;
-                var remove = document.createElement('span');
-                remove.className = 'base-tag-remove';
-                remove.textContent = '×';
-                remove.title = 'Remove';
-                remove.addEventListener('click', function () { selected.splice(index, 1); renderChips(); renderPicker(); emit(); });
-                tag.appendChild(label);
-                tag.appendChild(remove);
-                chips.appendChild(tag);
-            });
-        }
-
-        function renderPicker() {
-            var html = '<option value="">' + Shared.escapeHtml(options.placeholder || 'Add…') + '</option>';
-            available.forEach(function (name) {
-                if (selected.indexOf(name) < 0) html += '<option value="' + Shared.escapeHtml(name) + '">' + Shared.escapeHtml(name) + '</option>';
-            });
-            picker.innerHTML = html;
-            picker.value = '';
-        }
-
-        picker.addEventListener('change', function () {
-            var name = picker.value;
-            if (name && selected.indexOf(name) < 0) { selected.push(name); renderChips(); emit(); }
-            renderPicker();
-        });
-
-        renderChips();
-        renderPicker();
-
-        return {
-            element: wrap,
-            getValue: function () { return selected.slice(); },
-            setValue: function (v) { selected = (v || []).slice(); renderChips(); renderPicker(); },
-            setAvailable: function (v) { available = (v || []).slice(); renderPicker(); }
-        };
+    // searchStudios
+    // Asks the server for studios whose name holds the text, so any studio is reachable.
+    //
+    // Inputs
+    // term [string]: The typed text.
+    // cb [function]: Receives the { value, label } choices.
+    function searchStudios(term, cb) {
+        ApiClient.getJSON(ApiClient.getUrl('Studios', { searchTerm: term, Recursive: true, Limit: 25 }))
+            .then(function (res) { cb(((res && res.Items) || []).map(function (s) { return { value: s.Name, label: s.Name }; })); })
+            .catch(function () { cb([]); });
     }
 
-    // MARK: Search chip picker (studios, people)
-
-    // A typeahead chip picker for sets that are awkward in a dropdown (studios run to the thousands, people more,
-    // languages are a long fixed list): it searches as you type and stores the chosen { key, label } pairs as chips.
-    // options.search(term) resolves to an array of { key, label }; options.placeholder labels the box; options.single
-    // keeps at most one selection (for single-value fields like a language). The caller maps key/label to its own
-    // storage shape (studios store the name as the key; people store the person id; languages store the ISO code).
-    function createSearchChips(options) {
-        options = options || {};
-        var selected = []; // [{ key, label }]
-
-        var wrap = document.createElement('div');
-        wrap.className = 'lc-chip-select';
-        var chips = document.createElement('div');
-        chips.className = 'base-tags';
-        var searchHost = document.createElement('div');
-        searchHost.innerHTML = '<input type="text" class="emby-input" autocomplete="off" />';
-        var search = searchHost.querySelector('input');
-        search.placeholder = options.placeholder || 'Search…';
-        var results = document.createElement('div');
-        results.className = 'base-table';
-        results.style.display = 'none';
-        wrap.appendChild(chips);
-        wrap.appendChild(search);
-        wrap.appendChild(results);
-
-        function renderChips() {
-            chips.innerHTML = '';
-            selected.forEach(function (item, index) {
-                var tag = document.createElement('span');
-                tag.className = 'base-tag';
-                var label = document.createElement('span');
-                label.textContent = item.label;
-                var remove = document.createElement('span');
-                remove.className = 'base-tag-remove';
-                remove.textContent = '×';
-                remove.title = 'Remove';
-                remove.addEventListener('click', function () { selected.splice(index, 1); renderChips(); });
-                tag.appendChild(label);
-                tag.appendChild(remove);
-                chips.appendChild(tag);
-            });
-        }
-
-        function hideResults() { results.innerHTML = ''; results.style.display = 'none'; }
-
-        function has(key) { return selected.some(function (s) { return s.key === key; }); }
-
-        function add(item) {
-            if (item.key != null && item.key !== '') {
-                if (options.single) { selected = [{ key: item.key, label: item.label }]; renderChips(); }
-                else if (!has(item.key)) { selected.push({ key: item.key, label: item.label }); renderChips(); }
-            }
-            search.value = '';
-            hideResults();
-        }
-
-        function runSearch(term) {
-            Promise.resolve(options.search(term)).then(function (rows) {
-                results.innerHTML = '';
-                rows = rows || [];
-                if (!rows.length) { results.style.display = 'none'; return; }
-                rows.forEach(function (row) {
-                    var rowEl = document.createElement('div');
-                    rowEl.className = 'base-table-row';
-                    rowEl.style.cursor = 'pointer';
-                    rowEl.textContent = row.label;
-                    rowEl.addEventListener('click', function () { add(row); });
-                    results.appendChild(rowEl);
-                });
-                results.style.display = '';
-            }).catch(hideResults);
-        }
-
-        var timer = null;
-        search.addEventListener('input', function () {
-            if (timer) clearTimeout(timer);
-            var term = search.value.trim();
-            if (!term) { hideResults(); return; }
-            timer = setTimeout(function () { runSearch(term); }, 300);
-        });
-
-        renderChips();
-
-        return {
-            element: wrap,
-            getValue: function () { return selected.map(function (s) { return { key: s.key, label: s.label }; }); },
-            setValue: function (v) {
-                selected = (v || []).filter(function (s) { return s && s.key != null && s.key !== ''; })
-                    .map(function (s) { return { key: s.key, label: s.label }; });
-                renderChips();
-                hideResults();
-                search.value = '';
-            }
-        };
+    // searchPeople
+    // Asks the server for people whose name holds the text. The person id is the value and the name the label.
+    //
+    // Inputs
+    // term [string]: The typed text.
+    // cb [function]: Receives the { value, label } choices.
+    function searchPeople(term, cb) {
+        ApiClient.getJSON(ApiClient.getUrl('Persons', { searchTerm: term, Limit: 25, userId: ApiClient.getCurrentUserId() }))
+            .then(function (res) { cb(((res && res.Items) || []).map(function (p) { return { value: p.Id, label: p.Name }; })); })
+            .catch(function () { cb([]); });
     }
 
-    // Studio search: the server filters by name, so any studio is reachable (no truncated alphabetical list).
-    function searchStudios(term) {
-        return ApiClient.getJSON(ApiClient.getUrl('Studios', { searchTerm: term, Recursive: true, Limit: 25 }))
-            .then(function (res) { return ((res && res.Items) || []).map(function (s) { return { key: s.Name, label: s.Name }; }); });
-    }
-
-    // People search: stores the person id as the key (matched by id at resolve time) and the name as the label.
-    function searchPeople(term) {
-        return ApiClient.getJSON(ApiClient.getUrl('Persons', { searchTerm: term, Limit: 25, userId: ApiClient.getCurrentUserId() }))
-            .then(function (res) { return ((res && res.Items) || []).map(function (p) { return { key: p.Id, label: p.Name }; }); });
-    }
-
-    // Creates (once) the channel-level studio and people typeahead pickers and mounts them into the editor.
+    // ensureFilterPickers
+    // Creates the studio, people, and audio language Chip Selects once and mounts them in the editor.
     function ensureFilterPickers() {
         if (!studioPicker) {
-            studioPicker = createSearchChips({ placeholder: 'Search studios…', search: searchStudios });
+            studioPicker = createChipSelect({ placeholder: 'Search studios', searchFn: searchStudios });
             var studioMount = view.querySelector('.lc-studio-mount');
             if (studioMount) studioMount.appendChild(studioPicker.element);
         }
 
         if (!peoplePicker) {
-            peoplePicker = createSearchChips({ placeholder: 'Search people…', search: searchPeople });
+            peoplePicker = createChipSelect({ placeholder: 'Search people', searchFn: searchPeople });
             var peopleMount = view.querySelector('.lc-people-mount');
             if (peopleMount) peopleMount.appendChild(peoplePicker.element);
         }
 
         if (!audioLangPicker) {
-            audioLangPicker = createSearchChips({ placeholder: 'Any language', search: searchLanguages, single: true });
+            audioLangPicker = createChipSelect({ placeholder: 'Any language', options: cultures, single: true });
             var audioMount = view.querySelector('.lc-audiolang-mount');
             if (audioMount) audioMount.appendChild(audioLangPicker.element);
+        } else {
+            audioLangPicker.setOptions(cultures);
         }
     }
 
@@ -516,24 +366,25 @@ export default function (view) {
         var ch = editing;
         if (!ch) return;
         if (!ch.Sources.length) {
-            host.innerHTML = '<div class="base-empty-section">No libraries yet. Add one below.</div>';
+            host.innerHTML = Shared.emptySection('No sources yet. Add one below.');
             return;
         }
         ch.Sources.forEach(function (source, index) { host.appendChild(buildCard(source, index)); });
     }
 
-    // Builds one library source card, mirroring ServerSync's mapping card: a header (library + Remove), a
-    // Genres section, then a Selection (all content / whitelist / blacklist) with an item picker. Uses
-    // emby-input/emby-select via innerHTML so the fields render natively, then wires behaviour by query.
+    // Builds one source card on a Base Panel. The header holds the title and Remove, and the body holds the source type,
+    // the library or collection, the Selection, and the genre or item picker that Selection asks for. The fields are
+    // written as markup so emby-input and emby-select upgrade them, then wired by query.
     function buildCard(source, index) {
         var card = document.createElement('div');
-        card.className = 'lc-source';
+        card.className = 'base-panel';
         card.innerHTML =
-            '<div class="lc-source-header">' +
+            '<div class="base-panel-header"><div class="lc-block-head">' +
                 '<span class="material-icons lc-source-icon" aria-hidden="true">folder</span>' +
-                '<span class="lc-source-title">Library source</span>' +
-                '<button is="emby-button" type="button" class="lc-remove raised base-button destructive" title="Remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
-            '</div>' +
+                '<span class="lc-block-title lc-source-title">Library source</span>' +
+                '<button is="emby-button" type="button" class="raised base-button destructive small lc-remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
+            '</div></div>' +
+            '<div class="base-panel-body">' +
             '<div class="selectContainer">' +
                 '<label class="selectLabel">Source type</label>' +
                 '<select is="emby-select" class="lc-source-kind">' +
@@ -566,7 +417,7 @@ export default function (view) {
                     '<div class="fieldDescription">Content carrying any of these genres is never included, even if it matched above. Series level genres apply to their episodes.</div>' +
                 '</div>' +
                 '<div class="filterSection lc-items">' +
-                    '<input is="emby-input" type="text" class="lc-search" placeholder="Search this library…" />' +
+                    '<input is="emby-input" type="text" class="lc-search" placeholder="Search this library" />' +
                     '<div class="base-table-item-count lc-count"></div>' +
                     '<div class="base-table-body lc-list"></div>' +
                 '</div>' +
@@ -577,6 +428,7 @@ export default function (view) {
                     '<select is="emby-select" class="lc-source-collection"></select>' +
                 '</div>' +
                 '<div class="fieldDescription">Every item in this collection, with series expanded to their episodes. The channel-wide filters still apply.</div>' +
+            '</div>' +
             '</div>';
 
         // Library selector — the source's library is chosen here, inside the card.
@@ -598,13 +450,11 @@ export default function (view) {
         // Genres (shown for the genre selection): an include list and an exclude (blacklist) list, both fed the
         // same available genres for the library.
         var genresSection = card.querySelector('.lc-genres');
-        var chip = createGenreSelect({ placeholder: 'Add a genre…', onChange: function (vals) { source.Genres = vals; } });
-        chip.setValue(source.Genres || []);
+        var chip = createChipSelect({ placeholder: 'Add a genre', value: source.Genres || [], onChange: function (vals) { source.Genres = vals; } });
         card.querySelector('.lc-genre-mount').appendChild(chip.element);
-        var excludeChip = createGenreSelect({ placeholder: 'Add a genre to exclude…', onChange: function (vals) { source.ExcludeGenres = vals; } });
-        excludeChip.setValue(source.ExcludeGenres || []);
+        var excludeChip = createChipSelect({ placeholder: 'Add a genre to exclude', value: source.ExcludeGenres || [], onChange: function (vals) { source.ExcludeGenres = vals; } });
         card.querySelector('.lc-exclude-mount').appendChild(excludeChip.element);
-        function reloadGenres() { loadCardGenres(source.LibraryId).then(function (names) { chip.setAvailable(names); excludeChip.setAvailable(names); }); }
+        function reloadGenres() { loadCardGenres(source.LibraryId).then(function (names) { chip.setOptions(names); excludeChip.setOptions(names); }); }
         reloadGenres();
         var matchAll = card.querySelector('.lc-matchall');
         matchAll.checked = !!source.MatchAllGenres;
@@ -621,26 +471,29 @@ export default function (view) {
             count.textContent = n + ' selected' + (source.Selection === 'Blacklist' ? ' (excluded)' : '');
         }
 
+        // Builds a Base thumbnail of an item's primary image, with the placeholder icon when it has none.
         function thumb(id) {
+            var frame = document.createElement('span');
+            frame.className = 'base-thumb base-table-thumb';
+            frame.innerHTML = '<span class="base-thumb-placeholder" hidden><span class="material-icons" aria-hidden="true">movie</span></span>';
             var img = document.createElement('img');
-            img.className = 'base-thumb-image lc-thumb';
+            img.className = 'base-thumb-image';
             img.loading = 'lazy';
+            img.alt = '';
             img.src = ApiClient.getUrl('Items/' + id + '/Images/Primary', { maxHeight: 120 });
             img.addEventListener('error', function () {
-                var ph = document.createElement('div');
-                ph.className = 'base-thumb base-table-thumb';
-                ph.innerHTML = '<span class="material-icons">movie</span>';
-                if (img.parentNode) img.parentNode.replaceChild(ph, img);
+                img.remove();
+                frame.querySelector('.base-thumb-placeholder').hidden = false;
             });
-            return img;
+            frame.insertBefore(img, frame.firstChild);
+            return frame;
         }
 
         // Builds a checkable row on the base table-row component. `indent` nests episode rows under a show.
         function makeRow(it, name, meta, indent) {
             var selected = (source.ItemIds || []).indexOf(it.Id) >= 0;
             var row = document.createElement('div');
-            row.className = 'base-table-row' + (selected ? ' selected' : '');
-            if (indent) { row.style.paddingLeft = '36px'; }
+            row.className = 'base-table-row lc-item' + (indent ? ' lc-episode' : '') + (selected ? ' selected' : '');
 
             row.appendChild(thumb(it.Id));
 
@@ -698,7 +551,8 @@ export default function (view) {
             var expand = document.createElement('button');
             expand.className = 'base-row-btn';
             expand.type = 'button';
-            expand.title = 'Pick episodes';
+            expand.title = 'Pick Episodes';
+            expand.setAttribute('aria-label', 'Pick Episodes');
             expand.innerHTML = '<span class="material-icons" aria-hidden="true">expand_more</span>';
             built.row.insertBefore(expand, built.checkCell);
 
@@ -714,7 +568,7 @@ export default function (view) {
                 expand.querySelector('.material-icons').textContent = 'expand_less';
                 host = document.createElement('div');
                 built.row.parentNode.insertBefore(host, built.row.nextSibling);
-                host.innerHTML = '<div class="base-empty-inline">Loading episodes…</div>';
+                host.innerHTML = Shared.emptySection('Loading episodes…', { inline: true });
                 ApiClient.getItems(ApiClient.getCurrentUserId(), {
                     ParentId: it.Id, IncludeItemTypes: 'Episode', Recursive: true,
                     SortBy: 'ParentIndexNumber,IndexNumber', SortOrder: 'Ascending',
@@ -722,14 +576,14 @@ export default function (view) {
                 }).then(function (res) {
                     var eps = (res && res.Items) || [];
                     host.innerHTML = '';
-                    if (!eps.length) { host.innerHTML = '<div class="base-empty-inline">No episodes.</div>'; return; }
+                    if (!eps.length) { host.innerHTML = Shared.emptySection('No episodes.', { inline: true }); return; }
                     eps.forEach(function (ep) { host.appendChild(makeRow(ep, ep.Name || '', episodeMeta(ep), true).row); });
-                }).catch(function () { host.innerHTML = '<div class="base-empty-inline">Failed to load episodes.</div>'; });
+                }).catch(function () { host.innerHTML = Shared.emptySection('Could not load the episodes.', { inline: true }); });
             });
         }
 
         function renderList(items) {
-            if (!items.length) { list.innerHTML = '<div class="base-empty-inline">No matches.</div>'; return; }
+            if (!items.length) { list.innerHTML = Shared.emptySection('No items match.', { inline: true }); return; }
             list.innerHTML = '';
             items.forEach(function (it) {
                 var built = makeRow(it, it.Name || '', showMeta(it), false);
@@ -740,8 +594,8 @@ export default function (view) {
 
         var loaded = false;
         function loadList(term) {
-            if (!source.LibraryId) { list.innerHTML = '<div class="base-empty-inline">Select a library first.</div>'; return; }
-            list.innerHTML = '<div class="base-empty-inline">Loading…</div>';
+            if (!source.LibraryId) { list.innerHTML = Shared.emptySection('Select a library first.', { inline: true }); return; }
+            list.innerHTML = Shared.emptySection('Loading…', { inline: true });
             ApiClient.getItems(ApiClient.getCurrentUserId(), {
                 ParentId: source.LibraryId, IncludeItemTypes: 'Series,Movie', Recursive: true,
                 searchTerm: term || undefined, SortBy: 'SortName', SortOrder: 'Ascending',
@@ -749,7 +603,7 @@ export default function (view) {
             }).then(function (result) {
                 loaded = true;
                 renderList((result && result.Items) || []);
-            }).catch(function () { list.innerHTML = '<div class="base-empty-inline">Search failed.</div>'; });
+            }).catch(function () { list.innerHTML = Shared.emptySection('Could not search the library.', { inline: true }); });
         }
 
         var searchTimer = null;
@@ -844,25 +698,7 @@ export default function (view) {
             .catch(function () { return []; });
     }
 
-    function loadRatings() {
-        return ApiClient.getJSON(ApiClient.getUrl('Localization/ParentalRatings')).then(function (list) {
-            var seen = {};
-            ratings = [];
-            (list || []).forEach(function (r) {
-                var score = r.Value;
-                if (score === undefined && r.RatingScore) score = r.RatingScore.Score;
-                if (r && r.Name && !seen[r.Name]) { seen[r.Name] = true; ratings.push({ Name: r.Name, Value: score || 0 }); }
-            });
-            ratings.sort(function (a, b) { return a.Value - b.Value; });
-            ratingOptions = ratings.map(function (r) {
-                return '<option value="' + Shared.escapeHtml(r.Name) + '">' + Shared.escapeHtml(r.Name) + '</option>';
-            }).join('');
-        }).catch(function () {
-            ratingOptions = '';
-        });
-    }
-
-    // Loads the server's known cultures once into a cache of { key: ISO code, label: display name }, so the audio
+    // Loads the server's known cultures once into a cache of { value: ISO code, label: display name }, so the audio
     // language search can filter them locally (the value stored is the three-letter ISO code, matched against each
     // item's default audio track on the server).
     function loadLanguages() {
@@ -873,131 +709,23 @@ export default function (view) {
                 if (!code || seen[code]) return false;
                 seen[code] = true; return true;
             }).map(function (c) {
-                return { key: c.ThreeLetterISOLanguageName, label: c.DisplayName || c.Name };
+                return { value: c.ThreeLetterISOLanguageName, label: c.DisplayName || c.Name };
             }).sort(function (a, b) { return a.label.localeCompare(b.label); });
         }).catch(function () { cultures = []; });
     }
 
-    // Filters the cached cultures by name for the language typeahead.
-    function searchLanguages(term) {
-        var lower = term.toLowerCase();
-        return cultures.filter(function (c) { return c.label.toLowerCase().indexOf(lower) >= 0; }).slice(0, 25);
-    }
-
     // The display name for a stored language code, falling back to the code itself when cultures are unavailable.
     function cultureLabel(code) {
-        for (var i = 0; i < cultures.length; i++) { if (cultures[i].key === code) return cultures[i].label; }
+        for (var i = 0; i < cultures.length; i++) { if (cultures[i].value === code) return cultures[i].label; }
         return code;
     }
 
-    // Keep the rating band coherent: the minimum can never exceed the maximum. When the user picks one end past
-    // the other, drag the other end to meet it so an impossible (empty) band can't be created.
-    function ratingValue(name) {
-        if (!name) return null;
-        for (var i = 0; i < ratings.length; i++) { if (ratings[i].Name === name) return ratings[i].Value; }
-        return null;
-    }
-
-    function coerceBand(minEl, maxEl, changed) {
-        var mn = ratingValue(minEl.value), mx = ratingValue(maxEl.value);
-        if (mn === null || mx === null || mn <= mx) return;
-        if (changed === 'min') { maxEl.value = minEl.value; } else { minEl.value = maxEl.value; }
-    }
-
-    // MARK: Rating blocks (time-of-day rating limits)
-
-    function newRatingBlock() {
-        return { MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, IsKids: false, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 };
-    }
-
-    // Existing channels store a single band in the legacy fields; show it as one all-day block so it stays visible
-    // and editable. A channel already using blocks keeps them.
-    function migrateRatingBlocks(ch) {
-        var blocks = ch.RatingBlocks || [];
-        if (blocks.some(function (b) { return !b.IsPlaceholder; })) return blocks;
-        if (ch.MinOfficialRating || ch.MaxOfficialRating || ch.IncludeUnrated === false) {
-            return [{ MinOfficialRating: ch.MinOfficialRating || '', MaxOfficialRating: ch.MaxOfficialRating || '', IncludeUnrated: ch.IncludeUnrated !== false, Period: 'AllDay', StartMinutes: 0, EndMinutes: 0 }].concat(blocks);
-        }
-        return blocks;
-    }
-
+    // renderRatingBlocks
+    // Draws the edited channel's rating and placeholder blocks.
     function renderRatingBlocks() {
-        var host = el('ratingBlocks');
-        host.innerHTML = '';
-        var ch = editing;
-        if (!ch) return;
-        ch.RatingBlocks = ch.RatingBlocks || [];
-        if (!ch.RatingBlocks.length) {
-            host.innerHTML = '<div class="base-empty-section">No rating blocks. Any rating airs at any time. Add one to restrict by rating or time of day.</div>';
-            return;
-        }
-        ch.RatingBlocks.forEach(function (block, index) {
-            host.appendChild(block.IsPlaceholder
-                ? buildPlaceholderCard(block, function () { editing.RatingBlocks.splice(index, 1); renderRatingBlocks(); })
-                : buildBlockCard(block, index));
-        });
-    }
-
-    // Builds one rating-block card: min/max rating, include-unrated, and an all-day/custom period whose start and
-    // end times are revealed only for a custom window. Fields mutate the block object live, like the source cards.
-    function buildBlockCard(block, index) {
-        var card = document.createElement('div');
-        card.className = 'lc-ratingblock';
-        card.innerHTML =
-            '<div class="lc-source-header">' +
-                '<span class="material-icons lc-source-icon" aria-hidden="true">schedule</span>' +
-                '<span class="lc-block-title">Rating block</span>' +
-                '<button is="emby-button" type="button" class="lc-remove raised base-button destructive" title="Remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
-            '</div>' +
-            '<div class="selectContainer"><label class="selectLabel">Minimum age rating</label>' +
-                '<select is="emby-select" class="lc-block-min"><option value="">No minimum</option>' + ratingOptions + '</select></div>' +
-            '<div class="selectContainer"><label class="selectLabel">Maximum age rating</label>' +
-                '<select is="emby-select" class="lc-block-max"><option value="">No limit</option>' + ratingOptions + '</select></div>' +
-            '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
-                '<input type="checkbox" is="emby-checkbox" class="lc-block-unrated" /><span class="checkboxLabel">Include unrated</span></label></div>' +
-            '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
-                '<input type="checkbox" is="emby-checkbox" class="lc-block-kids" /><span class="checkboxLabel">Tag as kids</span></label></div>' +
-            '<div class="selectContainer"><label class="selectLabel">Period</label>' +
-                '<select is="emby-select" class="lc-block-period"><option value="AllDay">All day</option><option value="Custom">Custom</option></select></div>' +
-            '<div class="lc-block-times">' +
-                '<div class="inputContainer"><label class="inputLabel">Start time</label><input is="emby-input" type="time" class="lc-block-start" /></div>' +
-                '<div class="inputContainer"><label class="inputLabel">End time</label><input is="emby-input" type="time" class="lc-block-end" /></div>' +
-            '</div>';
-
-        var min = card.querySelector('.lc-block-min');
-        var max = card.querySelector('.lc-block-max');
-        var unrated = card.querySelector('.lc-block-unrated');
-        var kids = card.querySelector('.lc-block-kids');
-        var period = card.querySelector('.lc-block-period');
-        var times = card.querySelector('.lc-block-times');
-        var start = card.querySelector('.lc-block-start');
-        var end = card.querySelector('.lc-block-end');
-
-        min.value = block.MinOfficialRating || '';
-        max.value = block.MaxOfficialRating || '';
-        unrated.checked = block.IncludeUnrated !== false;
-        kids.checked = block.IsKids === true;
-        period.value = block.Period || 'AllDay';
-        start.value = minutesToTime(block.StartMinutes || 0);
-        end.value = minutesToTime(block.EndMinutes || 0);
-
-        function syncTimes() { times.classList.toggle('hidden', period.value !== 'Custom'); }
-        syncTimes();
-
-        min.addEventListener('change', function () { coerceBand(min, max, 'min'); block.MinOfficialRating = min.value; block.MaxOfficialRating = max.value; });
-        max.addEventListener('change', function () { coerceBand(min, max, 'max'); block.MinOfficialRating = min.value; block.MaxOfficialRating = max.value; });
-        unrated.addEventListener('change', function () { block.IncludeUnrated = unrated.checked; });
-        kids.addEventListener('change', function () { block.IsKids = kids.checked; });
-        period.addEventListener('change', function () { block.Period = period.value; syncTimes(); });
-        start.addEventListener('change', function () { block.StartMinutes = timeToMinutes(start.value); });
-        end.addEventListener('change', function () { block.EndMinutes = timeToMinutes(end.value); });
-
-        card.querySelector('.lc-remove').addEventListener('click', function () {
-            editing.RatingBlocks.splice(index, 1);
-            renderRatingBlocks();
-        });
-
-        return card;
+        if (!editing) return;
+        editing.RatingBlocks = editing.RatingBlocks || [];
+        renderBlocks(el('ratingBlocks'), editing.RatingBlocks, ratings, Shared);
     }
 
     // Favouring only applies to a shuffled loop, so the favor block is nested under Shuffle and revealed with it;
@@ -1026,7 +754,7 @@ export default function (view) {
     function confirmDiscard() {
         if (!editorDirty()) return Promise.resolve(true);
         var name = (el('channelName').value || '').trim() || 'this channel';
-        return confirmDialog('Discard unsaved changes to "' + name + '"?', { confirmText: 'Discard', destructive: true });
+        return confirmDialog('Discard unsaved changes to "' + name + '"?', { title: 'Discard Changes', confirmText: 'Discard', destructive: true });
     }
 
     function loadEditor() {
@@ -1050,7 +778,7 @@ export default function (view) {
 
         renderSources();
 
-        audioLangPicker.setValue(ch.AudioLanguage ? [{ key: ch.AudioLanguage, label: cultureLabel(ch.AudioLanguage) }] : []);
+        audioLangPicker.setValue(ch.AudioLanguage ? [{ value: ch.AudioLanguage, label: cultureLabel(ch.AudioLanguage) }] : []);
         ch.RatingBlocks = migrateRatingBlocks(ch);
         el('transitionWindow').value = ch.TransitionWindowMinutes || '';
         renderRatingBlocks();
@@ -1058,8 +786,8 @@ export default function (view) {
         el('years').value = yearsToText(ch.Years);
         el('minCommunityRating').value = ch.MinCommunityRating || '';
         el('minCriticRating').value = ch.MinCriticRating || '';
-        studioPicker.setValue((ch.Studios || []).map(function (s) { return { key: s, label: s }; }));
-        peoplePicker.setValue((ch.People || []).map(function (p) { return { key: p.Id, label: p.Name }; }));
+        studioPicker.setValue((ch.Studios || []).map(function (s) { return { value: s, label: s }; }));
+        peoplePicker.setValue((ch.People || []).map(function (p) { return { value: p.Id, label: p.Name }; }));
         el('episodesPerBlock').value = ch.EpisodesPerBlock || 1;
         el('keepMultiPart').checked = ch.KeepMultiPartTogether !== false;
         el('showBumpers').checked = ch.ShowBumpers !== false;
@@ -1092,7 +820,7 @@ export default function (view) {
         ch.LogoSymbol = el('logoSymbol').value.trim();
         ch.LogoShowName = el('logoShowName').checked;
         var audioLang = audioLangPicker ? audioLangPicker.getValue() : [];
-        ch.AudioLanguage = audioLang.length ? audioLang[0].key : '';
+        ch.AudioLanguage = audioLang.length ? String(audioLang[0]) : '';
         // Rating blocks are mutated live on the cards; the transition window is read here. The blocks are now
         // authoritative, so neutralise the legacy single-band fields to keep them from double-applying.
         ch.RatingBlocks = ch.RatingBlocks || [];
@@ -1106,8 +834,8 @@ export default function (view) {
         ch.MinCommunityRating = isNaN(minCommunity) ? 0 : Math.min(10, Math.max(0, minCommunity));
         var minCritic = parseFloat(el('minCriticRating').value);
         ch.MinCriticRating = isNaN(minCritic) ? 0 : Math.min(100, Math.max(0, minCritic));
-        ch.Studios = studioPicker ? studioPicker.getValue().map(function (s) { return s.key; }) : (ch.Studios || []);
-        ch.People = peoplePicker ? peoplePicker.getValue().map(function (p) { return { Id: p.key, Name: p.label }; }) : (ch.People || []);
+        ch.Studios = studioPicker ? studioPicker.getValue().map(String) : (ch.Studios || []);
+        ch.People = peoplePicker ? peoplePicker.getItems().map(function (p) { return { Id: String(p.value), Name: p.label }; }) : (ch.People || []);
         ch.EpisodesPerBlock = Math.max(1, parseInt(el('episodesPerBlock').value, 10) || 1);
         ch.KeepMultiPartTogether = el('keepMultiPart').checked;
         ch.ShowBumpers = el('showBumpers').checked;
@@ -1144,7 +872,7 @@ export default function (view) {
         // the server accepts it, so a rejected save leaves the stored channels (and the editor) as they were.
         var candidate = channels.slice();
         candidate[currentIndex] = JSON.parse(JSON.stringify(ch));
-        persist(candidate, 'channelStatus', 'Saved.', 'Save failed.');
+        persist(candidate, 'channelStatus', 'Saved.', 'Could not save the channel.');
     }
 
     function stripInternal(list) {
@@ -1244,19 +972,19 @@ export default function (view) {
     function importChannels(parsed) {
         var incoming = Array.isArray(parsed) ? parsed
             : (parsed && Array.isArray(parsed.channels) ? parsed.channels : null);
-        if (!incoming) { Shared.setStatus('ioStatus', 'Import failed: no channels found in the file.', true); return; }
+        if (!incoming) { Shared.setStatus('ioStatus', 'Could not import. The file holds no channels.', true); return; }
 
         // Validate the shape before touching the working set, so a bad file changes nothing.
         var clean = [];
         for (var i = 0; i < incoming.length; i++) {
             var ch = incoming[i];
             if (!ch || typeof ch !== 'object' || typeof ch.Name !== 'string' || !Array.isArray(ch.Sources)) {
-                Shared.setStatus('ioStatus', 'Import failed: this does not look like a Live Channels export.', true);
+                Shared.setStatus('ioStatus', 'Could not import. The file is not a Live Channels export.', true);
                 return;
             }
             clean.push(ch);
         }
-        if (!clean.length) { Shared.setStatus('ioStatus', 'Nothing to import: the file contains no channels.', true); return; }
+        if (!clean.length) { Shared.setStatus('ioStatus', 'No channels to import.', true); return; }
 
         // Merge into a copy of the working set; it replaces `channels` only once the save succeeds.
         var candidate = channels.slice();
@@ -1282,7 +1010,7 @@ export default function (view) {
 
         // Resolve item names for any hand-picked sources so the editor reads cleanly, then save + refresh Live TV.
         hydrateItemNames(candidate).then(function () {
-            persist(candidate, 'ioStatus', 'Imported ' + clean.length + ' channel' + (clean.length === 1 ? '' : 's') + ' (' + added + ' added, ' + replaced + ' replaced).', 'Import failed to save.', candidate.length ? 0 : -1);
+            persist(candidate, 'ioStatus', 'Imported ' + clean.length + ' channel' + (clean.length === 1 ? '' : 's') + ' (' + added + ' added, ' + replaced + ' replaced).', 'Could not save the imported channels.', candidate.length ? 0 : -1);
         });
     }
 
@@ -1292,7 +1020,7 @@ export default function (view) {
             return confirmDiscard().then(function (ok) { if (ok) importChannels(parsed); });
         }, function (err) {
             var unreadable = err && err.message === 'The file could not be read.';
-            Shared.setStatus('ioStatus', unreadable ? 'Import failed: could not read the file.' : 'Import failed: the file is not valid JSON.', true);
+            Shared.setStatus('ioStatus', unreadable ? 'Could not read the file.' : 'Could not import. The file is not valid JSON.', true);
         });
     }
 
@@ -1319,13 +1047,13 @@ export default function (view) {
     function deleteChannel() {
         var ch = channels[currentIndex];
         if (!ch) return;
-        confirmDialog('Delete channel "' + (ch.Name || 'this channel') + '"? This cannot be undone.', { confirmText: 'Delete', destructive: true }).then(function (ok) {
+        confirmDialog('Delete channel "' + (ch.Name || 'this channel') + '"? This cannot be undone.', { title: 'Delete Channel', confirmText: 'Delete', destructive: true }).then(function (ok) {
             // Delete the channel that was asked about, even if the list shifted while the dialog was open.
             var index = channels.indexOf(ch);
             if (!ok || index < 0) return;
             var candidate = channels.slice();
             candidate.splice(index, 1);
-            persist(candidate, 'channelStatus', 'Deleted.', 'Delete failed.', -1);
+            persist(candidate, 'channelStatus', 'Deleted.', 'Could not delete the channel.', -1);
         });
     }
 
@@ -1414,7 +1142,8 @@ export default function (view) {
 
     function load() {
         Shared.initCollapsibles();
-        Promise.all([loadLibraries(), loadCollections(), loadRatings(), loadLanguages()]).then(function () {
+        Promise.all([loadLibraries(), loadCollections(), loadRatings(), loadLanguages()]).then(function (results) {
+            ratings = results[2];
             return Shared.getConfig();
         }).then(function (cfg) {
             serverChannels = JSON.stringify(cfg.Channels || []);
