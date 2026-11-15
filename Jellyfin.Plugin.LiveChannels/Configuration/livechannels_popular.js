@@ -1,5 +1,5 @@
-import { createConfigPage } from './configurationpage?name=livechannels_jpkribs_shared.js';
-import { loadRatings, migrateRatingBlocks, newPlaceholderBlock, newRatingBlock, renderBlocks } from './configurationpage?name=livechannels_placeholder.js';
+import { createConfigPage, createSaveBar } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { createBlockEditors, loadRatings, migrateRatingBlocks } from './configurationpage?name=livechannels_placeholder.js';
 
 export default function (view) {
     'use strict';
@@ -22,17 +22,21 @@ export default function (view) {
     });
     var Shared = page.shared;
 
-    var ratings = { options: '', valueOf: function () { return null; } };
-    var popularConfig = null;  // the PopularChannel object being edited (holds RatingBlocks)
+    var blockEditors = null;   // the rating and placeholder block card lists
+    var saveBar = null;        // the Save Bar
 
     function el(id) { return view.querySelector('#' + id); }
 
-    // renderRatingBlocks
-    // Draws the Popular Channel's rating and placeholder blocks.
-    function renderRatingBlocks() {
-        if (!popularConfig) return;
-        popularConfig.RatingBlocks = popularConfig.RatingBlocks || [];
-        renderBlocks(el('popularRatingBlocks'), popularConfig.RatingBlocks, ratings, Shared);
+    // ensureBlockEditors
+    // Creates the rating and placeholder block card lists once, with the server's ratings.
+    //
+    // Inputs
+    // ratings [object]: { choices, valueOf } from loadRatings.
+    function ensureBlockEditors(ratings) {
+        if (blockEditors) return;
+        blockEditors = createBlockEditors({ ratings: ratings, shared: Shared, onChange: function () { saveBar.setDirty(true); } });
+        el('popularRatingBlocks').appendChild(blockEditors.ratingElement);
+        el('popularPlaceholderBlocks').appendChild(blockEditors.placeholderElement);
     }
 
     function loadPopular(config) {
@@ -42,10 +46,8 @@ export default function (view) {
         el('popularIcon').value = pc.LogoSymbol || '';
         el('popularShowName').checked = pc.LogoShowName !== false;
         el('popularSubtitle').value = pc.SubtitleBurnIn || 'Never';
-        popularConfig = pc;
-        pc.RatingBlocks = migrateRatingBlocks(pc);
         el('popularTransitionWindow').value = pc.TransitionWindowMinutes || '';
-        renderRatingBlocks();
+        blockEditors.setValue(migrateRatingBlocks(pc));
         el('popularCategory').value = pc.Category || 'None';
         el('popularEpisodesPerBlock').value = pc.EpisodesPerBlock || 4;
         el('popularEpisodeOrder').value = pc.ShuffleEpisodes ? 'random' : 'air';
@@ -55,6 +57,7 @@ export default function (view) {
         el('popularIncludeMovies').checked = pc.IncludeMovies !== false;
         el('popularIncludeSpecials').checked = !!pc.IncludeSpecials;
         el('popularLoopMode').value = pc.LoopMode || (pc.Shuffle === false ? 'Alphabetical' : 'Shuffle');
+        saveBar.setDirty(false);
     }
 
     // Triggers Jellyfin's built-in guide refresh so a save propagates to Live TV right away, and the buffer cards
@@ -65,14 +68,27 @@ export default function (view) {
             var cards = (tasks || []).filter(function (t) { return t.Key === 'LiveChannelsGenerateBufferCards'; })[0];
             var started = [];
             if (task) started.push(ApiClient.startScheduledTask(task.Id));
-            if (cards && popularConfig && (popularConfig.RatingBlocks || []).some(function (b) { return b.IsPlaceholder; })) started.push(ApiClient.startScheduledTask(cards.Id));
+            if (cards && blockEditors && blockEditors.getValue().some(function (b) { return b.IsPlaceholder; })) started.push(ApiClient.startScheduledTask(cards.Id));
             return Promise.all(started);
         }).catch(function () { /* best effort */ });
     }
 
+    // failSave
+    // Shows why a save failed on the Save Bar's failed line, after the bar draws its own.
+    function failSave(message) {
+        setTimeout(function () { saveBar.setState('failed', message); }, 0);
+        return Promise.reject(new Error(message));
+    }
+
+    // savePopular
+    // Saves the Popular Channel. The Save Bar runs it and shows its outcome.
+    //
+    // Output
+    // [Promise]: Settles once the save is done.
     function savePopular() {
+        if (!blockEditors || !blockEditors.isValid()) return failSave('Fix the fields marked in red.');
         // Read the latest config so settings on the other tabs are preserved, then update just the popular channel.
-        Shared.getConfig().then(function (fresh) {
+        return Shared.getConfig().then(function (fresh) {
             var pc = fresh.PopularChannel || {};
             pc.Enabled = el('popularEnabled').checked;
             pc.Name = (el('popularName').value || '').trim() || 'Popular';
@@ -82,9 +98,8 @@ export default function (view) {
             pc.LogoSymbol = (el('popularIcon').value || '').trim();
             pc.LogoShowName = el('popularShowName').checked;
             pc.SubtitleBurnIn = el('popularSubtitle').value;
-            // Blocks are mutated live on the cards; the transition window is read here. The blocks are authoritative,
-            // so neutralise the legacy single-band fields to keep them from double-applying.
-            pc.RatingBlocks = (popularConfig && popularConfig.RatingBlocks) || [];
+            // The blocks are authoritative, so neutralise the legacy single-band fields to keep them from double-applying.
+            pc.RatingBlocks = blockEditors.getValue();
             pc.TransitionWindowMinutes = Math.min(1440, Math.max(0, parseInt(el('popularTransitionWindow').value, 10) || 0));
             pc.MinOfficialRating = '';
             pc.MaxOfficialRating = '';
@@ -103,39 +118,27 @@ export default function (view) {
             return Shared.saveConfig(fresh);
         }).then(function () {
             refreshGuide();
-            Shared.setStatus('popularStatus', 'Saved. Refreshing Live TV…', false);
-        }).catch(function (err) {
+        }, function (err) {
             // Surface the server's validation message (like the settings page does) instead of a bare failure.
             var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
-            read.then(function (t) {
-                Shared.setStatus('popularStatus', t ? t.replace(/^"|"$/g, '') : 'Save failed.', true);
-            }, function () {
-                Shared.setStatus('popularStatus', 'Save failed.', true);
-            });
+            return read.then(function (t) { return t ? t.replace(/^"|"$/g, '') : 'Could not save.'; }, function () { return 'Could not save.'; })
+                .then(failSave);
         });
     }
 
     function bind() {
-        el('btnSavePopular').addEventListener('click', savePopular);
-        el('popularAddRatingBlock').addEventListener('click', function () {
-            if (!popularConfig) return;
-            popularConfig.RatingBlocks = popularConfig.RatingBlocks || [];
-            popularConfig.RatingBlocks.push(newRatingBlock());
-            renderRatingBlocks();
-        });
-        el('popularAddPlaceholderBlock').addEventListener('click', function () {
-            if (!popularConfig) return;
-            popularConfig.RatingBlocks = popularConfig.RatingBlocks || [];
-            popularConfig.RatingBlocks.push(newPlaceholderBlock());
-            renderRatingBlocks();
-        });
+        saveBar = createSaveBar({ fill: true, savedText: 'Saved. Refreshing Live TV…', onSave: savePopular });
+        el('popularSaveBar').appendChild(saveBar.element);
+        // Any edit shows the Save Bar's unsaved line.
+        el('LiveChannelsPopularForm').addEventListener('input', function () { saveBar.setDirty(true); });
+        el('LiveChannelsPopularForm').addEventListener('change', function () { saveBar.setDirty(true); });
     }
 
     function load() {
         Shared.initCollapsibles();
         // Populate the rating options before applying the saved values to them.
         loadRatings().then(function (info) {
-            ratings = info;
+            ensureBlockEditors(info);
             return Shared.getConfig().then(loadPopular);
         }).catch(function () {
             Shared.setStatus('popularStatus', 'Could not load the settings. Reload the page to try again.', true);

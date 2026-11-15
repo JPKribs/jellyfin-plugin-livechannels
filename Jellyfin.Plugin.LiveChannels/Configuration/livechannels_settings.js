@@ -1,4 +1,4 @@
-import { createChipSelect, createConfigPage, createMediaPicker } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { createBanner, createChipSelect, createColorPicker, createConfigPage, createDefinitionList, createInheritField, createMediaPicker, createSaveBar, createSliderField } from './configurationpage?name=livechannels_jpkribs_shared.js';
 
 export default function (view) {
     'use strict';
@@ -23,6 +23,13 @@ export default function (view) {
 
     var cultures = [];         // cached [{ value: ISO code, label: name }] for the language choices
     var langSelect = null;     // Chip Select, single, for the default subtitle language
+    var accelList = createDefinitionList({ items: [{ label: 'Hardware Acceleration', value: 'Checking…', mono: true }] });
+    var scaleSlider = createSliderField({ min: 50, max: 300, step: 5, value: 100, suffix: '%', label: 'Size' });
+    var textColor = colorField('#FFFFFF', 'Text Color');
+    var outlineColor = colorField('#000000', 'Outline Color');
+    var saveBar = createSaveBar({ fill: true, saveText: 'Save Settings', savedText: 'Saved. Refreshing Live TV…', onSave: saveSettings });
+    var stressRounds = createDefinitionList({ items: [] });
+    var stressSummary = null;
 
     function el(id) { return view.querySelector('#' + id); }
 
@@ -32,13 +39,38 @@ export default function (view) {
         return code;
     }
 
+    // colorField
+    // Builds a subtitle Color Picker inside an Inherit Field, where As Authored keeps each subtitle's own color.
+    //
+    // Inputs
+    // fallback [string]: The color an override starts from.
+    // label [string]: The field's name.
+    //
+    // Output
+    // [object]: { element, read(), write(stored) }, where a blank stored value means As Authored.
+    function colorField(fallback, label) {
+        var picker = createColorPicker({ value: fallback, label: label, onChange: function () { saveBar.setDirty(true); } });
+        var inherit = createInheritField({
+            field: picker,
+            inheritedValue: fallback,
+            inheritText: 'As Authored',
+            overrideText: 'Custom',
+            label: label,
+            onChange: function () { saveBar.setDirty(true); }
+        });
+        return {
+            element: inherit.element,
+            read: function () { var v = inherit.getValue(); return v.inherit ? '' : normalizeColor(v.value); },
+            write: function (stored) { var hex = normalizeColor(stored); inherit.setValue({ inherit: !hex, value: hex || fallback }); }
+        };
+    }
+
     // ensureLangSelect
     // Creates the language Chip Select once and mounts it in the Playback section, or refreshes its choices.
     function ensureLangSelect() {
         if (!langSelect) {
-            langSelect = createChipSelect({ placeholder: 'Search languages', options: cultures, single: true });
-            var mount = view.querySelector('.lc-sublang-mount');
-            if (mount) mount.appendChild(langSelect.element);
+            langSelect = createChipSelect({ placeholder: 'Search languages', options: cultures, single: true, onChange: function () { saveBar.setDirty(true); } });
+            el('subLanguageHost').appendChild(langSelect.element);
         } else {
             langSelect.setOptions(cultures);
         }
@@ -64,8 +96,8 @@ export default function (view) {
 
     function renderAcceleration() {
         ApiClient.getJSON(ApiClient.getUrl('livechannels/encoders')).then(function (info) {
-            el('accelValue').textContent = (info && info.acceleration) || 'Unknown';
-        }).catch(function () { el('accelValue').textContent = 'Unknown'; });
+            accelList.setItems([{ label: 'Hardware Acceleration', value: (info && info.acceleration) || 'Unknown', mono: true }]);
+        }).catch(function () { accelList.setItems([{ label: 'Hardware Acceleration', value: 'Unknown', mono: true }]); });
     }
 
     function loadSettings(config) {
@@ -78,15 +110,16 @@ export default function (view) {
         el('streamDirectory').value = config.StreamDirectory || '';
         el('disableHwa').checked = !!config.DisableHardwareAcceleration;
         el('subFont').value = config.SubtitleFont || '';
-        el('subScale').value = config.SubtitleFontScalePercent ? config.SubtitleFontScalePercent : 100;
-        el('subTextColor').value = config.SubtitleTextColor || '';
-        el('subOutlineColor').value = config.SubtitleOutlineColor || '';
+        scaleSlider.setValue(config.SubtitleFontScalePercent ? config.SubtitleFontScalePercent : 100);
+        textColor.write(config.SubtitleTextColor);
+        outlineColor.write(config.SubtitleOutlineColor);
         el('subBorder').value = config.SubtitleBorder || 'Default';
         el('subBold').checked = !!config.SubtitleBold;
         ensureLangSelect();
         var lang = config.DefaultSubtitleLanguage || 'eng';
         langSelect.setValue([{ value: lang, label: cultureLabel(lang) }]);
         renderAcceleration();
+        saveBar.setDirty(false);
     }
 
     // Loads the server's known cultures once into a cache of { value: ISO code, label: name } for the language choices.
@@ -111,9 +144,21 @@ export default function (view) {
         }).catch(function () { /* best effort */ });
     }
 
+    // failSave
+    // Shows why a save failed on the Save Bar's failed line, after the bar draws its own.
+    function failSave(message) {
+        setTimeout(function () { saveBar.setState('failed', message); }, 0);
+        return Promise.reject(new Error(message));
+    }
+
+    // saveSettings
+    // Saves the settings. The Save Bar runs it and shows its outcome.
+    //
+    // Output
+    // [Promise]: Settles once the save is done.
     function saveSettings() {
         // Read the latest config so channel edits made on the other tab are preserved.
-        Shared.getConfig().then(function (fresh) {
+        return Shared.getConfig().then(function (fresh) {
             fresh.TranscodeWidth = parseInt(el('resolution').value, 10) || 1280;
             fresh.VideoCodec = el('videoCodec').value;
             fresh.AudioCodec = el('audioCodec').value;
@@ -127,25 +172,21 @@ export default function (view) {
             var picked = langSelect ? langSelect.getValue() : [];
             fresh.DefaultSubtitleLanguage = (picked.length ? String(picked[0]) : '') || 'eng';
             fresh.SubtitleFont = (el('subFont').value || '').trim();
-            var scale = parseInt(el('subScale').value, 10);
+            var scale = parseInt(scaleSlider.getValue(), 10);
             fresh.SubtitleFontScalePercent = isNaN(scale) ? 100 : Math.min(300, Math.max(50, scale));
-            fresh.SubtitleTextColor = normalizeColor(el('subTextColor').value);
-            fresh.SubtitleOutlineColor = normalizeColor(el('subOutlineColor').value);
+            fresh.SubtitleTextColor = textColor.read();
+            fresh.SubtitleOutlineColor = outlineColor.read();
             fresh.SubtitleBorder = el('subBorder').value || 'Default';
             fresh.SubtitleBold = el('subBold').checked;
             return Shared.saveConfig(fresh);
         }).then(function () {
             renderAcceleration();
             refreshGuide();
-            Shared.setStatus('settingsStatus', 'Saved. Refreshing Live TV…', false);
-        }).catch(function (err) {
-            // The server rejects a colour it cannot parse, so show what it said rather than a bare failure.
+        }, function (err) {
+            // The server rejects a color it cannot parse, so show what it said rather than a bare failure.
             var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
-            read.then(function (t) {
-                Shared.setStatus('settingsStatus', t ? t.replace(/^"|"$/g, '') : 'Could not save the settings.', true);
-            }, function () {
-                Shared.setStatus('settingsStatus', 'Could not save the settings.', true);
-            });
+            return read.then(function (t) { return t ? t.replace(/^"|"$/g, '') : 'Could not save the settings.'; }, function () { return 'Could not save the settings.'; })
+                .then(failSave);
         });
     }
 
@@ -173,35 +214,51 @@ export default function (view) {
     function ensureStressPicker() {
         if (stressPicker) { return; }
         stressPicker = createMediaPicker({ single: true, itemTypes: ['Movie', 'Episode'], placeholder: 'Search movies and episodes', emptyText: 'No test item selected.' });
-        var mount = view.querySelector('.lc-stressitem-mount');
-        if (mount) { mount.appendChild(stressPicker.element); }
+        el('stressItemHost').appendChild(stressPicker.element);
     }
 
+    // renderStress
+    // Shows each stress test round as a definition with a pass or fail badge, and the recommendation as a Banner.
+    //
+    // Inputs
+    // s [object]: The stress test status from the server.
     function renderStress(s) {
-        var lines = (s.Rounds || []).map(function (r) {
-            return r.Streams + ' stream' + (r.Streams === 1 ? '' : 's') + ': slowest ' + r.MinFps + ' fps ' + (r.Passed ? '✓' : '✗');
+        var items = (s.Rounds || []).map(function (r) {
+            return {
+                label: r.Streams + ' Stream' + (r.Streams === 1 ? '' : 's'),
+                value: { text: 'Slowest ' + r.MinFps + ' fps', badge: r.Passed ? { label: 'Passed', color: 'green' } : { label: 'Failed', color: 'red' } }
+            };
         });
         if (s.Running && s.CurrentStreams > 0) {
-            lines.push('Testing ' + s.CurrentStreams + ' concurrent stream' + (s.CurrentStreams === 1 ? '' : 's') + '…');
+            items.push({ label: s.CurrentStreams + ' Stream' + (s.CurrentStreams === 1 ? '' : 's'), value: { text: 'Testing…', badge: { label: 'Running', color: 'blue' } } });
         }
-        var html = lines.join('<br>');
-        if (!s.Running && typeof s.Recommended === 'number' && (s.Rounds || []).length) {
-            html += '<br><b>' + (s.Recommended > 0
-                ? 'Recommended Maximum concurrent streams: ' + s.Recommended
-                : 'Even one stream could not hold realtime with this item. Lower the resolution or bitrate.') + '</b>';
-            if (s.Recommended > 0) {
-                html += ' <a is="emby-linkbutton" href="#" id="stressApply" class="button-link">Apply</a>';
-            }
-        }
-        if (s.Error) { html += '<br>' + Shared.escapeHtml(s.Error); }
-        el('stressResult').innerHTML = html;
-        var apply = el('stressApply');
-        if (apply) {
-            apply.addEventListener('click', function (e) {
-                e.preventDefault();
-                el('maxSessions').value = s.Recommended;
-                Shared.setStatus('stressStatus', 'Set to ' + s.Recommended + '. Select Save settings to keep it.', false);
+        stressRounds.setItems(items);
+        Shared.setVisible(stressRounds.element, items.length > 0);
+
+        if (stressSummary) { stressSummary.destroy(); stressSummary = null; }
+        el('stressSummary').innerHTML = '';
+        var finished = !s.Running && typeof s.Recommended === 'number' && (s.Rounds || []).length;
+        if (finished || s.Error) {
+            var good = finished && s.Recommended > 0;
+            stressSummary = createBanner({
+                kind: s.Error ? 'error' : (good ? 'success' : 'warn'),
+                title: finished ? (good ? 'Recommended Maximum Concurrent Streams: ' + s.Recommended : 'Even one stream could not hold realtime with this item.') : '',
+                text: s.Error ? s.Error : (good ? '' : 'Lower the resolution or bitrate.'),
+                dismissible: false
             });
+            el('stressSummary').appendChild(stressSummary.element);
+            if (good) {
+                var apply = document.createElement('button');
+                apply.type = 'button';
+                apply.className = 'raised base-button secondary small';
+                apply.textContent = 'Apply';
+                apply.addEventListener('click', function () {
+                    el('maxSessions').value = s.Recommended;
+                    saveBar.setDirty(true);
+                    Shared.setStatus('stressStatus', 'Set to ' + s.Recommended + '. Select Save Settings to keep it.', false);
+                });
+                el('stressSummary').appendChild(apply);
+            }
         }
         Shared.setVisible('stressCancel', s.Running);
         el('stressRun').disabled = !!s.Running;
@@ -230,7 +287,9 @@ export default function (view) {
         var id = picked.length ? picked[0].Id : '';
         if (!id) { Shared.setStatus('stressStatus', 'Select a test item.', true); return; }
         Shared.setStatus('stressStatus', 'Starting…', false);
-        el('stressResult').innerHTML = '';
+        stressRounds.setItems([]);
+        Shared.setVisible(stressRounds.element, false);
+        el('stressSummary').innerHTML = '';
         ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('livechannels/stresstest/' + encodeURIComponent(id)) }).then(function () {
             Shared.setStatus('stressStatus', '', false);
             startStressPolling();
@@ -251,7 +310,16 @@ export default function (view) {
     }
 
     function bind() {
-        el('btnSaveSettings').addEventListener('click', saveSettings);
+        el('accelHost').appendChild(accelList.element);
+        el('subScaleHost').appendChild(scaleSlider.element);
+        el('subTextColorHost').appendChild(textColor.element);
+        el('subOutlineColorHost').appendChild(outlineColor.element);
+        el('settingsSaveBar').appendChild(saveBar.element);
+        el('stressRounds').appendChild(stressRounds.element);
+        Shared.setVisible(stressRounds.element, false);
+        // Any edit shows the Save Bar's unsaved line.
+        el('LiveChannelsSettingsForm').addEventListener('input', function (e) { if (!e.target.closest('#sectionStress')) saveBar.setDirty(true); });
+        el('LiveChannelsSettingsForm').addEventListener('change', function (e) { if (!e.target.closest('#sectionStress')) saveBar.setDirty(true); });
         el('btnResetSchedule').addEventListener('click', resetSchedule);
         el('stressRun').addEventListener('click', stressRun);
         el('stressCancel').addEventListener('click', stressCancel);
@@ -263,7 +331,7 @@ export default function (view) {
         loadLanguages().then(function () {
             return Shared.getConfig().then(loadSettings);
         }).catch(function () {
-            Shared.setStatus('settingsStatus', 'Could not load the settings. Reload the page to try again.', true);
+            saveBar.setState('failed', 'Could not load the settings. Reload the page to try again.');
         });
         // A stress test may already be running (started earlier, page revisited): resume its display. The
         // poll stops itself on the first response when no test is running.

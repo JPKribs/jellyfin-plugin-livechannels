@@ -1,5 +1,5 @@
-import { createChipSelect, createConfigPage, confirmDialog, downloadJson, pickJsonFile } from './configurationpage?name=livechannels_jpkribs_shared.js';
-import { loadRatings, migrateRatingBlocks, newPlaceholderBlock, newRatingBlock, renderBlocks } from './configurationpage?name=livechannels_placeholder.js';
+import { createChipSelect, createConfigPage, createImagePicker, createMediaPicker, createRepeater, createSaveBar, createSliderField, confirmDialog, downloadJson, pickJsonFile } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { createBlockEditors, loadRatings, migrateRatingBlocks, ratingInfo, syncCells } from './configurationpage?name=livechannels_placeholder.js';
 
 export default function (view) {
     'use strict';
@@ -42,7 +42,15 @@ export default function (view) {
     var logoContentType = '';
     var libraries = [];        // [{ Id, Name }]
     var collections = [];      // [{ Id, Name }] box sets, for collection sources
-    var ratings = { options: '', valueOf: function () { return null; } };
+    var ratings = ratingInfo([]);
+    var logoPicker = null;     // the logo Image Picker
+    var communitySlider = null;// Minimum Community Rating Slider
+    var criticSlider = null;   // Minimum Critic Rating Slider
+    var sourceList = null;     // the source card Repeater
+    var sourceParts = new Map(); // a source card's custom control element to { key, handle, library }
+    var genreCache = {};       // library id to a promise of its genre names
+    var blockEditors = null;   // the rating and placeholder block card lists
+    var saveBar = null;        // the channel Save Bar
     var studioPicker = null;   // channel-level studio Chip Select (created once)
     var peoplePicker = null;   // channel-level person Chip Select (created once)
     var audioLangPicker = null;// channel-level audio language Chip Select, single (created once)
@@ -167,30 +175,6 @@ export default function (view) {
             .catch(function () { cb([]); });
     }
 
-    // ensureFilterPickers
-    // Creates the studio, people, and audio language Chip Selects once and mounts them in the editor.
-    function ensureFilterPickers() {
-        if (!studioPicker) {
-            studioPicker = createChipSelect({ placeholder: 'Search studios', searchFn: searchStudios });
-            var studioMount = view.querySelector('.lc-studio-mount');
-            if (studioMount) studioMount.appendChild(studioPicker.element);
-        }
-
-        if (!peoplePicker) {
-            peoplePicker = createChipSelect({ placeholder: 'Search people', searchFn: searchPeople });
-            var peopleMount = view.querySelector('.lc-people-mount');
-            if (peopleMount) peopleMount.appendChild(peoplePicker.element);
-        }
-
-        if (!audioLangPicker) {
-            audioLangPicker = createChipSelect({ placeholder: 'Any language', options: cultures, single: true });
-            var audioMount = view.querySelector('.lc-audiolang-mount');
-            if (audioMount) audioMount.appendChild(audioLangPicker.element);
-        } else {
-            audioLangPicker.setOptions(cultures);
-        }
-    }
-
     // MARK: Logo
 
     // FNV-1a over the name's low bytes — matches the server (DefaultLogoService) so the preview's colour is
@@ -292,59 +276,40 @@ export default function (view) {
         return canvas.toDataURL('image/png');
     }
 
+    // renderLogoPreview
+    // Shows the uploaded logo in the Image Picker, or the generated logo while nothing is uploaded. The generated
+    // logo is only a preview, so its Remove button stays hidden.
     function renderLogoPreview() {
-        var img = el('logoPreview');
         // The symbol field only applies to the generated 'Symbol' style.
         Shared.setVisible('logoSymbolRow', el('logoStyle').value === 'Symbol');
+        if (!logoPicker) return;
         if (logoData) {
-            img.src = 'data:' + (logoContentType || 'image/png') + ';base64,' + logoData;
-            Shared.setVisible('btnClearLogo', true);
-        } else {
-            // No upload: show the generated placeholder so the box is never empty.
-            img.src = defaultLogoDataUrl(
-                parseInt(el('channelNumber').value, 10) || 0,
-                el('channelName').value || '',
-                el('logoStyle').value,
-                el('logoSymbol').value,
-                el('logoShowName').checked);
-            Shared.setVisible('btnClearLogo', false);
+            logoPicker.setValue('data:' + (logoContentType || 'image/png') + ';base64,' + logoData);
+            return;
         }
-        Shared.setVisible('logoPreview', true);
+        logoPicker.setValue(defaultLogoDataUrl(
+            parseInt(el('channelNumber').value, 10) || 0,
+            el('channelName').value || '',
+            el('logoStyle').value,
+            el('logoSymbol').value,
+            el('logoShowName').checked));
+        var remove = logoPicker.element.querySelector('.base-image-picker-remove');
+        if (remove) remove.hidden = true;
     }
 
-    function onLogoFile(e) {
-        var file = e.target.files && e.target.files[0];
-        if (!file) return;
-        if (file.size > MAX_LOGO_BYTES) { Shared.setStatus('channelStatus', 'Image is larger than 2 MB.', true); e.target.value = ''; return; }
-        var reader = new FileReader();
-        reader.onload = function () {
-            var img = new Image();
-            img.onload = function () {
-                // Always store the logo as a centre-cropped 1:1 square (capped at 512px) so it renders
-                // consistently in the guide regardless of the uploaded aspect ratio.
-                var side = Math.min(img.naturalWidth, img.naturalHeight);
-                var size = Math.min(side, 512);
-                var canvas = document.createElement('canvas');
-                canvas.width = size;
-                canvas.height = size;
-                var ctx = canvas.getContext('2d');
-                ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, size, size);
-                var dataUrl = canvas.toDataURL('image/png');
-                var comma = dataUrl.indexOf(',');
-                logoData = comma >= 0 ? dataUrl.slice(comma + 1) : '';
-                logoContentType = 'image/png';
-                renderLogoPreview();
-            };
-            img.onerror = function () { Shared.setStatus('channelStatus', 'Could not read that image.', true); };
-            img.src = String(reader.result || '');
-        };
-        reader.readAsDataURL(file);
-        e.target.value = '';
+    // onLogoPicked
+    // Keeps the picked logo, which the Image Picker has already cropped to a square of at most 512 pixels.
+    //
+    // Inputs
+    // value [object]: { type, base64 } from the Image Picker, or null after Remove.
+    function onLogoPicked(value) {
+        logoData = value ? value.base64 : '';
+        logoContentType = value ? value.type : '';
+        renderLogoPreview();
+        markDirty();
     }
 
-    function clearLogo() { logoData = ''; logoContentType = ''; renderLogoPreview(); }
-
-    // MARK: Library source cards
+    // MARK: Sources
 
     function libraryName(id) {
         var lib = libraries.filter(function (l) { return l.Id === id; })[0];
@@ -356,321 +321,271 @@ export default function (view) {
         return col ? col.Name : '';
     }
 
-    function newSource(libraryId) {
-        return { Kind: 'Library', LibraryId: libraryId || '', LibraryName: libraryId ? libraryName(libraryId) : '', CollectionId: '', CollectionName: '', Genres: [], ExcludeGenres: [], MatchAllGenres: false, Selection: 'AllContent', ItemIds: [], __items: [] };
+    // episodeLabel
+    // Names an item for the item picker, with an episode's series and number before its own name.
+    //
+    // Inputs
+    // it [object]: The item from the server.
+    //
+    // Output
+    // [string]: The name.
+    function episodeLabel(it) {
+        if (it.Type !== 'Episode') return it.Name || '';
+        var s = it.ParentIndexNumber, n = it.IndexNumber;
+        var code = (s != null ? 'S' + s : '') + (n != null ? 'E' + n : '');
+        return [it.SeriesName, code, it.Name].filter(Boolean).join(' ');
     }
 
-    function renderSources() {
-        var host = el('librarySources');
-        host.innerHTML = '';
-        var ch = editing;
-        if (!ch) return;
-        if (!ch.Sources.length) {
-            host.innerHTML = Shared.emptySection('No sources yet. Add one below.');
-            return;
-        }
-        ch.Sources.forEach(function (source, index) { host.appendChild(buildCard(source, index)); });
+    // pickerItem
+    // Shapes a server item as a Media Picker item.
+    function pickerItem(it) {
+        var out = { Id: it.Id, Name: episodeLabel(it), Type: it.Type, ProductionYear: it.ProductionYear };
+        if (it.ImageTags) out.ImageTags = it.ImageTags;
+        return out;
     }
 
-    // Builds one source card on a Base Panel. The header holds the title and Remove, and the body holds the source type,
-    // the library or collection, the Selection, and the genre or item picker that Selection asks for. The fields are
-    // written as markup so emby-input and emby-select upgrade them, then wired by query.
-    function buildCard(source, index) {
-        var card = document.createElement('div');
-        card.className = 'base-panel';
-        card.innerHTML =
-            '<div class="base-panel-header"><div class="lc-block-head">' +
-                '<span class="material-icons lc-source-icon" aria-hidden="true">folder</span>' +
-                '<span class="lc-block-title lc-source-title">Library source</span>' +
-                '<button is="emby-button" type="button" class="raised base-button destructive small lc-remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
-            '</div></div>' +
-            '<div class="base-panel-body">' +
-            '<div class="selectContainer">' +
-                '<label class="selectLabel">Source type</label>' +
-                '<select is="emby-select" class="lc-source-kind">' +
-                    '<option value="Library">Library</option>' +
-                    '<option value="Collection">Collection</option>' +
-                '</select>' +
-            '</div>' +
-            '<div class="lc-library-fields">' +
-                '<div class="selectContainer">' +
-                    '<label class="selectLabel">Library</label>' +
-                    '<select is="emby-select" class="lc-source-library"></select>' +
-                '</div>' +
-                '<div class="inputContainer">' +
-                    '<label class="inputLabel">Selection</label>' +
-                    '<select is="emby-select" class="lc-selection">' +
-                        '<option value="AllContent">All content</option>' +
-                        '<option value="Genre">Genre</option>' +
-                        '<option value="Whitelist">Whitelist</option>' +
-                        '<option value="Blacklist">Blacklist</option>' +
-                    '</select>' +
-                '</div>' +
-                '<div class="filterSection lc-genres">' +
-                    '<h3 class="base-subsection-title">Genres</h3>' +
-                    '<label class="inputLabel">Include</label>' +
-                    '<div class="lc-genre-mount"></div>' +
-                    '<label class="emby-checkbox-label lc-matchall-label"><input type="checkbox" is="emby-checkbox" class="lc-matchall" /><span class="checkboxLabel">Match all genres</span></label>' +
-                    '<div class="fieldDescription">On, content must carry every included genre. Off, any one is enough.</div>' +
-                    '<label class="inputLabel">Exclude</label>' +
-                    '<div class="lc-exclude-mount"></div>' +
-                    '<div class="fieldDescription">Content carrying any of these genres is never included, even if it matched above. Series level genres apply to their episodes.</div>' +
-                '</div>' +
-                '<div class="filterSection lc-items">' +
-                    '<input is="emby-input" type="text" class="lc-search" placeholder="Search this library" />' +
-                    '<div class="base-table-item-count lc-count"></div>' +
-                    '<div class="base-table-body lc-list"></div>' +
-                '</div>' +
-            '</div>' +
-            '<div class="lc-collection-fields">' +
-                '<div class="selectContainer">' +
-                    '<label class="selectLabel">Collection</label>' +
-                    '<select is="emby-select" class="lc-source-collection"></select>' +
-                '</div>' +
-                '<div class="fieldDescription">Every item in this collection, with series expanded to their episodes. The channel-wide filters still apply.</div>' +
-            '</div>' +
-            '</div>';
+    // searchSourceItems
+    // Searches one library's shows, movies, and episodes for the item picker.
+    //
+    // Inputs
+    // libraryId [string]: The source's library.
+    // query [string]: The typed text.
+    //
+    // Output
+    // [Promise<object[]>]: The Media Picker items.
+    function searchSourceItems(libraryId, query) {
+        if (!libraryId) return Promise.resolve([]);
+        return ApiClient.getItems(ApiClient.getCurrentUserId(), {
+            ParentId: libraryId, IncludeItemTypes: 'Series,Movie,Episode', Recursive: true,
+            searchTerm: query, SortBy: 'SortName', SortOrder: 'Ascending',
+            Limit: 20, Fields: 'ProductionYear', EnableTotalRecordCount: false
+        }).then(function (res) { return ((res && res.Items) || []).map(pickerItem); });
+    }
 
-        // Library selector — the source's library is chosen here, inside the card.
-        var libSelect = card.querySelector('.lc-source-library');
-        libSelect.innerHTML = '<option value="">Select a library…</option>' + libraries.map(function (l) {
-            return '<option value="' + Shared.escapeHtml(l.Id) + '">' + Shared.escapeHtml(l.Name) + '</option>';
-        }).join('');
-        libSelect.value = source.LibraryId || '';
+    // sourcePart
+    // Wraps a Base control as a custom Repeater field, and remembers it so the card it sits in can reach it.
+    //
+    // Inputs
+    // key [string]: The field key.
+    // handle [object]: The Base control handle.
+    // read [function]: Returns the field value.
+    // write [function]: Sets the field value.
+    //
+    // Output
+    // [object]: The custom field control.
+    function sourcePart(key, handle, read, write) {
+        var entry = { key: key, handle: handle, library: undefined };
+        sourceParts.set(handle.element, entry);
+        return {
+            entry: entry,
+            element: handle.element,
+            input: handle.input || handle.element.querySelector('input'),
+            getValue: read,
+            setValue: write,
+            destroy: function () { sourceParts.delete(handle.element); handle.destroy(); }
+        };
+    }
 
-        card.querySelector('.lc-remove').addEventListener('click', function () {
-            editing.Sources.splice(index, 1);
-            renderSources();
+    // genreField
+    // Renders a genre Chip Select for a source card.
+    function genreField(key, placeholder) {
+        return function (value, change) {
+            var chip = createChipSelect({ placeholder: placeholder, value: value || [], onChange: function () { change(); } });
+            return sourcePart(key, chip,
+                function () { return chip.getValue().map(String); },
+                function (v) { chip.setValue(v || []); });
+        };
+    }
+
+    // itemsField
+    // Renders the Media Picker a Whitelist or Blacklist source picks its items with, searching the card's library.
+    function itemsField(value, change) {
+        var part = null;
+        var picker = createMediaPicker({
+            value: value || [],
+            itemTypes: ['Series', 'Movie', 'Episode'],
+            placeholder: 'Search this library',
+            emptyText: 'No items picked.',
+            typeLabels: { Series: 'Show' },
+            maxHeight: 360,
+            searchFn: function (query) { return searchSourceItems(part ? part.entry.library : '', query); },
+            onChange: function () { change(); }
         });
+        part = sourcePart('Items', picker,
+            function () { return picker.getValue(); },
+            function (v) { picker.setValue(v || []); });
+        return part;
+    }
 
-        // Selection (all content / genre / whitelist / blacklist)
-        var selection = card.querySelector('.lc-selection');
-        selection.value = source.Selection || 'AllContent';
+    // partsIn
+    // Finds the custom controls of one source card by field key.
+    function partsIn(card) {
+        var out = {};
+        sourceParts.forEach(function (entry, element) { if (card.contains(element)) out[entry.key] = entry; });
+        return out;
+    }
 
-        // Genres (shown for the genre selection): an include list and an exclude (blacklist) list, both fed the
-        // same available genres for the library.
-        var genresSection = card.querySelector('.lc-genres');
-        var chip = createChipSelect({ placeholder: 'Add a genre', value: source.Genres || [], onChange: function (vals) { source.Genres = vals; } });
-        card.querySelector('.lc-genre-mount').appendChild(chip.element);
-        var excludeChip = createChipSelect({ placeholder: 'Add a genre to exclude', value: source.ExcludeGenres || [], onChange: function (vals) { source.ExcludeGenres = vals; } });
-        card.querySelector('.lc-exclude-mount').appendChild(excludeChip.element);
-        function reloadGenres() { loadCardGenres(source.LibraryId).then(function (names) { chip.setOptions(names); excludeChip.setOptions(names); }); }
-        reloadGenres();
-        var matchAll = card.querySelector('.lc-matchall');
-        matchAll.checked = !!source.MatchAllGenres;
-        matchAll.addEventListener('change', function () { source.MatchAllGenres = matchAll.checked; });
-
-        // Items (shown for whitelist/blacklist)
-        var itemsSection = card.querySelector('.lc-items');
-        var search = card.querySelector('.lc-search');
-        var count = card.querySelector('.lc-count');
-        var list = card.querySelector('.lc-list');
-
-        function updateCount() {
-            var n = (source.ItemIds || []).length;
-            count.textContent = n + ' selected' + (source.Selection === 'Blacklist' ? ' (excluded)' : '');
+    // loadCardGenres
+    // Reads a library's genres once, then answers from the cache.
+    function loadCardGenres(libraryId) {
+        if (!libraryId) return Promise.resolve([]);
+        if (!genreCache[libraryId]) {
+            genreCache[libraryId] = ApiClient.getJSON(ApiClient.getUrl('Genres', { ParentId: libraryId, IncludeItemTypes: 'Movie,Series,Episode', Recursive: true, Limit: 500, SortBy: 'SortName' }))
+                .then(function (result) { return ((result && result.Items) || []).map(function (g) { return g.Name; }); })
+                .catch(function () { delete genreCache[libraryId]; return []; });
         }
+        return genreCache[libraryId];
+    }
 
-        // Builds a Base thumbnail of an item's primary image, with the placeholder icon when it has none.
-        function thumb(id) {
-            var frame = document.createElement('span');
-            frame.className = 'base-thumb base-table-thumb';
-            frame.innerHTML = '<span class="base-thumb-placeholder" hidden><span class="material-icons" aria-hidden="true">movie</span></span>';
-            var img = document.createElement('img');
-            img.className = 'base-thumb-image';
-            img.loading = 'lazy';
-            img.alt = '';
-            img.src = ApiClient.getUrl('Items/' + id + '/Images/Primary', { maxHeight: 120 });
-            img.addEventListener('error', function () {
-                img.remove();
-                frame.querySelector('.base-thumb-placeholder').hidden = false;
-            });
-            frame.insertBefore(img, frame.firstChild);
-            return frame;
+    // followLibrary
+    // Points a card's genre and item pickers at its library. A changed library clears the included genres and the
+    // picked items, which belong to the old one.
+    function followLibrary(card, libraryId) {
+        var parts = partsIn(card);
+        var first = parts.Genres && parts.Genres.library === undefined;
+        var moved = !first && parts.Genres && parts.Genres.library !== libraryId;
+        if (!first && !moved) return;
+        ['Genres', 'ExcludeGenres', 'Items'].forEach(function (key) { if (parts[key]) parts[key].library = libraryId; });
+        if (moved) {
+            if (parts.Genres) parts.Genres.handle.setValue([]);
+            if (parts.Items) parts.Items.handle.setValue([]);
         }
-
-        // Builds a checkable row on the base table-row component. `indent` nests episode rows under a show.
-        function makeRow(it, name, meta, indent) {
-            var selected = (source.ItemIds || []).indexOf(it.Id) >= 0;
-            var row = document.createElement('div');
-            row.className = 'base-table-row lc-item' + (indent ? ' lc-episode' : '') + (selected ? ' selected' : '');
-
-            row.appendChild(thumb(it.Id));
-
-            var info = document.createElement('div');
-            info.className = 'base-table-cell base-table-item-info';
-            var nm = document.createElement('div');
-            nm.className = 'base-table-item-title';
-            nm.textContent = name;
-            var mt = document.createElement('div');
-            mt.className = 'base-table-item-sub';
-            mt.textContent = meta;
-            info.appendChild(nm);
-            info.appendChild(mt);
-            row.appendChild(info);
-
-            var checkCell = document.createElement('div');
-            checkCell.className = 'base-table-cell base-table-cell-checkbox';
-            var cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.className = 'base-table-row-checkbox';
-            cb.checked = selected;
-            checkCell.appendChild(cb);
-            row.appendChild(checkCell);
-
-            function set(on) {
-                var arr = source.ItemIds || (source.ItemIds = []);
-                var i = arr.indexOf(it.Id);
-                if (on && i < 0) { arr.push(it.Id); }
-                else if (!on && i >= 0) { arr.splice(i, 1); }
-                cb.checked = on;
-                row.classList.toggle('selected', on);
-                updateCount();
-            }
-            cb.addEventListener('click', function (e) { e.stopPropagation(); set(cb.checked); });
-            row.addEventListener('click', function () { set(!cb.checked); });
-
-            return { row: row, checkCell: checkCell };
-        }
-
-        function showMeta(it) {
-            var parts = [];
-            if (it.ProductionYear) { parts.push(it.ProductionYear); }
-            parts.push(it.Type === 'Series' ? 'Show' : (it.Type || 'Movie'));
-            return parts.join(' • ');
-        }
-
-        function episodeMeta(ep) {
-            var s = ep.ParentIndexNumber;
-            var n = ep.IndexNumber;
-            return (s != null ? 'S' + s : '') + (n != null ? 'E' + n : '') || 'Episode';
-        }
-
-        // Adds an expand control to a show row so its episodes can be picked individually.
-        function addExpander(it, built) {
-            var expand = document.createElement('button');
-            expand.className = 'base-row-btn';
-            expand.type = 'button';
-            expand.title = 'Pick Episodes';
-            expand.setAttribute('aria-label', 'Pick Episodes');
-            expand.innerHTML = '<span class="material-icons" aria-hidden="true">expand_more</span>';
-            built.row.insertBefore(expand, built.checkCell);
-
-            var host = null;
-            expand.addEventListener('click', function (e) {
-                e.stopPropagation();
-                if (host) {
-                    host.parentNode.removeChild(host);
-                    host = null;
-                    expand.querySelector('.material-icons').textContent = 'expand_more';
-                    return;
-                }
-                expand.querySelector('.material-icons').textContent = 'expand_less';
-                host = document.createElement('div');
-                built.row.parentNode.insertBefore(host, built.row.nextSibling);
-                host.innerHTML = Shared.emptySection('Loading episodes…', { inline: true });
-                ApiClient.getItems(ApiClient.getCurrentUserId(), {
-                    ParentId: it.Id, IncludeItemTypes: 'Episode', Recursive: true,
-                    SortBy: 'ParentIndexNumber,IndexNumber', SortOrder: 'Ascending',
-                    Fields: 'ParentIndexNumber,IndexNumber', Limit: 500, EnableTotalRecordCount: false
-                }).then(function (res) {
-                    var eps = (res && res.Items) || [];
-                    host.innerHTML = '';
-                    if (!eps.length) { host.innerHTML = Shared.emptySection('No episodes.', { inline: true }); return; }
-                    eps.forEach(function (ep) { host.appendChild(makeRow(ep, ep.Name || '', episodeMeta(ep), true).row); });
-                }).catch(function () { host.innerHTML = Shared.emptySection('Could not load the episodes.', { inline: true }); });
-            });
-        }
-
-        function renderList(items) {
-            if (!items.length) { list.innerHTML = Shared.emptySection('No items match.', { inline: true }); return; }
-            list.innerHTML = '';
-            items.forEach(function (it) {
-                var built = makeRow(it, it.Name || '', showMeta(it), false);
-                if (it.Type === 'Series') { addExpander(it, built); }
-                list.appendChild(built.row);
-            });
-        }
-
-        var loaded = false;
-        function loadList(term) {
-            if (!source.LibraryId) { list.innerHTML = Shared.emptySection('Select a library first.', { inline: true }); return; }
-            list.innerHTML = Shared.emptySection('Loading…', { inline: true });
-            ApiClient.getItems(ApiClient.getCurrentUserId(), {
-                ParentId: source.LibraryId, IncludeItemTypes: 'Series,Movie', Recursive: true,
-                searchTerm: term || undefined, SortBy: 'SortName', SortOrder: 'Ascending',
-                Limit: 200, Fields: 'ProductionYear', EnableTotalRecordCount: false
-            }).then(function (result) {
-                loaded = true;
-                renderList((result && result.Items) || []);
-            }).catch(function () { list.innerHTML = Shared.emptySection('Could not search the library.', { inline: true }); });
-        }
-
-        var searchTimer = null;
-        search.addEventListener('input', function () {
-            if (searchTimer) clearTimeout(searchTimer);
-            searchTimer = setTimeout(function () { loadList(search.value.trim()); }, 300);
+        loadCardGenres(libraryId).then(function (names) {
+            if (parts.Genres) parts.Genres.handle.setOptions(names);
+            if (parts.ExcludeGenres) parts.ExcludeGenres.handle.setOptions(names);
         });
+    }
 
-        updateCount();
+    // syncSources
+    // Shows each source card's fields for its type and selection, and keeps its pickers on its library.
+    function syncSources() {
+        syncCells(sourceList, Shared, function (item, card) {
+            var library = item.Kind !== 'Collection';
+            var genres = library && item.Selection === 'Genre';
+            var items = library && (item.Selection === 'Whitelist' || item.Selection === 'Blacklist');
+            followLibrary(card, item.LibraryId || '');
+            var label = card.querySelector('.base-field-cell[data-key="Items"] .base-field-cell-label');
+            if (label) label.textContent = item.Selection === 'Blacklist' ? 'Excluded Items' : 'Included Items';
+            return { LibraryId: library, Selection: library, Genres: genres, MatchAllGenres: genres, ExcludeGenres: genres, Items: items, CollectionId: !library };
+        });
+    }
 
-        function applySelection() {
-            source.Selection = selection.value;
-            genresSection.style.display = source.Selection === 'Genre' ? '' : 'none';
-            var showItems = source.Selection === 'Whitelist' || source.Selection === 'Blacklist';
-            itemsSection.style.display = showItems ? '' : 'none';
-            if (showItems && !loaded) loadList('');
+    // toSourceItem
+    // Turns a stored source into the values of its card.
+    function toSourceItem(s) {
+        var ids = s.ItemIds || [];
+        var known = (s.__items && s.__items.length === ids.length) ? s.__items : ids.map(function (id) { return { Id: id, Name: id }; });
+        return {
+            Kind: s.Kind || 'Library',
+            LibraryId: s.LibraryId || '',
+            CollectionId: s.CollectionId || '',
+            Selection: s.Selection || 'AllContent',
+            Genres: s.Genres || [],
+            MatchAllGenres: !!s.MatchAllGenres,
+            ExcludeGenres: s.ExcludeGenres || [],
+            Items: known
+        };
+    }
+
+    // fromSourceItem
+    // Turns a card's values back into a stored source.
+    function fromSourceItem(i) {
+        var items = i.Items || [];
+        return {
+            Kind: i.Kind || 'Library',
+            LibraryId: i.LibraryId || '',
+            LibraryName: i.LibraryId ? libraryName(i.LibraryId) : '',
+            CollectionId: i.CollectionId || '',
+            CollectionName: i.CollectionId ? collectionName(i.CollectionId) : '',
+            Genres: i.Genres || [],
+            ExcludeGenres: i.ExcludeGenres || [],
+            MatchAllGenres: !!i.MatchAllGenres,
+            Selection: i.Selection || 'AllContent',
+            ItemIds: items.map(function (it) { return it.Id; }),
+            __items: items
+        };
+    }
+
+    // ensureEditorParts
+    // Creates the editor's Base controls once and mounts them: the filter Chip Selects, the logo Image Picker, the
+    // rating Sliders, the source cards, the block cards, and the Save Bar.
+    function ensureEditorParts() {
+        if (!studioPicker) {
+            studioPicker = createChipSelect({ placeholder: 'Search studios', searchFn: searchStudios, onChange: markDirty });
+            el('studioHost').appendChild(studioPicker.element);
+            peoplePicker = createChipSelect({ placeholder: 'Search people', searchFn: searchPeople, onChange: markDirty });
+            el('peopleHost').appendChild(peoplePicker.element);
+            audioLangPicker = createChipSelect({ placeholder: 'Any language', options: cultures, single: true, onChange: markDirty });
+            el('audioLanguageHost').appendChild(audioLangPicker.element);
+        } else {
+            audioLangPicker.setOptions(cultures);
         }
-        selection.addEventListener('change', applySelection);
-        applySelection();
+        if (logoPicker) return;
 
-        // Source type (library vs collection): toggles which fields show, plus the card's icon and title.
-        var kindSelect = card.querySelector('.lc-source-kind');
-        kindSelect.value = source.Kind || 'Library';
-        var libraryFields = card.querySelector('.lc-library-fields');
-        var collectionFields = card.querySelector('.lc-collection-fields');
-        var titleEl = card.querySelector('.lc-source-title');
-        var iconEl = card.querySelector('.lc-source-icon');
-
-        var colSelect = card.querySelector('.lc-source-collection');
-        colSelect.innerHTML = '<option value="">Select a collection…</option>' + collections.map(function (c) {
-            return '<option value="' + Shared.escapeHtml(c.Id) + '">' + Shared.escapeHtml(c.Name) + '</option>';
-        }).join('');
-        colSelect.value = source.CollectionId || '';
-        colSelect.addEventListener('change', function () {
-            source.CollectionId = colSelect.value;
-            source.CollectionName = collectionName(source.CollectionId);
+        logoPicker = createImagePicker({
+            label: 'Logo',
+            description: 'Upload a custom square logo for this channel. With no upload, the preview shows the generated logo.',
+            maxBytes: MAX_LOGO_BYTES,
+            crop: true,
+            maxSize: 512,
+            chooseText: 'Upload',
+            onChange: onLogoPicked
         });
+        el('logoPickerHost').appendChild(logoPicker.element);
 
-        function applyKind() {
-            var isCollection = kindSelect.value === 'Collection';
-            libraryFields.style.display = isCollection ? 'none' : '';
-            collectionFields.style.display = isCollection ? '' : 'none';
-            titleEl.textContent = isCollection ? 'Collection source' : 'Library source';
-            iconEl.textContent = isCollection ? 'video_library' : 'folder';
-            if (!isCollection) applySelection();
-        }
-        kindSelect.addEventListener('change', function () {
-            source.Kind = kindSelect.value;
-            applyKind();
+        communitySlider = createSliderField({ min: 0, max: 10, step: 0.1, label: 'Minimum Community Rating', onChange: markDirty });
+        el('minCommunityRatingHost').appendChild(communitySlider.element);
+        criticSlider = createSliderField({ min: 0, max: 100, step: 1, label: 'Minimum Critic Rating', onChange: markDirty });
+        el('minCriticRatingHost').appendChild(criticSlider.element);
+
+        sourceList = createRepeater({
+            layout: 'card',
+            titleText: '{Kind} Source',
+            addText: 'Add Source',
+            emptyText: 'No sources yet.',
+            fields: [
+                { key: 'Kind', label: 'Source Type', type: 'select', options: [{ value: 'Library', label: 'Library' }, { value: 'Collection', label: 'Collection' }] },
+                {
+                    key: 'LibraryId', label: 'Library', type: 'select', placeholder: 'Select a library',
+                    options: libraries.map(function (l) { return { value: l.Id, label: l.Name }; }),
+                    validate: function (value, item) { return item.Kind !== 'Collection' && !value ? 'Select a library.' : ''; }
+                },
+                {
+                    key: 'CollectionId', label: 'Collection', type: 'select', placeholder: 'Select a collection',
+                    options: collections.map(function (c) { return { value: c.Id, label: c.Name }; }),
+                    validate: function (value, item) { return item.Kind === 'Collection' && !value ? 'Select a collection.' : ''; }
+                },
+                {
+                    key: 'Selection', label: 'Selection', type: 'select', options: [
+                        { value: 'AllContent', label: 'All Content' }, { value: 'Genre', label: 'Genre' },
+                        { value: 'Whitelist', label: 'Whitelist' }, { value: 'Blacklist', label: 'Blacklist' }]
+                },
+                { key: 'Genres', label: 'Include Genres', type: 'custom', render: genreField('Genres', 'Add a genre') },
+                { key: 'MatchAllGenres', label: 'Match All Genres', type: 'toggle' },
+                { key: 'ExcludeGenres', label: 'Exclude Genres', type: 'custom', render: genreField('ExcludeGenres', 'Add a genre to exclude') },
+                { key: 'Items', label: 'Included Items', type: 'custom', render: itemsField }
+            ],
+            onChange: function () { syncSources(); markDirty(); }
         });
-        applyKind();
+        el('librarySources').appendChild(sourceList.element);
 
-        // Changing the library resets this source's library-specific selections and reloads its data.
-        libSelect.addEventListener('change', function () {
-            source.LibraryId = libSelect.value;
-            source.LibraryName = libraryName(source.LibraryId);
-            source.Genres = [];
-            source.ItemIds = [];
-            chip.setValue([]);
-            reloadGenres();
-            loaded = false;
-            list.innerHTML = '';
-            updateCount();
-            if (selection.value === 'Whitelist' || selection.value === 'Blacklist') loadList('');
+        blockEditors = createBlockEditors({ ratings: ratings, shared: Shared, onChange: markDirty });
+        el('ratingBlocks').appendChild(blockEditors.ratingElement);
+        el('placeholderBlocks').appendChild(blockEditors.placeholderElement);
+
+        saveBar = createSaveBar({
+            fill: true,
+            saveText: 'Save Channel',
+            savedText: 'Saved. Refreshing Live TV…',
+            onSave: saveChannel
         });
+        el('channelSaveBar').appendChild(saveBar.element);
+    }
 
-        return card;
+    // markDirty
+    // Shows the Save Bar's unsaved line while the editor differs from what was loaded.
+    function markDirty() {
+        if (saveBar && editing) saveBar.setDirty(editorDirty());
     }
 
     // MARK: Reference data
@@ -689,13 +604,6 @@ export default function (view) {
             collections = ((res && res.Items) || []).map(function (c) { return { Id: c.Id, Name: c.Name }; })
                 .filter(function (c) { return c.Id; });
         }).catch(function () { collections = []; });
-    }
-
-    function loadCardGenres(libraryId) {
-        if (!libraryId) return Promise.resolve([]);
-        return ApiClient.getJSON(ApiClient.getUrl('Genres', { ParentId: libraryId, IncludeItemTypes: 'Movie,Series,Episode', Recursive: true, Limit: 500, SortBy: 'SortName' }))
-            .then(function (result) { return ((result && result.Items) || []).map(function (g) { return g.Name; }); })
-            .catch(function () { return []; });
     }
 
     // Loads the server's known cultures once into a cache of { value: ISO code, label: display name }, so the audio
@@ -718,14 +626,6 @@ export default function (view) {
     function cultureLabel(code) {
         for (var i = 0; i < cultures.length; i++) { if (cultures[i].value === code) return cultures[i].label; }
         return code;
-    }
-
-    // renderRatingBlocks
-    // Draws the edited channel's rating and placeholder blocks.
-    function renderRatingBlocks() {
-        if (!editing) return;
-        editing.RatingBlocks = editing.RatingBlocks || [];
-        renderBlocks(el('ratingBlocks'), editing.RatingBlocks, ratings, Shared);
     }
 
     // Favouring only applies to a shuffled loop, so the favor block is nested under Shuffle and revealed with it;
@@ -761,12 +661,11 @@ export default function (view) {
         var stored = channels[currentIndex];
         if (!stored) { editing = null; editorTracker.markClean(); return; }
 
-        // Deep-copy the stored channel: the cards mutate their model live, and that must never leak into the
-        // saved working set until "Save channel".
+        // Deep-copy the stored channel, so nothing the editor does leaks into the saved working set until Save Channel.
         editing = JSON.parse(JSON.stringify(stored));
         editing.Sources = editing.Sources || [];
         var ch = editing;
-        ensureFilterPickers();
+        ensureEditorParts();
         el('channelName').value = ch.Name || '';
         el('channelNumber').value = ch.Number || '';
         logoData = ch.LogoData || '';
@@ -776,16 +675,17 @@ export default function (view) {
         el('logoShowName').checked = ch.LogoShowName !== false;
         renderLogoPreview();
 
-        renderSources();
+        sourceList.setValue(ch.Sources.map(toSourceItem));
+        syncSources();
 
         audioLangPicker.setValue(ch.AudioLanguage ? [{ value: ch.AudioLanguage, label: cultureLabel(ch.AudioLanguage) }] : []);
         ch.RatingBlocks = migrateRatingBlocks(ch);
         el('transitionWindow').value = ch.TransitionWindowMinutes || '';
-        renderRatingBlocks();
+        blockEditors.setValue(ch.RatingBlocks);
         el('category').value = ch.Category || 'None';
         el('years').value = yearsToText(ch.Years);
-        el('minCommunityRating').value = ch.MinCommunityRating || '';
-        el('minCriticRating').value = ch.MinCriticRating || '';
+        communitySlider.setValue(ch.MinCommunityRating || 0);
+        criticSlider.setValue(ch.MinCriticRating || 0);
         studioPicker.setValue((ch.Studios || []).map(function (s) { return { value: s, label: s }; }));
         peoplePicker.setValue((ch.People || []).map(function (p) { return { value: p.Id, label: p.Name }; }));
         el('episodesPerBlock').value = ch.EpisodesPerBlock || 1;
@@ -809,6 +709,7 @@ export default function (view) {
         // Everything above (including the pickers) is now in its just-loaded state; snapshot it as the
         // baseline the unsaved-changes check compares against.
         editorTracker.markClean();
+        saveBar.setDirty(false);
     }
 
     function readEditorInto(ch) {
@@ -821,18 +722,17 @@ export default function (view) {
         ch.LogoShowName = el('logoShowName').checked;
         var audioLang = audioLangPicker ? audioLangPicker.getValue() : [];
         ch.AudioLanguage = audioLang.length ? String(audioLang[0]) : '';
-        // Rating blocks are mutated live on the cards; the transition window is read here. The blocks are now
-        // authoritative, so neutralise the legacy single-band fields to keep them from double-applying.
-        ch.RatingBlocks = ch.RatingBlocks || [];
+        // The blocks are authoritative, so neutralise the legacy single-band fields to keep them from double-applying.
+        ch.RatingBlocks = blockEditors ? blockEditors.getValue() : (ch.RatingBlocks || []);
         ch.TransitionWindowMinutes = Math.min(1440, Math.max(0, parseInt(el('transitionWindow').value, 10) || 0));
         ch.MinOfficialRating = '';
         ch.MaxOfficialRating = '';
         ch.IncludeUnrated = true;
         ch.Category = el('category').value;
         ch.Years = parseYears(el('years').value);
-        var minCommunity = parseFloat(el('minCommunityRating').value);
-        ch.MinCommunityRating = isNaN(minCommunity) ? 0 : Math.min(10, Math.max(0, minCommunity));
-        var minCritic = parseFloat(el('minCriticRating').value);
+        var minCommunity = communitySlider ? Number(communitySlider.getValue()) : (ch.MinCommunityRating || 0);
+        ch.MinCommunityRating = isNaN(minCommunity) ? 0 : Math.min(10, Math.max(0, Math.round(minCommunity * 10) / 10));
+        var minCritic = criticSlider ? Number(criticSlider.getValue()) : (ch.MinCriticRating || 0);
         ch.MinCriticRating = isNaN(minCritic) ? 0 : Math.min(100, Math.max(0, minCritic));
         ch.Studios = studioPicker ? studioPicker.getValue().map(String) : (ch.Studios || []);
         ch.People = peoplePicker ? peoplePicker.getItems().map(function (p) { return { Id: String(p.value), Name: p.label }; }) : (ch.People || []);
@@ -851,28 +751,42 @@ export default function (view) {
         ch.FavorStrength = el('favorStrength').value;
         ch.SubtitleBurnIn = el('subtitleBurnIn').value;
         ch.Enabled = currentEnabled;
-        // Sources are mutated live by the cards; keep the display names in sync.
-        ch.Sources.forEach(function (s) {
-            if (s.Kind === 'Collection') { s.CollectionName = collectionName(s.CollectionId); }
-            else { s.LibraryName = libraryName(s.LibraryId); }
-        });
+        ch.Sources = sourceList ? sourceList.getValue().map(fromSourceItem) : (ch.Sources || []);
     }
 
     // MARK: Persistence
 
+    // failSave
+    // Shows why a save stopped on the Save Bar's failed line, after the bar draws its own.
+    //
+    // Inputs
+    // message [string]: The sentence to show.
+    //
+    // Output
+    // [Promise]: A rejected promise, so the Save Bar counts the save as failed.
+    function failSave(message) {
+        setTimeout(function () { if (saveBar) saveBar.setState('failed', message); }, 0);
+        return Promise.reject(new Error(message));
+    }
+
+    // saveChannel
+    // Checks the editor and saves the channel. The Save Bar runs it and shows its outcome.
+    //
+    // Output
+    // [Promise]: Settles once the save is done.
     function saveChannel() {
-        if (currentIndex < 0 || !editing) return;
+        if (currentIndex < 0 || !editing) return Promise.resolve();
         var ch = editing;
         readEditorInto(ch);
-        if (!ch.Name) { Shared.setStatus('channelStatus', 'A name is required.', true); return; }
-        if (!ch.Sources.length) { Shared.setStatus('channelStatus', 'Add at least one library source.', true); return; }
-        if (ch.Sources.some(function (s) { return s.Kind === 'Collection' ? !s.CollectionId : !s.LibraryId; })) { Shared.setStatus('channelStatus', 'Pick a library or collection for each source.', true); return; }
+        if (!ch.Name) return failSave('A name is required.');
+        if (!ch.Sources.length) return failSave('Add at least one source.');
+        if (!sourceList.isValid() || !blockEditors.isValid()) return failSave('Fix the fields marked in red.');
 
         // The copy is complete and valid: persist a working set with it in place, and adopt that set only once
         // the server accepts it, so a rejected save leaves the stored channels (and the editor) as they were.
         var candidate = channels.slice();
         candidate[currentIndex] = JSON.parse(JSON.stringify(ch));
-        persist(candidate, 'channelStatus', 'Saved.', 'Could not save the channel.');
+        return persist(candidate, 'Could not save the channel.').catch(function (err) { return failSave(err.message); });
     }
 
     function stripInternal(list) {
@@ -903,8 +817,9 @@ export default function (view) {
     }
 
     // Saves `candidate` as the channel list. `channels` is replaced with it only after the server accepts the
-    // save; on failure nothing local changes, so the next save does not resend a rejected list.
-    function persist(candidate, statusId, okMessage, errMessage, newIndex) {
+    // save; on failure nothing local changes, so the next save does not resend a rejected list. The promise
+    // rejects with an Error whose message says why.
+    function persist(candidate, errMessage, newIndex) {
         return Shared.getConfig().then(function (fresh) {
             if (JSON.stringify(fresh.Channels || []) !== serverChannels) {
                 var conflict = new Error('Channels were changed somewhere else since this page loaded. Reload the page, then make the change again.');
@@ -918,21 +833,14 @@ export default function (view) {
             if (newIndex !== undefined) currentIndex = newIndex;
             renderSelect();
             refreshLiveTv();
-            Shared.setStatus(statusId, okMessage + ' Refreshing Live TV…', false);
             // Re-read the stored list as the new baseline (the server may normalise what was sent).
             return Shared.getConfig().then(function (cfg) { serverChannels = JSON.stringify(cfg.Channels || []); }).catch(function () {});
-        }).catch(function (err) {
-            if (err && err.conflict) {
-                Shared.setStatus(statusId, err.message, true);
-                return;
-            }
+        }, function (err) {
+            if (err && err.conflict) throw err;
             // Surface the server's validation message (like the settings page does) instead of a bare failure.
             var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
-            read.then(function (t) {
-                Shared.setStatus(statusId, t ? t.replace(/^"|"$/g, '') : errMessage, true);
-            }, function () {
-                Shared.setStatus(statusId, errMessage, true);
-            });
+            return read.then(function (t) { return t ? t.replace(/^"|"$/g, '') : errMessage; }, function () { return errMessage; })
+                .then(function (message) { throw new Error(message); });
         });
     }
 
@@ -1010,7 +918,10 @@ export default function (view) {
 
         // Resolve item names for any hand-picked sources so the editor reads cleanly, then save + refresh Live TV.
         hydrateItemNames(candidate).then(function () {
-            persist(candidate, 'ioStatus', 'Imported ' + clean.length + ' channel' + (clean.length === 1 ? '' : 's') + ' (' + added + ' added, ' + replaced + ' replaced).', 'Could not save the imported channels.', candidate.length ? 0 : -1);
+            var message = 'Imported ' + clean.length + ' channel' + (clean.length === 1 ? '' : 's') + ' (' + added + ' added, ' + replaced + ' replaced). Refreshing Live TV…';
+            persist(candidate, 'Could not save the imported channels.', candidate.length ? 0 : -1).then(function () {
+                Shared.setStatus('ioStatus', message, false);
+            }, function (err) { Shared.setStatus('ioStatus', err.message, true); });
         });
     }
 
@@ -1053,14 +964,10 @@ export default function (view) {
             if (!ok || index < 0) return;
             var candidate = channels.slice();
             candidate.splice(index, 1);
-            persist(candidate, 'channelStatus', 'Deleted.', 'Could not delete the channel.', -1);
+            persist(candidate, 'Could not delete the channel.', -1).then(function () {
+                Shared.setStatus('ioStatus', 'Deleted. Refreshing Live TV…', false);
+            }, function (err) { Shared.setStatus('ioStatus', err.message, true); });
         });
-    }
-
-    function addLibrary() {
-        if (!editing) return;
-        editing.Sources.push(newSource(''));
-        renderSources();
     }
 
     // MARK: Hydration
@@ -1079,11 +986,11 @@ export default function (view) {
         }).then(function (result) {
             var byId = {};
             ((result && result.Items) || []).forEach(function (it) {
-                byId[it.Id] = it.Name + (it.ProductionYear ? ' (' + it.ProductionYear + ')' : '') + (it.Type === 'Series' ? ' (show)' : '');
+                byId[it.Id] = pickerItem(it);
             });
             list.forEach(function (ch) {
                 (ch.Sources || []).forEach(function (s) {
-                    s.__items = (s.ItemIds || []).map(function (id) { return { Id: id, Name: byId[id] || id }; });
+                    s.__items = (s.ItemIds || []).map(function (id) { return byId[id] || { Id: id, Name: id }; });
                 });
             });
         }).catch(function () { /* names fall back to ids */ });
@@ -1102,9 +1009,6 @@ export default function (view) {
                 loadEditor();
             });
         });
-        el('btnUploadLogo').addEventListener('click', function () { el('logoFile').click(); });
-        el('logoFile').addEventListener('change', onLogoFile);
-        el('btnClearLogo').addEventListener('click', clearLogo);
         // Keep the placeholder in step with the name (colour) and number (label) while there's no upload.
         el('channelNumber').addEventListener('input', function () { if (!logoData) renderLogoPreview(); });
         el('channelName').addEventListener('input', function () { if (!logoData) renderLogoPreview(); });
@@ -1113,25 +1017,14 @@ export default function (view) {
         el('logoShowName').addEventListener('change', function () { if (!logoData) renderLogoPreview(); });
         el('favorKind').addEventListener('change', updateFavorControls);
         el('loopMode').addEventListener('change', updateFavorControls);
-        el('addRatingBlock').addEventListener('click', function () {
-            if (!editing) return;
-            editing.RatingBlocks = editing.RatingBlocks || [];
-            editing.RatingBlocks.push(newRatingBlock());
-            renderRatingBlocks();
-        });
-        el('addPlaceholderBlock').addEventListener('click', function () {
-            if (!editing) return;
-            editing.RatingBlocks = editing.RatingBlocks || [];
-            editing.RatingBlocks.push(newPlaceholderBlock());
-            renderRatingBlocks();
-        });
         el('btnNewChannel').addEventListener('click', addChannel);
         el('btnDeleteChannel').addEventListener('click', deleteChannel);
         el('btnExportChannels').addEventListener('click', exportChannels);
         el('btnImportChannels').addEventListener('click', onImportClick);
-        el('btnSaveChannel').addEventListener('click', saveChannel);
-        el('btnAddLibrary').addEventListener('click', addLibrary);
-        el('btnEnable').addEventListener('click', function () { currentEnabled = !currentEnabled; setEnableVisual(currentEnabled); });
+        el('btnEnable').addEventListener('click', function () { currentEnabled = !currentEnabled; setEnableVisual(currentEnabled); markDirty(); });
+        // Any edit in the editor shows the Save Bar's unsaved line until it matches what was loaded again.
+        el('channelEditor').addEventListener('input', markDirty);
+        el('channelEditor').addEventListener('change', markDirty);
 
         // Warm the Material Symbols web font (the same glyphs the server draws), then refresh the preview so a
         // symbol logo renders once it has loaded rather than briefly falling back to the number.
@@ -1156,7 +1049,7 @@ export default function (view) {
             currentIndex = channels.length ? 0 : -1;
             renderSelect();
         }).catch(function () {
-            Shared.setStatus('channelStatus', 'Could not load the channels. Reload the page to try again.', true);
+            Shared.setStatus('ioStatus', 'Could not load the channels. Reload the page to try again.', true);
         });
     }
 }

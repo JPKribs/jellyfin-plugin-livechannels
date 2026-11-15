@@ -73,24 +73,9 @@
                                     <input is="emby-input" type="number" id="channelNumber" min="1" step="1" autocomplete="off" />
                                 </div>
                                 <h3 class="base-subsection-title">Logo</h3>
-                                <div class="inputContainer">
-                                    <label>Logo</label>
-                                    <div class="lc-logo-row">
-                                        <img id="logoPreview" alt="Channel logo" class="lc-logo-preview hidden" />
-                                        <div class="base-button-row">
-                                            <button is="emby-button" type="button" id="btnUploadLogo" class="raised base-button secondary" title="Upload image">
-                                                <span class="material-icons" aria-hidden="true">upload</span><span>Upload</span>
-                                            </button>
-                                            <button is="emby-button" type="button" id="btnClearLogo" class="raised base-button destructive hidden" title="Remove image">
-                                                <span class="material-icons" aria-hidden="true">delete</span><span>Clear</span>
-                                            </button>
-                                        </div>
-                                        <input type="file" id="logoFile" accept="image/*" class="hidden" />
-                                    </div>
-                                    <div class="fieldDescription">Upload a custom square logo for this channel.</div>
-                                </div>
+                                <div id="logoPickerHost" class="inputContainer"></div>
                                 <div class="selectContainer">
-                                    <label class="selectLabel" for="logoStyle">Generated logo style</label>
+                                    <label class="selectLabel" for="logoStyle">Generated Logo Style</label>
                                     <select is="emby-select" id="logoStyle">
                                         <option value="Number">Number</option>
                                         <option value="Symbol">Symbol</option>
@@ -105,7 +90,7 @@
                                 <div class="checkboxContainer checkboxContainer-withDescription">
                                     <label class="emby-checkbox-label">
                                         <input type="checkbox" is="emby-checkbox" id="logoShowName" />
-                                        <span class="checkboxLabel">Show channel name on the generated logo</span>
+                                        <span class="checkboxLabel">Show Channel Name on the Generated Logo</span>
                                     </label>
                                 </div>
                             </div>
@@ -119,12 +104,8 @@
                             </button>
                             <div id="sectionContent" class="base-collapsible-content collapsed">
                                 <div class="fieldDescription">This channel will contain content from the libraries configured below.</div>
-                                <div id="librarySources" class="lc-block-list"></div>
-                                <div class="base-button-row">
-                                    <button is="emby-button" type="button" id="btnAddLibrary" class="raised base-button primary" title="Add a source">
-                                        <span class="material-icons" aria-hidden="true">add</span><span>Add source</span>
-                                    </button>
-                                </div>
+                                <div id="librarySources"></div>
+                                <div class="fieldDescription">A Collection source plays every item in the collection, with series expanded to their episodes. Whitelist plays only the picked items and Blacklist plays everything else. Search a show, movie, or episode by name to pick it.</div>
                             </div>
                         </div>
 
@@ -135,35 +116,28 @@
                                 <span class="base-collapsible-icon">&#9660;</span>
                             </button>
                             <div id="sectionFilters" class="base-collapsible-content collapsed">
-                                <h3 class="base-subsection-title">Age ratings</h3>
-                                <div class="selectContainer">
-                                    <label class="selectLabel">Rating limits</label>
-                                    <div id="ratingBlocks" class="lc-block-list"></div>
-                                    <div class="base-button-row">
-                                        <button is="emby-button" type="button" id="addRatingBlock" class="raised base-button primary" title="Add a rating block">
-                                            <span class="material-icons" aria-hidden="true">add</span><span>Add rating block</span>
-                                        </button>
-                                        <button is="emby-button" type="button" id="addPlaceholderBlock" class="raised base-button primary" title="Add a placeholder block">
-                                            <span class="material-icons" aria-hidden="true">tv_off</span><span>Add placeholder block</span>
-                                        </button>
-                                    </div>
-                                    <div class="fieldDescription">Limit which ratings air, optionally by time of day. No blocks means anything airs. On overlap, the lowest min and max win. A placeholder block takes the channel off air for its window: the guide shows one program by the block's name and the channel loops a card with your message. Whatever is airing when the window opens is cut there, and when the window ends the channel goes on with the next item in its loop.</div>
-                                </div>
+                                <h3 class="base-subsection-title">Age Ratings</h3>
+                                <div id="ratingBlocks"></div>
+                                <div class="fieldDescription">Limit which ratings air, optionally by time of day. No blocks means anything airs. On overlap, the lowest min and max win.</div>
+                                <h3 class="base-subsection-title">Placeholder Blocks</h3>
+                                <div id="placeholderBlocks"></div>
+                                <div class="fieldDescription">A placeholder block takes the channel off air for its window. The guide shows one program by the block's Guide Name and the channel loops a card with your message. Whatever is airing when the window opens is cut there, and the loop goes on when it ends.</div>
+                                <div class="fieldDescription">The Custom style plays an image, GIF, or video from a path on the server. A GIF or video loops cleanly when it is exactly 10 seconds and ends where it starts, and its sound is not played. In the message, {time} becomes the time the channel resumes and {contentName} what it resumes with. Leave the title or message empty to leave it off.</div>
                                 <div class="inputContainer">
-                                    <label for="transitionWindow">Transition window (minutes)</label>
+                                    <label for="transitionWindow">Transition Window (Minutes)</label>
                                     <input is="emby-input" type="number" id="transitionWindow" min="0" max="1440" step="1" autocomplete="off" placeholder="0" />
                                     <div class="fieldDescription">Items starting this close to a window change must fit both windows. Set it to your longest content. 0 turns it off.</div>
                                 </div>
 
-                                <h3 class="base-subsection-title">Review scores</h3>
+                                <h3 class="base-subsection-title">Review Scores</h3>
                                 <div class="inputContainer">
-                                    <label for="minCommunityRating">Minimum community rating</label>
-                                    <input is="emby-input" type="number" id="minCommunityRating" min="0" max="10" step="0.1" autocomplete="off" />
+                                    <label>Minimum Community Rating</label>
+                                    <div id="minCommunityRatingHost"></div>
                                     <div class="fieldDescription">Only include content rated at least this by the audience, on a 0 to 10 scale, like 7.5 for a best-of channel. 0 allows everything. Content with no community rating is dropped.</div>
                                 </div>
                                 <div class="inputContainer">
-                                    <label for="minCriticRating">Minimum critic rating</label>
-                                    <input is="emby-input" type="number" id="minCriticRating" min="0" max="100" step="1" autocomplete="off" />
+                                    <label>Minimum Critic Rating</label>
+                                    <div id="minCriticRatingHost"></div>
                                     <div class="fieldDescription">Only include content with at least this critic score, on a 0 to 100 scale. 0 allows everything. Content with no critic rating is dropped.</div>
                                 </div>
 
@@ -175,12 +149,12 @@
                                 </div>
                                 <div class="selectContainer">
                                     <label class="selectLabel">Studios</label>
-                                    <div class="lc-studio-mount"></div>
+                                    <div id="studioHost"></div>
                                     <div class="fieldDescription">Limit the channel to these studios or networks, like an HBO channel. Leave empty to allow all. For shows this also matches the series' studio.</div>
                                 </div>
                                 <div class="selectContainer">
                                     <label class="selectLabel">People</label>
-                                    <div class="lc-people-mount"></div>
+                                    <div id="peopleHost"></div>
                                     <div class="fieldDescription">Limit the channel to content featuring these people, like a favourite director or actor. Search by name to add. Leave empty to allow everyone.</div>
                                 </div>
                             </div>
@@ -188,13 +162,13 @@
 
                         <div class="base-collapsible-section">
                             <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionSettings">
-                                <span class="base-collapsible-title">Channel settings</span>
+                                <span class="base-collapsible-title">Channel Settings</span>
                                 <span class="base-collapsible-icon">&#9660;</span>
                             </button>
                             <div id="sectionSettings" class="base-collapsible-content collapsed">
                                 <h3 class="base-subsection-title">Playback</h3>
                                 <div class="selectContainer">
-                                    <label class="selectLabel" for="subtitleBurnIn">Subtitle burn in</label>
+                                    <label class="selectLabel" for="subtitleBurnIn">Subtitle Burn In</label>
                                     <select is="emby-select" id="subtitleBurnIn">
                                         <option value="Never">Never</option>
                                         <option value="Forced">Forced only</option>
@@ -203,14 +177,14 @@
                                     <div class="fieldDescription">Bakes subtitles into the picture for everyone. Forced only burns the forced track, or the full track when the audio is in another language, while Always burns them on everything.</div>
                                 </div>
                                 <div class="selectContainer">
-                                    <label class="selectLabel">Audio language</label>
-                                    <div class="lc-audiolang-mount"></div>
+                                    <label class="selectLabel">Audio Language</label>
+                                    <div id="audioLanguageHost"></div>
                                     <div class="fieldDescription">Only include content whose default audio track is this language, like English only or Japanese only. Allow all languages keeps everything.</div>
                                 </div>
                                 <div class="checkboxContainer checkboxContainer-withDescription">
                                     <label class="emby-checkbox-label">
                                         <input type="checkbox" is="emby-checkbox" id="showBumpers" />
-                                        <span class="checkboxLabel">Show Up Next cards</span>
+                                        <span class="checkboxLabel">Show Up Next Cards</span>
                                     </label>
                                     <div class="fieldDescription">Plays a 10 second card before each item showing its artwork, title, episode and rating. The card is part of the item's time in the guide, so the item still starts on schedule.</div>
                                 </div>
@@ -226,12 +200,12 @@
                                 </div>
                                 <h3 class="base-subsection-title">Episodes</h3>
                                 <div class="inputContainer">
-                                    <label for="episodesPerBlock">Episodes per block</label>
+                                    <label for="episodesPerBlock">Episodes per Block</label>
                                     <input is="emby-input" type="number" id="episodesPerBlock" min="1" step="1" autocomplete="off" />
                                     <div class="fieldDescription">Consecutive episodes per series before moving on. 1 disables grouping.</div>
                                 </div>
                                 <div class="selectContainer">
-                                    <label class="selectLabel" for="episodeOrder">Episode order</label>
+                                    <label class="selectLabel" for="episodeOrder">Episode Order</label>
                                     <select is="emby-select" id="episodeOrder">
                                         <option value="air">Air order</option>
                                         <option value="random">Random</option>
@@ -240,7 +214,7 @@
                                 <div class="checkboxContainer checkboxContainer-withDescription">
                                     <label class="emby-checkbox-label">
                                         <input type="checkbox" is="emby-checkbox" id="keepMultiPart" />
-                                        <span class="checkboxLabel">Keep multipart episodes together</span>
+                                        <span class="checkboxLabel">Keep Multipart Episodes Together</span>
                                     </label>
                                     <div class="fieldDescription">Keeps two part episodes together across a block boundary.</div>
                                 </div>
@@ -268,19 +242,19 @@
                                 <div class="checkboxContainer">
                                     <label class="emby-checkbox-label">
                                         <input type="checkbox" is="emby-checkbox" id="includeMusicVideos" />
-                                        <span class="checkboxLabel">Music videos</span>
+                                        <span class="checkboxLabel">Music Videos</span>
                                     </label>
                                 </div>
                                 <div class="checkboxContainer checkboxContainer-withDescription">
                                     <label class="emby-checkbox-label">
                                         <input type="checkbox" is="emby-checkbox" id="includeHomeVideos" />
-                                        <span class="checkboxLabel">Home videos</span>
+                                        <span class="checkboxLabel">Home Videos</span>
                                     </label>
                                     <div class="fieldDescription">Home and unassigned videos.</div>
                                 </div>
                                 <h3 class="base-subsection-title">Loop</h3>
                                 <div class="selectContainer">
-                                    <label class="selectLabel" for="loopMode">Loop order</label>
+                                    <label class="selectLabel" for="loopMode">Loop Order</label>
                                     <select is="emby-select" id="loopMode">
                                         <option value="Shuffle">Shuffle</option>
                                         <option value="Alphabetical">Alphabetical</option>
@@ -290,7 +264,7 @@
                                 </div>
                                 <div id="favorGroup" class="hidden">
                                     <div class="selectContainer">
-                                        <label class="selectLabel" for="favorKind">Favor content type</label>
+                                        <label class="selectLabel" for="favorKind">Favor Content Type</label>
                                         <select is="emby-select" id="favorKind">
                                             <option value="None">No preference</option>
                                             <option value="Movies">Movies</option>
@@ -301,7 +275,7 @@
                                     </div>
                                     <div id="favorStrengthGroup" class="base-indent hidden">
                                         <div class="selectContainer">
-                                            <label class="selectLabel" for="favorStrength">Favor strength</label>
+                                            <label class="selectLabel" for="favorStrength">Favor Strength</label>
                                             <select is="emby-select" id="favorStrength">
                                                 <option value="Slight">Slight</option>
                                                 <option value="Moderate">Moderate</option>
@@ -313,13 +287,7 @@
                             </div>
                         </div>
 
-                        <!-- Save -->
-                        <div class="lc-save-actions">
-                            <button is="emby-button" type="button" id="btnSaveChannel" class="raised base-button primary fill">
-                                <span>Save channel</span>
-                            </button>
-                        </div>
-                        <span id="channelStatus" class="base-status-text"></span>
+                        <div id="channelSaveBar" class="lc-save"></div>
                     </div>
 
                 </div>
@@ -328,36 +296,10 @@
     </div>
 
     <style>
-        /* lc-save-actions */
-        /* Space above the full width Save under the last section. */
-        /* Example: <div class="lc-save-actions"><button class="raised base-button primary fill">Save channel</button></div> */
-        .lc-save-actions { margin-top: var(--base-gap-wide); }
-
-        /* lc-logo-row */
-        /* The logo preview beside its Upload and Clear buttons. */
-        /* Example: <div class="lc-logo-row"><img class="lc-logo-preview" /><div class="base-button-row">...</div></div> */
-        .lc-logo-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--base-gap-wide); }
-        .lc-logo-preview { width: 8rem; height: 8rem; border-radius: var(--base-radius-large); object-fit: cover; background: var(--base-wash); }
-
-        /* lc-block-list */
-        /* The stack of source, rating, and placeholder block cards. */
-        /* Example: <div class="lc-block-list"><div class="base-panel">...</div></div> */
-        .lc-block-list { margin-top: var(--base-gap-narrow); }
-
-        /* lc-block-head */
-        /* A block card's header line, with the title pushing Remove to the end. */
-        /* Example: <div class="lc-block-head"><span class="lc-block-title">Rating block</span><button>Remove</button></div> */
-        .lc-block-head { display: flex; align-items: center; gap: var(--base-gap-narrow); }
-        .lc-block-title { flex: 1; min-width: 0; font-weight: 600; }
-
-        /* lc-items */
-        /* The scrolling list of library items a Whitelist or Blacklist source picks from. */
-        /* Example: <div class="base-table-body lc-list"><div class="base-table-row lc-item">...</div></div> */
-        .lc-list { max-height: 22.5rem; overflow-y: auto; margin-top: var(--base-gap-narrow); }
-        .lc-item { cursor: pointer; }
-        .lc-item.selected { background: var(--base-accent-wash); }
-        .lc-item.lc-episode { padding-left: 2.25rem; }
-        .lc-matchall-label { display: flex; align-items: center; margin-top: var(--base-gap-narrow); }
+        /* lc-save */
+        /* Space above the channel's Save Bar under the last section. */
+        /* Example: <div class="lc-save"><div class="base-save-bar">...</div></div> */
+        .lc-save { margin-top: var(--base-gap-wide); }
     </style>
 
     <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">

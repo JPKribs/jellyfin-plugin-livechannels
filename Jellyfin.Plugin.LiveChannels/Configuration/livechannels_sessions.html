@@ -17,9 +17,7 @@
                         Every channel encoding on the server, with how fast it transcodes, where 1.0x keeps up with realtime. Select a session to read or copy its ffmpeg log, or to kill the stream.
                     </div>
 
-                    <div id="sessionsEmpty" class="base-empty-section hidden">No channels are streaming right now.</div>
-
-                    <div id="sessionList" class="lc-session-list"></div>
+                    <div id="sessionList"></div>
 
                     <span id="sessionsStatus" class="base-status-text"></span>
 
@@ -27,28 +25,6 @@
             </form>
         </div>
     </div>
-
-    <style>
-        /* lc-session-list */
-        /* The stack of session cards. */
-        /* Example: <div class="lc-session-list"><div class="base-record-card lc-session">...</div></div> */
-        .lc-session-list { display: flex; flex-direction: column; gap: var(--base-gap-narrow); margin-top: var(--base-gap-narrow); }
-
-        /* lc-session */
-        /* A session card that opens its ffmpeg log, with the channel logo and name over its rows. */
-        /* Example: <div class="base-record-card lc-session"><div class="lc-session-head"><img class="lc-session-logo" /></div></div> */
-        .lc-session { cursor: pointer; transition: border-color 0.15s; }
-        .lc-session:hover { border-color: var(--base-accent); }
-        .lc-session.lc-winding { opacity: 0.6; }
-        .lc-session-head { display: flex; align-items: center; gap: var(--base-gap-narrow); margin-bottom: var(--base-gap-narrow); }
-        .lc-session-logo { width: 3.5rem; height: 3.5rem; border-radius: var(--base-radius-large); object-fit: cover; flex: 0 0 auto; background: var(--base-wash); }
-        .lc-session-logo.lc-pending { visibility: hidden; }
-        .lc-session-title { flex: 1; min-width: 0; }
-        .lc-session-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .lc-session-number { opacity: 0.55; margin-right: var(--base-gap-narrow); }
-        .lc-session-stopping { color: var(--base-orange-fg); font-size: 0.82em; margin-top: 2px; }
-        .lc-speed { display: inline-flex; align-items: center; gap: var(--base-gap-narrow); }
-    </style>
 
     <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">
 </div>

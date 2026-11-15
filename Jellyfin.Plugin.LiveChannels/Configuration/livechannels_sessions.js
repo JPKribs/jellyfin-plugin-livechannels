@@ -1,4 +1,4 @@
-import { createConfigPage, createLogViewer, createStatusDot, openDialog } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { createConfigPage, createList, createLogViewer, createMediaCard, openDialog } from './configurationpage?name=livechannels_jpkribs_shared.js';
 
 export default function (view) {
     'use strict';
@@ -28,6 +28,7 @@ export default function (view) {
     });
     var Shared = page.shared;
     var logDialog = null;
+    var sessionList = createList({ layout: 'rows', render: function (s) { return sessionCard(s); }, emptyText: 'No channels are streaming right now.', label: 'Sessions' });
 
     function el(id) { return view.querySelector('#' + id); }
 
@@ -47,51 +48,37 @@ export default function (view) {
         return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     }
 
-    // speedCell
-    // Shows the encode speed as its ratio and a Status Dot. Green keeps up at 1.0x and over, orange is slightly behind
-    // from 0.95x, red falls behind under that, and gray waits for ffmpeg's first reading.
+    // speedStatus
+    // Shows the encode speed as a status badge. Green keeps up at 1.0x and over, orange is slightly behind from
+    // 0.95x, red falls behind under that, and gray waits for ffmpeg's first reading.
     //
     // Inputs
     // speed [number]: The encode speed ratio, or nothing before the first reading.
     //
     // Output
-    // [string]: The cell markup.
-    function speedCell(speed) {
-        var color, label, text;
-        if (typeof speed !== 'number' || speed <= 0) {
-            color = 'gray'; label = 'Waiting for a Reading'; text = '-';
-        } else if (speed >= 1.0) {
-            color = 'green'; label = 'Keeping Up'; text = speed.toFixed(2) + 'x';
-        } else if (speed >= 0.95) {
-            color = 'orange'; label = 'Slightly Behind'; text = speed.toFixed(2) + 'x';
-        } else {
-            color = 'red'; label = 'Falling Behind'; text = speed.toFixed(2) + 'x';
-        }
-        return '<span class="lc-speed"><span class="base-mono">' + text + '</span>' + createStatusDot({ color: color, label: label }).element.outerHTML + '</span>';
+    // [object]: { status, detail } for the Media Card.
+    function speedStatus(speed) {
+        if (typeof speed !== 'number' || speed <= 0) return { status: { label: 'Waiting', color: 'gray' }, detail: 'Waiting for a reading' };
+        var text = speed.toFixed(2) + 'x';
+        if (speed >= 1.0) return { status: { label: text, color: 'green' }, detail: 'Keeping up' };
+        if (speed >= 0.95) return { status: { label: text, color: 'orange' }, detail: 'Slightly behind' };
+        return { status: { label: text, color: 'red' }, detail: 'Falling behind' };
     }
 
-    function row(label, value) {
-        return '<div class="base-record-row"><span class="base-record-label">' + label +
-            '</span><span class="base-mono">' + value + '</span></div>';
-    }
-
-    // Session id to { url } (a loaded blob object URL), { pending: true }, or { failed: true }. The logo is
-    // served by our controller, and from Jellyfin 10.11 a query-string api_key no longer authenticates, so an
-    // <img src> URL cannot carry the token. Each logo is fetched once with the token in a header and shown as
-    // a local object URL; the cache keeps the 5s poll from refetching, and pruneLogos revokes what is stale.
+    // Session id to a promise of its logo's object URL. The logo is served by our controller, and from Jellyfin
+    // 10.11 a query-string api_key no longer authenticates, so an image address cannot carry the token. Each
+    // logo is fetched once with the token in a header and shown as a local object URL. The cache keeps the 5s
+    // poll from refetching, and pruneLogos revokes what is stale.
     var _logoCache = {};
 
-    function ensureLogo(id) {
-        if (_logoCache[id]) { return; }
-        _logoCache[id] = { pending: true };
-        Shared.fetchObjectUrl('livechannels/sessions/' + encodeURIComponent(id) + '/logo').then(function (url) {
-            _logoCache[id] = { url: url };
-            // The card may have re-rendered while the fetch ran; update whichever img is in the DOM now.
-            var img = el('sessionList').querySelector('.lc-session-logo[data-session-id="' + id + '"]');
-            if (img) { img.src = _logoCache[id].url; img.classList.remove('lc-pending'); }
-        }).catch(function () {
-            _logoCache[id] = { failed: true };
-        });
+    // logoUrl
+    // Fetches a session's logo once and answers with its object URL.
+    function logoUrl(id) {
+        if (!_logoCache[id]) {
+            _logoCache[id] = Shared.fetchObjectUrl('livechannels/sessions/' + encodeURIComponent(id) + '/logo');
+            _logoCache[id].then(function (url) { _logoCache[id].url = url; }, function () { /* the card keeps its icon */ });
+        }
+        return _logoCache[id];
     }
 
     function pruneLogos(sessions) {
@@ -105,49 +92,31 @@ export default function (view) {
         });
     }
 
+    // sessionCard
+    // Builds one session as a Media Card that opens its ffmpeg log. A winding-down session (its viewer left, and
+    // the encoder stays warm briefly so a returning viewer re-tunes instantly) shows its countdown.
     function sessionCard(s) {
-        // Hidden until its blob URL is ready (or already cached), so no broken-image icon ever shows.
-        var cached = _logoCache[s.Id];
-        var logoImg = cached && cached.url
-            ? '<img class="lc-session-logo" data-session-id="' + Shared.escapeHtml(s.Id) + '" src="' + cached.url + '" alt="" />'
-            : '<img class="lc-session-logo lc-pending" data-session-id="' + Shared.escapeHtml(s.Id) + '" alt="" />';
-        // A winding-down session (its viewer left; the encoder stays warm briefly so a returning viewer re-tunes
-        // instantly) is dimmed and labelled with its countdown. Kill still stops it right away.
+        var speed = speedStatus(s.Speed);
         var winding = typeof s.StopsInSeconds === 'number';
-        var windingNote = winding
-            ? '<div class="lc-session-stopping" title="The viewer left, so the encoder stays warm briefly for a quick return.">' +
-                'No viewers. Stopping in ~' + s.StopsInSeconds + 's</div>'
-            : '';
-        return '<div class="base-record-card lc-session' + (winding ? ' lc-winding' : '') + '" data-id="' + Shared.escapeHtml(s.Id) + '" data-name="' + Shared.escapeHtml(s.Name || '') + '"' +
-            ' title="Show the ffmpeg log" role="button" tabindex="0">' +
-            '<div class="lc-session-head">' +
-                logoImg +
-                '<div class="lc-session-title">' +
-                    '<div class="lc-session-name"><span class="lc-session-number">' + s.Number + '</span>' + Shared.escapeHtml(s.Name || '') + '</div>' +
-                    windingNote +
-                '</div>' +
-            '</div>' +
-            '<div class="lc-session-rows">' +
-                row('Started', formatStarted(s.StartedUtc)) +
-                row('Streaming for', formatElapsed(s.StartedUtc)) +
-                row('Speed', speedCell(s.Speed)) +
-            '</div>' +
-        '</div>';
+        return createMediaCard({
+            shape: 'square',
+            icon: 'live_tv',
+            image: function () { return logoUrl(s.Id); },
+            title: s.Name || '',
+            titleSuffix: 'Channel ' + s.Number,
+            subtitle: 'Started ' + formatStarted(s.StartedUtc) + ', streaming for ' + formatElapsed(s.StartedUtc),
+            status: speed.status,
+            detail: speed.detail,
+            badges: winding ? [{ label: 'No viewers. Stopping in ~' + s.StopsInSeconds + 's', color: 'orange' }] : [],
+            onClick: function () { openLog(s.Id, s.Name); }
+        });
     }
 
     function render(sessions) {
         var list = sessions || [];
-        Shared.setVisible('sessionsEmpty', list.length === 0);
-        el('sessionList').innerHTML = list.map(sessionCard).join('');
-        // Hide a logo that fails to load rather than showing a broken-image icon.
-        var imgs = el('sessionList').querySelectorAll('.lc-session-logo');
-        for (var i = 0; i < imgs.length; i++) {
-            imgs[i].addEventListener('error', function () { this.classList.add('lc-pending'); });
-        }
-
-        // Drop (and revoke) logos for sessions that have ended, then fetch any this render is missing.
+        sessionList.setItems(list);
+        // Drop (and revoke) logos for sessions that have ended.
         pruneLogos(list);
-        list.forEach(function (s) { ensureLogo(s.Id); });
     }
 
     function loadSessions() {
@@ -220,18 +189,7 @@ export default function (view) {
     }
 
     function bind() {
-        // Delegate so the cards keep working across re-renders: selecting a session opens its log.
-        el('sessionList').addEventListener('click', function (e) {
-            var card = e.target.closest('.lc-session');
-            if (card) { openLog(card.getAttribute('data-id'), card.getAttribute('data-name')); }
-        });
-        el('sessionList').addEventListener('keydown', function (e) {
-            var card = e.target.closest('.lc-session');
-            if (card && (e.key === 'Enter' || e.key === ' ')) {
-                e.preventDefault();
-                openLog(card.getAttribute('data-id'), card.getAttribute('data-name'));
-            }
-        });
+        el('sessionList').appendChild(sessionList.element);
     }
 
     // Release every blob object URL when the page is torn down; nothing else revokes the last set.
