@@ -61,12 +61,12 @@ export default function (view) {
         } else {
             color = '#f85149'; label = 'Falling behind'; text = speed.toFixed(2) + 'x';
         }
-        return '<span class="jpk-mono">' + text + '</span> <span class="lc-speed-dot" style="color:' + color + '" title="' + label + '">●</span>';
+        return '<span class="base-mono">' + text + '</span> <span class="lc-speed-dot" style="color:' + color + '" title="' + label + '">●</span>';
     }
 
     function row(label, value) {
-        return '<div class="jpk-record-row"><span class="jpk-record-label">' + label +
-            '</span><span class="jpk-mono">' + value + '</span></div>';
+        return '<div class="base-record-row"><span class="base-record-label">' + label +
+            '</span><span class="base-mono">' + value + '</span></div>';
     }
 
     // Session id to { url } (a loaded blob object URL), { pending: true }, or { failed: true }. The logo is
@@ -112,7 +112,7 @@ export default function (view) {
             ? '<div class="lc-session-stopping" style="color:#d29922;font-size:0.82em;margin-top:2px;" title="The viewer left. The encoder stays warm briefly so tuning back in is instant. Kill stops it now.">' +
                 'No viewers. Stopping in ~' + s.StopsInSeconds + 's</div>'
             : '';
-        return '<div class="jpk-record-card lc-session" data-id="' + Shared.escapeHtml(s.Id) + '" data-name="' + Shared.escapeHtml(s.Name || '') + '"' +
+        return '<div class="base-record-card lc-session" data-id="' + Shared.escapeHtml(s.Id) + '" data-name="' + Shared.escapeHtml(s.Name || '') + '"' +
             (winding ? ' style="opacity:0.6"' : '') + ' title="Show this session\'s ffmpeg logs">' +
             '<div class="lc-session-head">' +
                 logoImg +

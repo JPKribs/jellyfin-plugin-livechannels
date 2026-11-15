@@ -65,7 +65,7 @@ export function buildPlaceholderCard(block, onRemove) {
         '<div class="lc-source-header">' +
             '<span class="material-icons lc-source-icon" aria-hidden="true">tv_off</span>' +
             '<span class="lc-block-title">Placeholder block</span>' +
-            '<button is="emby-button" type="button" class="lc-remove raised jpk-icon-btn jpk-button-destructive" title="Remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
+            '<button is="emby-button" type="button" class="lc-remove raised base-button destructive" title="Remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
         '</div>' +
         '<div class="lc-block-times">' +
             '<div class="inputContainer"><label class="inputLabel">Start time</label><input is="emby-input" type="time" class="lc-ph-start" /></div>' +
@@ -75,7 +75,7 @@ export function buildPlaceholderCard(block, onRemove) {
             '<input is="emby-input" type="text" class="lc-ph-name" maxlength="' + MAX_TEXT + '" />' +
             '<div class="fieldDescription">What the guide calls this window.</div></div>' +
         '<div class="selectContainer"><label class="selectLabel">Style</label>' +
-            '<select class="lc-ph-style jpk-selector-dropdown">' + styleOptions + '</select></div>' +
+            '<select is="emby-select" class="lc-ph-style">' + styleOptions + '</select></div>' +
         '<div class="inputContainer lc-ph-media-row"><label class="inputLabel">Image, GIF or video</label>' +
             '<input is="emby-input" type="text" class="lc-ph-media" placeholder="/path/on/the/server/card.mp4" />' +
             '<div class="fieldDescription">A path on the server. A GIF or video should be exactly 10 seconds long, ending where it starts, so it loops cleanly. Its sound is not played.</div></div>' +

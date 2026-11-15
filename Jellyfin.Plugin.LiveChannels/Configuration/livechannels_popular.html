@@ -20,18 +20,18 @@
                     <div class="fieldDescription">Disable to hide it without affecting your own channels.</div>
 
                     <!-- Channel -->
-                    <div class="jpk-collapsible-section">
-                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="popularSectionChannel">
-                            <span class="jpk-collapsible-title">Channel</span>
-                            <span class="jpk-collapsible-icon">&#9660;</span>
+                    <div class="base-collapsible-section">
+                        <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="popularSectionChannel">
+                            <span class="base-collapsible-title">Channel</span>
+                            <span class="base-collapsible-icon">&#9660;</span>
                         </button>
-                        <div id="popularSectionChannel" class="jpk-collapsible-content collapsed">
-                            <h3 class="jpk-subsection-title">Identity</h3>
+                        <div id="popularSectionChannel" class="base-collapsible-content collapsed">
+                            <h3 class="base-subsection-title">Identity</h3>
                             <div class="inputContainer">
                                 <label for="popularName">Name</label>
                                 <input is="emby-input" type="text" id="popularName" autocomplete="off" />
                             </div>
-                            <h3 class="jpk-subsection-title">Logo</h3>
+                            <h3 class="base-subsection-title">Logo</h3>
                             <div class="inputContainer">
                                 <label for="popularIcon">Icon</label>
                                 <input is="emby-input" type="text" id="popularIcon" autocomplete="off" placeholder="e.g. diversity_1" />
@@ -47,16 +47,16 @@
                     </div>
 
                     <!-- Channel settings -->
-                    <div class="jpk-collapsible-section">
-                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="popularSectionSettings">
-                            <span class="jpk-collapsible-title">Channel settings</span>
-                            <span class="jpk-collapsible-icon">&#9660;</span>
+                    <div class="base-collapsible-section">
+                        <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="popularSectionSettings">
+                            <span class="base-collapsible-title">Channel settings</span>
+                            <span class="base-collapsible-icon">&#9660;</span>
                         </button>
-                        <div id="popularSectionSettings" class="jpk-collapsible-content collapsed">
-                            <h3 class="jpk-subsection-title">Playback</h3>
+                        <div id="popularSectionSettings" class="base-collapsible-content collapsed">
+                            <h3 class="base-subsection-title">Playback</h3>
                             <div class="selectContainer">
                                 <label class="selectLabel" for="popularSubtitle">Subtitle burn in</label>
-                                <select id="popularSubtitle" class="jpk-selector-dropdown">
+                                <select is="emby-select" id="popularSubtitle">
                                     <option value="Never">Never</option>
                                     <option value="Forced">Forced only</option>
                                     <option value="Always">Always</option>
@@ -70,15 +70,15 @@
                                 </label>
                                 <div class="fieldDescription">Plays a 10 second card before each item showing its artwork, title, episode and rating. The card is part of the item's time in the guide, so the item still starts on schedule.</div>
                             </div>
-                            <h3 class="jpk-subsection-title">Age ratings</h3>
+                            <h3 class="base-subsection-title">Age ratings</h3>
                             <div class="selectContainer">
                                 <label class="selectLabel">Rating limits</label>
-                                <div id="popularRatingBlocks" class="jpk-source-list"></div>
-                                <div class="jpk-selector-actions jpk-section-spacer">
-                                    <button is="emby-button" type="button" id="popularAddRatingBlock" class="raised jpk-icon-btn jpk-button-submit" title="Add a rating block">
+                                <div id="popularRatingBlocks" class="lc-source-list"></div>
+                                <div class="base-button-row">
+                                    <button is="emby-button" type="button" id="popularAddRatingBlock" class="raised base-button primary" title="Add a rating block">
                                         <span class="material-icons" aria-hidden="true">add</span><span>Add rating block</span>
                                     </button>
-                                    <button is="emby-button" type="button" id="popularAddPlaceholderBlock" class="raised jpk-icon-btn jpk-button-submit" title="Add a placeholder block">
+                                    <button is="emby-button" type="button" id="popularAddPlaceholderBlock" class="raised base-button primary" title="Add a placeholder block">
                                         <span class="material-icons" aria-hidden="true">tv_off</span><span>Add placeholder block</span>
                                     </button>
                                 </div>
@@ -89,17 +89,17 @@
                                 <input is="emby-input" type="number" id="popularTransitionWindow" min="0" max="1440" step="1" autocomplete="off" placeholder="0" />
                                 <div class="fieldDescription">Items starting this close to a window change must fit both windows. Set it to your longest content. 0 turns it off.</div>
                             </div>
-                            <h3 class="jpk-subsection-title">Guide</h3>
+                            <h3 class="base-subsection-title">Guide</h3>
                             <div class="selectContainer">
                                 <label class="selectLabel" for="popularCategory">Category</label>
-                                <select id="popularCategory" class="jpk-selector-dropdown">
+                                <select is="emby-select" id="popularCategory">
                                     <option value="None">None</option>
                                     <option value="News">News</option>
                                     <option value="Sports">Sports</option>
                                 </select>
                                 <div class="fieldDescription">Tags the whole channel in the guide. Kids is set per rating block, and the movie tag is applied automatically while a movie is playing.</div>
                             </div>
-                            <h3 class="jpk-subsection-title">Episodes</h3>
+                            <h3 class="base-subsection-title">Episodes</h3>
                             <div class="inputContainer">
                                 <label for="popularEpisodesPerBlock">Episodes per block</label>
                                 <input is="emby-input" type="number" id="popularEpisodesPerBlock" min="1" step="1" autocomplete="off" />
@@ -107,7 +107,7 @@
                             </div>
                             <div class="selectContainer">
                                 <label class="selectLabel" for="popularEpisodeOrder">Episode order</label>
-                                <select id="popularEpisodeOrder" class="jpk-selector-dropdown">
+                                <select is="emby-select" id="popularEpisodeOrder">
                                     <option value="air">Air order</option>
                                     <option value="random">Random</option>
                                 </select>
@@ -119,7 +119,7 @@
                                 </label>
                                 <div class="fieldDescription">Keeps two part episodes together across a block boundary.</div>
                             </div>
-                            <h3 class="jpk-subsection-title">Content Types</h3>
+                            <h3 class="base-subsection-title">Content Types</h3>
                             <div class="checkboxContainer">
                                 <label class="emby-checkbox-label">
                                     <input type="checkbox" is="emby-checkbox" id="popularIncludeEpisodes" />
@@ -140,10 +140,10 @@
                                 </label>
                                 <div class="fieldDescription">Season 0 specials.</div>
                             </div>
-                            <h3 class="jpk-subsection-title">Loop</h3>
+                            <h3 class="base-subsection-title">Loop</h3>
                             <div class="selectContainer">
                                 <label class="selectLabel" for="popularLoopMode">Loop order</label>
-                                <select id="popularLoopMode" class="jpk-selector-dropdown">
+                                <select is="emby-select" id="popularLoopMode">
                                     <option value="Shuffle">Shuffle</option>
                                     <option value="Alphabetical">Alphabetical</option>
                                     <option value="Chronological">Chronological</option>
@@ -153,10 +153,10 @@
                         </div>
                     </div>
 
-                    <button is="emby-button" type="button" id="btnSavePopular" class="raised block jpk-button-submit">
+                    <button is="emby-button" type="button" id="btnSavePopular" class="raised base-button primary fill">
                         <span>Save</span>
                     </button>
-                    <span id="popularStatus" class="jpk-status-text"></span>
+                    <span id="popularStatus" class="base-status-text"></span>
 
                 </div>
             </form>
@@ -167,9 +167,9 @@
         /* Rating block cards, matching the channel editor. */
         .lc-source-header { display: flex; align-items: center; gap: 10px; margin-bottom: 1em; }
         .lc-source-icon { color: rgba(255, 255, 255, 0.45); flex: 0 0 auto; }
-        #popularRatingBlocks .jpk-empty-section { padding: 20px 24px; font-size: 1em; }
+        #popularRatingBlocks .base-empty-section { padding: 20px 24px; font-size: 1em; }
         .lc-ratingblock {
-            border: 1px solid var(--jpk-border); border-radius: 8px;
+            border: 1px solid var(--base-border); border-radius: 8px;
             padding: 1em 1.25em; margin-bottom: 12px; background: rgba(255, 255, 255, 0.02);
         }
         .lc-ratingblock:last-child { margin-bottom: 0; }

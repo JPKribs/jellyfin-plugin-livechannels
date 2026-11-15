@@ -98,8 +98,8 @@ export default function (view) {
         var enabled = 0, disabled = 0;
         channels.forEach(function (ch) { if (ch.Enabled === false) disabled++; else enabled++; });
         el('channelCounts').innerHTML =
-            '<div class="jpk-card green"><span class="jpk-card-count">' + enabled + '</span><span class="jpk-card-label">Enabled</span></div>' +
-            '<div class="jpk-card gray"><span class="jpk-card-count">' + disabled + '</span><span class="jpk-card-label">Disabled</span></div>';
+            '<div class="base-card green"><span class="base-card-count">' + enabled + '</span><span class="base-card-label">Enabled</span></div>' +
+            '<div class="base-card gray"><span class="base-card-count">' + disabled + '</span><span class="base-card-label">Disabled</span></div>';
     }
 
     function renderSelect() {
@@ -137,8 +137,8 @@ export default function (view) {
 
     function setEnableVisual(enabled) {
         var btn = el('btnEnable');
-        btn.classList.toggle('jpk-button-submit', enabled);
-        btn.classList.toggle('jpk-secondary', !enabled);
+        btn.classList.toggle('primary', enabled);
+        btn.classList.toggle('secondary', !enabled);
         el('enableLabel').textContent = enabled ? 'Enabled' : 'Disabled';
         btn.querySelector('.material-icons').textContent = enabled ? 'visibility' : 'visibility_off';
     }
@@ -151,16 +151,16 @@ export default function (view) {
         var selected = [];
 
         var wrap = document.createElement('div');
-        wrap.className = 'jpk-chip-select';
+        wrap.className = 'lc-chip-select';
         // Build the emby-select through innerHTML (exactly how the source cards do it) so the customized built-in
         // upgrades to the styled component. Do NOT use document.createElement('select', { is: 'emby-select' }) here:
         // that path throws "toLowerCase is not a function" inside Jellyfin's webcomponents polyfill and takes the
         // whole editor down with it.
         var pickerHost = document.createElement('div');
-        pickerHost.innerHTML = '<select class="jpk-selector-dropdown"></select>';
+        pickerHost.innerHTML = '<select is="emby-select"></select>';
         var picker = pickerHost.querySelector('select');
         var chips = document.createElement('div');
-        chips.className = 'jpk-tags';
+        chips.className = 'base-tags';
         // Selected chips sit above the picker (like UserManagement's tags).
         wrap.appendChild(chips);
         wrap.appendChild(picker);
@@ -171,11 +171,11 @@ export default function (view) {
             chips.innerHTML = '';
             selected.forEach(function (name, index) {
                 var tag = document.createElement('span');
-                tag.className = 'jpk-tag';
+                tag.className = 'base-tag';
                 var label = document.createElement('span');
                 label.textContent = name;
                 var remove = document.createElement('span');
-                remove.className = 'jpk-tag-remove';
+                remove.className = 'base-tag-remove';
                 remove.textContent = '×';
                 remove.title = 'Remove';
                 remove.addEventListener('click', function () { selected.splice(index, 1); renderChips(); renderPicker(); emit(); });
@@ -223,15 +223,15 @@ export default function (view) {
         var selected = []; // [{ key, label }]
 
         var wrap = document.createElement('div');
-        wrap.className = 'jpk-chip-select';
+        wrap.className = 'lc-chip-select';
         var chips = document.createElement('div');
-        chips.className = 'jpk-tags';
+        chips.className = 'base-tags';
         var searchHost = document.createElement('div');
         searchHost.innerHTML = '<input type="text" class="emby-input" autocomplete="off" />';
         var search = searchHost.querySelector('input');
         search.placeholder = options.placeholder || 'Search…';
         var results = document.createElement('div');
-        results.className = 'jpk-table';
+        results.className = 'base-table';
         results.style.display = 'none';
         wrap.appendChild(chips);
         wrap.appendChild(search);
@@ -241,11 +241,11 @@ export default function (view) {
             chips.innerHTML = '';
             selected.forEach(function (item, index) {
                 var tag = document.createElement('span');
-                tag.className = 'jpk-tag';
+                tag.className = 'base-tag';
                 var label = document.createElement('span');
                 label.textContent = item.label;
                 var remove = document.createElement('span');
-                remove.className = 'jpk-tag-remove';
+                remove.className = 'base-tag-remove';
                 remove.textContent = '×';
                 remove.title = 'Remove';
                 remove.addEventListener('click', function () { selected.splice(index, 1); renderChips(); });
@@ -275,7 +275,7 @@ export default function (view) {
                 if (!rows.length) { results.style.display = 'none'; return; }
                 rows.forEach(function (row) {
                     var rowEl = document.createElement('div');
-                    rowEl.className = 'jpk-table-row';
+                    rowEl.className = 'base-table-row';
                     rowEl.style.cursor = 'pointer';
                     rowEl.textContent = row.label;
                     rowEl.addEventListener('click', function () { add(row); });
@@ -516,7 +516,7 @@ export default function (view) {
         var ch = editing;
         if (!ch) return;
         if (!ch.Sources.length) {
-            host.innerHTML = '<div class="jpk-empty-section">No libraries yet. Add one below.</div>';
+            host.innerHTML = '<div class="base-empty-section">No libraries yet. Add one below.</div>';
             return;
         }
         ch.Sources.forEach(function (source, index) { host.appendChild(buildCard(source, index)); });
@@ -532,11 +532,11 @@ export default function (view) {
             '<div class="lc-source-header">' +
                 '<span class="material-icons lc-source-icon" aria-hidden="true">folder</span>' +
                 '<span class="lc-source-title">Library source</span>' +
-                '<button is="emby-button" type="button" class="lc-remove raised jpk-icon-btn jpk-button-destructive" title="Remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
+                '<button is="emby-button" type="button" class="lc-remove raised base-button destructive" title="Remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
             '</div>' +
             '<div class="selectContainer">' +
                 '<label class="selectLabel">Source type</label>' +
-                '<select class="lc-source-kind jpk-selector-dropdown">' +
+                '<select is="emby-select" class="lc-source-kind">' +
                     '<option value="Library">Library</option>' +
                     '<option value="Collection">Collection</option>' +
                 '</select>' +
@@ -544,11 +544,11 @@ export default function (view) {
             '<div class="lc-library-fields">' +
                 '<div class="selectContainer">' +
                     '<label class="selectLabel">Library</label>' +
-                    '<select class="lc-source-library jpk-selector-dropdown"></select>' +
+                    '<select is="emby-select" class="lc-source-library"></select>' +
                 '</div>' +
                 '<div class="inputContainer">' +
                     '<label class="inputLabel">Selection</label>' +
-                    '<select class="lc-selection jpk-selector-dropdown">' +
+                    '<select is="emby-select" class="lc-selection">' +
                         '<option value="AllContent">All content</option>' +
                         '<option value="Genre">Genre</option>' +
                         '<option value="Whitelist">Whitelist</option>' +
@@ -556,7 +556,7 @@ export default function (view) {
                     '</select>' +
                 '</div>' +
                 '<div class="filterSection lc-genres">' +
-                    '<h3 class="jpk-subsection-title">Genres</h3>' +
+                    '<h3 class="base-subsection-title">Genres</h3>' +
                     '<label class="inputLabel">Include</label>' +
                     '<div class="lc-genre-mount"></div>' +
                     '<label class="emby-checkbox-label lc-matchall-label"><input type="checkbox" is="emby-checkbox" class="lc-matchall" /><span class="checkboxLabel">Match all genres</span></label>' +
@@ -567,14 +567,14 @@ export default function (view) {
                 '</div>' +
                 '<div class="filterSection lc-items">' +
                     '<input is="emby-input" type="text" class="lc-search" placeholder="Search this library…" />' +
-                    '<div class="jpk-table-item-count lc-count"></div>' +
-                    '<div class="jpk-table-body lc-list"></div>' +
+                    '<div class="base-table-item-count lc-count"></div>' +
+                    '<div class="base-table-body lc-list"></div>' +
                 '</div>' +
             '</div>' +
             '<div class="lc-collection-fields">' +
                 '<div class="selectContainer">' +
                     '<label class="selectLabel">Collection</label>' +
-                    '<select class="lc-source-collection jpk-selector-dropdown"></select>' +
+                    '<select is="emby-select" class="lc-source-collection"></select>' +
                 '</div>' +
                 '<div class="fieldDescription">Every item in this collection, with series expanded to their episodes. The channel-wide filters still apply.</div>' +
             '</div>';
@@ -623,12 +623,12 @@ export default function (view) {
 
         function thumb(id) {
             var img = document.createElement('img');
-            img.className = 'jpk-table-row-thumb jpk-table-row-thumb-portrait';
+            img.className = 'base-thumb-image lc-thumb';
             img.loading = 'lazy';
             img.src = ApiClient.getUrl('Items/' + id + '/Images/Primary', { maxHeight: 120 });
             img.addEventListener('error', function () {
                 var ph = document.createElement('div');
-                ph.className = 'jpk-table-row-thumb-placeholder';
+                ph.className = 'base-thumb base-table-thumb';
                 ph.innerHTML = '<span class="material-icons">movie</span>';
                 if (img.parentNode) img.parentNode.replaceChild(ph, img);
             });
@@ -639,28 +639,28 @@ export default function (view) {
         function makeRow(it, name, meta, indent) {
             var selected = (source.ItemIds || []).indexOf(it.Id) >= 0;
             var row = document.createElement('div');
-            row.className = 'jpk-table-row' + (selected ? ' selected' : '');
+            row.className = 'base-table-row' + (selected ? ' selected' : '');
             if (indent) { row.style.paddingLeft = '36px'; }
 
             row.appendChild(thumb(it.Id));
 
             var info = document.createElement('div');
-            info.className = 'jpk-table-cell jpk-table-item-info';
+            info.className = 'base-table-cell base-table-item-info';
             var nm = document.createElement('div');
-            nm.className = 'jpk-table-item-title';
+            nm.className = 'base-table-item-title';
             nm.textContent = name;
             var mt = document.createElement('div');
-            mt.className = 'jpk-table-item-sub';
+            mt.className = 'base-table-item-sub';
             mt.textContent = meta;
             info.appendChild(nm);
             info.appendChild(mt);
             row.appendChild(info);
 
             var checkCell = document.createElement('div');
-            checkCell.className = 'jpk-table-cell jpk-table-cell-checkbox';
+            checkCell.className = 'base-table-cell base-table-cell-checkbox';
             var cb = document.createElement('input');
             cb.type = 'checkbox';
-            cb.className = 'jpk-table-row-checkbox';
+            cb.className = 'base-table-row-checkbox';
             cb.checked = selected;
             checkCell.appendChild(cb);
             row.appendChild(checkCell);
@@ -696,7 +696,7 @@ export default function (view) {
         // Adds an expand control to a show row so its episodes can be picked individually.
         function addExpander(it, built) {
             var expand = document.createElement('button');
-            expand.className = 'jpk-row-btn';
+            expand.className = 'base-row-btn';
             expand.type = 'button';
             expand.title = 'Pick episodes';
             expand.innerHTML = '<span class="material-icons" aria-hidden="true">expand_more</span>';
@@ -714,7 +714,7 @@ export default function (view) {
                 expand.querySelector('.material-icons').textContent = 'expand_less';
                 host = document.createElement('div');
                 built.row.parentNode.insertBefore(host, built.row.nextSibling);
-                host.innerHTML = '<div class="jpk-table-loading-more">Loading episodes…</div>';
+                host.innerHTML = '<div class="base-empty-inline">Loading episodes…</div>';
                 ApiClient.getItems(ApiClient.getCurrentUserId(), {
                     ParentId: it.Id, IncludeItemTypes: 'Episode', Recursive: true,
                     SortBy: 'ParentIndexNumber,IndexNumber', SortOrder: 'Ascending',
@@ -722,14 +722,14 @@ export default function (view) {
                 }).then(function (res) {
                     var eps = (res && res.Items) || [];
                     host.innerHTML = '';
-                    if (!eps.length) { host.innerHTML = '<div class="jpk-table-empty">No episodes.</div>'; return; }
+                    if (!eps.length) { host.innerHTML = '<div class="base-empty-inline">No episodes.</div>'; return; }
                     eps.forEach(function (ep) { host.appendChild(makeRow(ep, ep.Name || '', episodeMeta(ep), true).row); });
-                }).catch(function () { host.innerHTML = '<div class="jpk-table-empty">Failed to load episodes.</div>'; });
+                }).catch(function () { host.innerHTML = '<div class="base-empty-inline">Failed to load episodes.</div>'; });
             });
         }
 
         function renderList(items) {
-            if (!items.length) { list.innerHTML = '<div class="jpk-table-empty">No matches.</div>'; return; }
+            if (!items.length) { list.innerHTML = '<div class="base-empty-inline">No matches.</div>'; return; }
             list.innerHTML = '';
             items.forEach(function (it) {
                 var built = makeRow(it, it.Name || '', showMeta(it), false);
@@ -740,8 +740,8 @@ export default function (view) {
 
         var loaded = false;
         function loadList(term) {
-            if (!source.LibraryId) { list.innerHTML = '<div class="jpk-table-empty">Select a library first.</div>'; return; }
-            list.innerHTML = '<div class="jpk-table-loading-more">Loading…</div>';
+            if (!source.LibraryId) { list.innerHTML = '<div class="base-empty-inline">Select a library first.</div>'; return; }
+            list.innerHTML = '<div class="base-empty-inline">Loading…</div>';
             ApiClient.getItems(ApiClient.getCurrentUserId(), {
                 ParentId: source.LibraryId, IncludeItemTypes: 'Series,Movie', Recursive: true,
                 searchTerm: term || undefined, SortBy: 'SortName', SortOrder: 'Ascending',
@@ -749,7 +749,7 @@ export default function (view) {
             }).then(function (result) {
                 loaded = true;
                 renderList((result && result.Items) || []);
-            }).catch(function () { list.innerHTML = '<div class="jpk-table-empty">Search failed.</div>'; });
+            }).catch(function () { list.innerHTML = '<div class="base-empty-inline">Search failed.</div>'; });
         }
 
         var searchTimer = null;
@@ -928,7 +928,7 @@ export default function (view) {
         if (!ch) return;
         ch.RatingBlocks = ch.RatingBlocks || [];
         if (!ch.RatingBlocks.length) {
-            host.innerHTML = '<div class="jpk-empty-section">No rating blocks. Any rating airs at any time. Add one to restrict by rating or time of day.</div>';
+            host.innerHTML = '<div class="base-empty-section">No rating blocks. Any rating airs at any time. Add one to restrict by rating or time of day.</div>';
             return;
         }
         ch.RatingBlocks.forEach(function (block, index) {
@@ -947,18 +947,18 @@ export default function (view) {
             '<div class="lc-source-header">' +
                 '<span class="material-icons lc-source-icon" aria-hidden="true">schedule</span>' +
                 '<span class="lc-block-title">Rating block</span>' +
-                '<button is="emby-button" type="button" class="lc-remove raised jpk-icon-btn jpk-button-destructive" title="Remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
+                '<button is="emby-button" type="button" class="lc-remove raised base-button destructive" title="Remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
             '</div>' +
             '<div class="selectContainer"><label class="selectLabel">Minimum age rating</label>' +
-                '<select class="lc-block-min jpk-selector-dropdown"><option value="">No minimum</option>' + ratingOptions + '</select></div>' +
+                '<select is="emby-select" class="lc-block-min"><option value="">No minimum</option>' + ratingOptions + '</select></div>' +
             '<div class="selectContainer"><label class="selectLabel">Maximum age rating</label>' +
-                '<select class="lc-block-max jpk-selector-dropdown"><option value="">No limit</option>' + ratingOptions + '</select></div>' +
+                '<select is="emby-select" class="lc-block-max"><option value="">No limit</option>' + ratingOptions + '</select></div>' +
             '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
                 '<input type="checkbox" is="emby-checkbox" class="lc-block-unrated" /><span class="checkboxLabel">Include unrated</span></label></div>' +
             '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
                 '<input type="checkbox" is="emby-checkbox" class="lc-block-kids" /><span class="checkboxLabel">Tag as kids</span></label></div>' +
             '<div class="selectContainer"><label class="selectLabel">Period</label>' +
-                '<select class="lc-block-period jpk-selector-dropdown"><option value="AllDay">All day</option><option value="Custom">Custom</option></select></div>' +
+                '<select is="emby-select" class="lc-block-period"><option value="AllDay">All day</option><option value="Custom">Custom</option></select></div>' +
             '<div class="lc-block-times">' +
                 '<div class="inputContainer"><label class="inputLabel">Start time</label><input is="emby-input" type="time" class="lc-block-start" /></div>' +
                 '<div class="inputContainer"><label class="inputLabel">End time</label><input is="emby-input" type="time" class="lc-block-end" /></div>' +

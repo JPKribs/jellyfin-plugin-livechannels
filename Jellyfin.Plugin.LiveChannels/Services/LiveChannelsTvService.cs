@@ -1918,11 +1918,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     }
 
     /// <summary>
-    /// Writes a file so no reader ever sees it half-written and concurrent writers of the same path cannot collide:
-    /// each writes its own uniquely named temp file beside the target, then moves it into place. The guide refresh,
-    /// the buffer card task and a tune-in can all resolve the same channel's logo at once; written in place, the
-    /// losers threw a sharing violation (swallowed, so the channel showed no image) and a reader could catch a
-    /// truncated file. The bytes for one path are identical whoever wins, so the last move simply replaces it.
+    /// Writes a file through Base's <see cref="AtomicFile"/>, so no reader sees it half written, and lets a writer that
+    /// loses a race stand down. The guide refresh, the buffer card task, and a tune-in can resolve one channel's logo at
+    /// once, and the bytes for one path are the same whoever wins.
     /// </summary>
     /// <param name="path">The target file.</param>
     /// <param name="bytes">The content.</param>
@@ -1930,27 +1928,13 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <returns>A task that completes when the file is in place.</returns>
     internal static async Task WriteFileAtomicAsync(string path, byte[] bytes, CancellationToken cancellationToken)
     {
-        var temp = path + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
         try
         {
-            await File.WriteAllBytesAsync(temp, bytes, cancellationToken).ConfigureAwait(false);
-            File.Move(temp, path, overwrite: true);
+            await AtomicFile.WriteAsync(path, (stream, token) => stream.WriteAsync(bytes, token).AsTask(), cancellationToken, flushToDisk: false).ConfigureAwait(false);
         }
         catch (Exception ex) when ((ex is IOException or UnauthorizedAccessException) && File.Exists(path))
         {
-            // Another writer's move won the race, or holds the target open (Windows reports that as a sharing
-            // violation or an access denial): its identical copy stands.
-        }
-        finally
-        {
-            try
-            {
-                File.Delete(temp);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // Best effort; a stray temp file is harmless and never read.
-            }
+            // Another writer's copy is in place or holds the target open, and its bytes are the same.
         }
     }
 

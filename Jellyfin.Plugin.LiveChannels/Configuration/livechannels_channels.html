@@ -22,48 +22,48 @@
                         Build and manage looping virtual channels from your own library. Choose each channel's content, appearance, and loop behaviour, then save to add it to Live TV. Resolution, codecs, and bitrate live on the <strong>Settings</strong> tab and apply to every channel.
                     </div>
 
-                    <div id="channelCounts" class="jpk-cards"></div>
+                    <div id="channelCounts" class="base-cards"></div>
 
                     <!-- Channel selector -->
-                    <div class="jpk-selector">
+                    <div class="base-selector">
                         <div class="selectContainer">
                             <label class="selectLabel" for="selectChannel">Channel</label>
-                            <select id="selectChannel" class="jpk-selector-dropdown"></select>
+                            <select id="selectChannel" class="base-selector-dropdown"></select>
                         </div>
-                        <div class="jpk-selector-actions">
-                            <button is="emby-button" type="button" id="btnNewChannel" class="raised jpk-icon-btn jpk-button-submit" title="New channel">
+                        <div class="base-selector-actions">
+                            <button is="emby-button" type="button" id="btnNewChannel" class="raised base-button primary" title="New channel">
                                 <span class="material-icons" aria-hidden="true">add</span><span>New</span>
                             </button>
-                            <button is="emby-button" type="button" id="btnEnable" class="raised jpk-icon-btn" title="Toggle enabled">
+                            <button is="emby-button" type="button" id="btnEnable" class="raised base-button secondary" title="Toggle enabled">
                                 <span class="material-icons" aria-hidden="true">visibility</span><span id="enableLabel">Enabled</span>
                             </button>
-                            <button is="emby-button" type="button" id="btnDeleteChannel" class="raised jpk-icon-btn jpk-button-destructive" title="Delete channel">
+                            <button is="emby-button" type="button" id="btnDeleteChannel" class="raised base-button destructive" title="Delete channel">
                                 <span class="material-icons" aria-hidden="true">delete</span><span>Delete</span>
                             </button>
-                            <button is="emby-button" type="button" id="btnExportChannels" class="raised jpk-icon-btn" title="Export all channels to a file">
+                            <button is="emby-button" type="button" id="btnExportChannels" class="raised base-button secondary" title="Export all channels to a file">
                                 <span class="material-icons" aria-hidden="true">download</span><span>Export</span>
                             </button>
-                            <button is="emby-button" type="button" id="btnImportChannels" class="raised jpk-icon-btn" title="Import channels from a file">
+                            <button is="emby-button" type="button" id="btnImportChannels" class="raised base-button secondary" title="Import channels from a file">
                                 <span class="material-icons" aria-hidden="true">upload</span><span>Import</span>
                             </button>
                         </div>
                     </div>
 
-                    <span id="ioStatus" class="jpk-status-text"></span>
+                    <span id="ioStatus" class="base-status-text"></span>
 
-                    <div id="emptyState" class="jpk-empty-section hidden">No channels yet. Click <strong>New</strong> to create one.</div>
+                    <div id="emptyState" class="base-empty-section hidden">No channels yet. Click <strong>New</strong> to create one.</div>
 
                     <!-- Channel editor -->
                     <div id="channelEditor" class="hidden">
 
                         <!-- Channel basics -->
-                        <div class="jpk-collapsible-section">
-                            <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionChannel">
-                                <span class="jpk-collapsible-title">Channel</span>
-                                <span class="jpk-collapsible-icon">&#9660;</span>
+                        <div class="base-collapsible-section">
+                            <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionChannel">
+                                <span class="base-collapsible-title">Channel</span>
+                                <span class="base-collapsible-icon">&#9660;</span>
                             </button>
-                            <div id="sectionChannel" class="jpk-collapsible-content collapsed">
-                                <h3 class="jpk-subsection-title">Identity</h3>
+                            <div id="sectionChannel" class="base-collapsible-content collapsed">
+                                <h3 class="base-subsection-title">Identity</h3>
                                 <div class="inputContainer">
                                     <label for="channelName">Name</label>
                                     <input is="emby-input" type="text" id="channelName" autocomplete="off" />
@@ -72,16 +72,16 @@
                                     <label for="channelNumber">Channel number</label>
                                     <input is="emby-input" type="number" id="channelNumber" min="1" step="1" autocomplete="off" />
                                 </div>
-                                <h3 class="jpk-subsection-title">Logo</h3>
+                                <h3 class="base-subsection-title">Logo</h3>
                                 <div class="inputContainer">
                                     <label>Logo</label>
-                                    <div class="jpk-selector">
-                                        <img id="logoPreview" alt="Channel logo" class="jpk-logo-preview hidden" style="width:128px;height:128px;border-radius:8px;object-fit:cover;background:rgba(255,255,255,0.04);" />
-                                        <div class="jpk-selector-actions">
-                                            <button is="emby-button" type="button" id="btnUploadLogo" class="raised jpk-icon-btn" title="Upload image">
+                                    <div class="base-selector">
+                                        <img id="logoPreview" alt="Channel logo" class="lc-logo-preview hidden" style="width:128px;height:128px;border-radius:8px;object-fit:cover;background:rgba(255,255,255,0.04);" />
+                                        <div class="base-selector-actions">
+                                            <button is="emby-button" type="button" id="btnUploadLogo" class="raised base-button secondary" title="Upload image">
                                                 <span class="material-icons" aria-hidden="true">upload</span><span>Upload</span>
                                             </button>
-                                            <button is="emby-button" type="button" id="btnClearLogo" class="raised jpk-icon-btn jpk-button-destructive hidden" title="Remove image">
+                                            <button is="emby-button" type="button" id="btnClearLogo" class="raised base-button destructive hidden" title="Remove image">
                                                 <span class="material-icons" aria-hidden="true">delete</span><span>Clear</span>
                                             </button>
                                         </div>
@@ -91,7 +91,7 @@
                                 </div>
                                 <div class="selectContainer">
                                     <label class="selectLabel" for="logoStyle">Generated logo style</label>
-                                    <select id="logoStyle" class="jpk-selector-dropdown">
+                                    <select is="emby-select" id="logoStyle">
                                         <option value="Number">Number</option>
                                         <option value="Symbol">Symbol</option>
                                     </select>
@@ -112,16 +112,16 @@
                         </div>
 
                         <!-- Content -->
-                        <div class="jpk-collapsible-section">
-                            <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionContent">
-                                <span class="jpk-collapsible-title">Content</span>
-                                <span class="jpk-collapsible-icon">&#9660;</span>
+                        <div class="base-collapsible-section">
+                            <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionContent">
+                                <span class="base-collapsible-title">Content</span>
+                                <span class="base-collapsible-icon">&#9660;</span>
                             </button>
-                            <div id="sectionContent" class="jpk-collapsible-content collapsed">
+                            <div id="sectionContent" class="base-collapsible-content collapsed">
                                 <div class="fieldDescription">This channel will contain content from the libraries configured below.</div>
-                                <div id="librarySources" class="jpk-source-list"></div>
-                                <div class="jpk-selector-actions jpk-section-spacer">
-                                    <button is="emby-button" type="button" id="btnAddLibrary" class="raised jpk-icon-btn jpk-button-submit" title="Add a source">
+                                <div id="librarySources" class="lc-source-list"></div>
+                                <div class="base-button-row">
+                                    <button is="emby-button" type="button" id="btnAddLibrary" class="raised base-button primary" title="Add a source">
                                         <span class="material-icons" aria-hidden="true">add</span><span>Add source</span>
                                     </button>
                                 </div>
@@ -129,21 +129,21 @@
                         </div>
 
                         <!-- Channel settings -->
-                        <div class="jpk-collapsible-section">
-                            <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionFilters">
-                                <span class="jpk-collapsible-title">Filters</span>
-                                <span class="jpk-collapsible-icon">&#9660;</span>
+                        <div class="base-collapsible-section">
+                            <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionFilters">
+                                <span class="base-collapsible-title">Filters</span>
+                                <span class="base-collapsible-icon">&#9660;</span>
                             </button>
-                            <div id="sectionFilters" class="jpk-collapsible-content collapsed">
-                                <h3 class="jpk-subsection-title">Age ratings</h3>
+                            <div id="sectionFilters" class="base-collapsible-content collapsed">
+                                <h3 class="base-subsection-title">Age ratings</h3>
                                 <div class="selectContainer">
                                     <label class="selectLabel">Rating limits</label>
-                                    <div id="ratingBlocks" class="jpk-source-list"></div>
-                                    <div class="jpk-selector-actions jpk-section-spacer">
-                                        <button is="emby-button" type="button" id="addRatingBlock" class="raised jpk-icon-btn jpk-button-submit" title="Add a rating block">
+                                    <div id="ratingBlocks" class="lc-source-list"></div>
+                                    <div class="base-button-row">
+                                        <button is="emby-button" type="button" id="addRatingBlock" class="raised base-button primary" title="Add a rating block">
                                             <span class="material-icons" aria-hidden="true">add</span><span>Add rating block</span>
                                         </button>
-                                        <button is="emby-button" type="button" id="addPlaceholderBlock" class="raised jpk-icon-btn jpk-button-submit" title="Add a placeholder block">
+                                        <button is="emby-button" type="button" id="addPlaceholderBlock" class="raised base-button primary" title="Add a placeholder block">
                                             <span class="material-icons" aria-hidden="true">tv_off</span><span>Add placeholder block</span>
                                         </button>
                                     </div>
@@ -155,7 +155,7 @@
                                     <div class="fieldDescription">Items starting this close to a window change must fit both windows. Set it to your longest content. 0 turns it off.</div>
                                 </div>
 
-                                <h3 class="jpk-subsection-title">Review scores</h3>
+                                <h3 class="base-subsection-title">Review scores</h3>
                                 <div class="inputContainer">
                                     <label for="minCommunityRating">Minimum community rating</label>
                                     <input is="emby-input" type="number" id="minCommunityRating" min="0" max="10" step="0.1" autocomplete="off" />
@@ -167,7 +167,7 @@
                                     <div class="fieldDescription">Only include content with at least this critic score, on a 0 to 100 scale. 0 allows everything. Content with no critic rating is dropped.</div>
                                 </div>
 
-                                <h3 class="jpk-subsection-title">Metadata</h3>
+                                <h3 class="base-subsection-title">Metadata</h3>
                                 <div class="inputContainer">
                                     <label for="years">Years</label>
                                     <input is="emby-input" type="text" id="years" autocomplete="off" placeholder="Any year" />
@@ -186,16 +186,16 @@
                             </div>
                         </div>
 
-                        <div class="jpk-collapsible-section">
-                            <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionSettings">
-                                <span class="jpk-collapsible-title">Channel settings</span>
-                                <span class="jpk-collapsible-icon">&#9660;</span>
+                        <div class="base-collapsible-section">
+                            <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionSettings">
+                                <span class="base-collapsible-title">Channel settings</span>
+                                <span class="base-collapsible-icon">&#9660;</span>
                             </button>
-                            <div id="sectionSettings" class="jpk-collapsible-content collapsed">
-                                <h3 class="jpk-subsection-title">Playback</h3>
+                            <div id="sectionSettings" class="base-collapsible-content collapsed">
+                                <h3 class="base-subsection-title">Playback</h3>
                                 <div class="selectContainer">
                                     <label class="selectLabel" for="subtitleBurnIn">Subtitle burn in</label>
-                                    <select id="subtitleBurnIn" class="jpk-selector-dropdown">
+                                    <select is="emby-select" id="subtitleBurnIn">
                                         <option value="Never">Never</option>
                                         <option value="Forced">Forced only</option>
                                         <option value="Always">Always</option>
@@ -214,17 +214,17 @@
                                     </label>
                                     <div class="fieldDescription">Plays a 10 second card before each item showing its artwork, title, episode and rating. The card is part of the item's time in the guide, so the item still starts on schedule.</div>
                                 </div>
-                                <h3 class="jpk-subsection-title">Guide</h3>
+                                <h3 class="base-subsection-title">Guide</h3>
                                 <div class="selectContainer">
                                     <label class="selectLabel" for="category">Category</label>
-                                    <select id="category" class="jpk-selector-dropdown">
+                                    <select is="emby-select" id="category">
                                         <option value="None">None</option>
                                         <option value="News">News</option>
                                         <option value="Sports">Sports</option>
                                     </select>
                                     <div class="fieldDescription">Tags the whole channel in the guide. Kids is set per rating block, and the movie tag is applied automatically while a movie is playing.</div>
                                 </div>
-                                <h3 class="jpk-subsection-title">Episodes</h3>
+                                <h3 class="base-subsection-title">Episodes</h3>
                                 <div class="inputContainer">
                                     <label for="episodesPerBlock">Episodes per block</label>
                                     <input is="emby-input" type="number" id="episodesPerBlock" min="1" step="1" autocomplete="off" />
@@ -232,7 +232,7 @@
                                 </div>
                                 <div class="selectContainer">
                                     <label class="selectLabel" for="episodeOrder">Episode order</label>
-                                    <select id="episodeOrder" class="jpk-selector-dropdown">
+                                    <select is="emby-select" id="episodeOrder">
                                         <option value="air">Air order</option>
                                         <option value="random">Random</option>
                                     </select>
@@ -244,7 +244,7 @@
                                     </label>
                                     <div class="fieldDescription">Keeps two part episodes together across a block boundary.</div>
                                 </div>
-                                <h3 class="jpk-subsection-title">Content Types</h3>
+                                <h3 class="base-subsection-title">Content Types</h3>
                                 <div class="checkboxContainer">
                                     <label class="emby-checkbox-label">
                                         <input type="checkbox" is="emby-checkbox" id="includeEpisodes" />
@@ -278,10 +278,10 @@
                                     </label>
                                     <div class="fieldDescription">Home and unassigned videos.</div>
                                 </div>
-                                <h3 class="jpk-subsection-title">Loop</h3>
+                                <h3 class="base-subsection-title">Loop</h3>
                                 <div class="selectContainer">
                                     <label class="selectLabel" for="loopMode">Loop order</label>
-                                    <select id="loopMode" class="jpk-selector-dropdown">
+                                    <select is="emby-select" id="loopMode">
                                         <option value="Shuffle">Shuffle</option>
                                         <option value="Alphabetical">Alphabetical</option>
                                         <option value="Chronological">Chronological</option>
@@ -291,7 +291,7 @@
                                 <div id="favorGroup" class="hidden">
                                     <div class="selectContainer">
                                         <label class="selectLabel" for="favorKind">Favor content type</label>
-                                        <select id="favorKind" class="jpk-selector-dropdown">
+                                        <select is="emby-select" id="favorKind">
                                             <option value="None">No preference</option>
                                             <option value="Movies">Movies</option>
                                             <option value="Shows">Shows</option>
@@ -299,10 +299,10 @@
                                         </select>
                                         <div class="fieldDescription">Weights one type more heavily in the loop, repeating it to fill the share if needed.</div>
                                     </div>
-                                    <div id="favorStrengthGroup" class="jpk-indent hidden">
+                                    <div id="favorStrengthGroup" class="base-indent hidden">
                                         <div class="selectContainer">
                                             <label class="selectLabel" for="favorStrength">Favor strength</label>
-                                            <select id="favorStrength" class="jpk-selector-dropdown">
+                                            <select is="emby-select" id="favorStrength">
                                                 <option value="Slight">Slight</option>
                                                 <option value="Moderate">Moderate</option>
                                                 <option value="Heavy">Heavy</option>
@@ -315,11 +315,11 @@
 
                         <!-- Save -->
                         <div class="lc-save-actions">
-                            <button is="emby-button" type="button" id="btnSaveChannel" class="raised block jpk-button-submit">
+                            <button is="emby-button" type="button" id="btnSaveChannel" class="raised base-button primary fill">
                                 <span>Save channel</span>
                             </button>
                         </div>
-                        <span id="channelStatus" class="jpk-status-text"></span>
+                        <span id="channelStatus" class="base-status-text"></span>
                     </div>
 
                 </div>
@@ -334,25 +334,25 @@
 
         /* Picker chips (genres, studios, people, audio language): selected chips above the picker, styled like
            UserManagement's tags. */
-        .jpk-chip-select .jpk-tags { gap: 6px; margin: 0 0 8px 0; }
-        .jpk-chip-select .jpk-tags:empty { display: none; margin: 0; }
-        .jpk-chip-select .jpk-tag {
-            gap: 8px; background: var(--jpk-blue-bg); color: #fff;
+        .lc-chip-select .base-tags { gap: 6px; margin: 0 0 8px 0; }
+        .lc-chip-select .base-tags:empty { display: none; margin: 0; }
+        .lc-chip-select .base-tag {
+            gap: 8px; background: var(--base-blue-bg); color: #fff;
             border: 1px solid rgba(52, 152, 219, 0.5); border-radius: 14px;
             padding: 3px 4px 3px 12px; font-size: 0.9em; line-height: 1.6;
         }
-        .jpk-chip-select .jpk-tag-remove {
+        .lc-chip-select .base-tag-remove {
             display: inline-flex; align-items: center; justify-content: center;
             width: 18px; height: 18px; padding: 0; border-radius: 50%;
             background: rgba(255, 255, 255, 0.12); color: #fff; opacity: 1; font-size: 1em; line-height: 1;
         }
-        .jpk-chip-select .jpk-tag-remove:hover { background: var(--jpk-red-fg); color: #fff; opacity: 1; }
+        .lc-chip-select .base-tag-remove:hover { background: var(--base-red-fg); color: #fff; opacity: 1; }
 
         /* Library source cards, modelled on ServerSync's mapping card. Rows, thumbs, fields, subsection
            titles, and buttons all come from the base (jpkribs_shared); this is layout glue only. */
-        .jpk-source-list { display: flex; flex-direction: column; margin-top: 8px; }
+        .lc-source-list { display: flex; flex-direction: column; margin-top: 8px; }
         .lc-source {
-            border: 1px solid var(--jpk-border); border-radius: 8px;
+            border: 1px solid var(--base-border); border-radius: 8px;
             padding: 1em 1.25em; margin-bottom: 12px; background: rgba(255, 255, 255, 0.02);
         }
         .lc-source:last-child { margin-bottom: 0; }
@@ -360,15 +360,15 @@
         .lc-source-icon { color: rgba(255, 255, 255, 0.45); flex: 0 0 auto; }
         .lc-source-library { width: 100%; margin: 0; }
         .lc-matchall-label { display: flex; align-items: center; margin-top: 10px; }
-        #librarySources .jpk-table-body { max-height: 360px; overflow-y: auto; margin-top: 0.6em; }
-        #librarySources .jpk-table-row { cursor: pointer; }
-        #librarySources .jpk-table-row.selected { background: rgba(0, 164, 220, 0.12); }
+        #librarySources .base-table-body { max-height: 360px; overflow-y: auto; margin-top: 0.6em; }
+        #librarySources .base-table-row { cursor: pointer; }
+        #librarySources .base-table-row.selected { background: rgba(0, 164, 220, 0.12); }
 
         /* Each rating block is its own bordered container; a lighter empty box suits this nested filter, and the
            block title pushes Remove to the right like the source title does. */
-        #ratingBlocks .jpk-empty-section { padding: 20px 24px; font-size: 1em; }
+        #ratingBlocks .base-empty-section { padding: 20px 24px; font-size: 1em; }
         .lc-ratingblock {
-            border: 1px solid var(--jpk-border); border-radius: 8px;
+            border: 1px solid var(--base-border); border-radius: 8px;
             padding: 1em 1.25em; margin-bottom: 12px; background: rgba(255, 255, 255, 0.02);
         }
         .lc-ratingblock:last-child { margin-bottom: 0; }

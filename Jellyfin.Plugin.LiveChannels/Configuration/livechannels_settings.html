@@ -15,15 +15,15 @@
                         Output and playback options that apply to every channel, including the Popular one. Set the resolution, codecs, and bitrate, then open a section to adjust hardware, playback, and session limits.
                     </div>
 
-                    <div class="jpk-collapsible-section">
-                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionEncoding">
-                            <span class="jpk-collapsible-title">Encoding</span>
-                            <span class="jpk-collapsible-icon">&#9660;</span>
+                    <div class="base-collapsible-section">
+                        <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionEncoding">
+                            <span class="base-collapsible-title">Encoding</span>
+                            <span class="base-collapsible-icon">&#9660;</span>
                         </button>
-                        <div id="sectionEncoding" class="jpk-collapsible-content collapsed">
+                        <div id="sectionEncoding" class="base-collapsible-content collapsed">
                             <div class="selectContainer">
                                 <label class="selectLabel" for="resolution">Resolution</label>
-                                <select id="resolution" class="jpk-selector-dropdown">
+                                <select is="emby-select" id="resolution">
                                     <option value="1280">720p</option>
                                     <option value="1920">1080p</option>
                                     <option value="2560">1440p</option>
@@ -34,7 +34,7 @@
 
                             <div class="selectContainer">
                                 <label class="selectLabel" for="videoCodec">Video codec</label>
-                                <select id="videoCodec" class="jpk-selector-dropdown">
+                                <select is="emby-select" id="videoCodec">
                                     <option value="H264">H.264</option>
                                     <option value="Hevc">HEVC / H.265</option>
                                 </select>
@@ -43,7 +43,7 @@
 
                             <div class="selectContainer">
                                 <label class="selectLabel" for="audioCodec">Audio codec</label>
-                                <select id="audioCodec" class="jpk-selector-dropdown">
+                                <select is="emby-select" id="audioCodec">
                                     <option value="Aac">AAC</option>
                                     <option value="Ac3">AC3</option>
                                     <option value="Eac3">E-AC3</option>
@@ -58,16 +58,16 @@
                         </div>
                     </div>
 
-                    <div class="jpk-collapsible-section">
-                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionHardware">
-                            <span class="jpk-collapsible-title">Hardware acceleration</span>
-                            <span class="jpk-collapsible-icon">&#9660;</span>
+                    <div class="base-collapsible-section">
+                        <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionHardware">
+                            <span class="base-collapsible-title">Hardware acceleration</span>
+                            <span class="base-collapsible-icon">&#9660;</span>
                         </button>
-                        <div id="sectionHardware" class="jpk-collapsible-content collapsed">
-                            <div class="jpk-record-card">
-                                <div class="jpk-record-row">
-                                    <span class="jpk-record-label">Hardware acceleration</span>
-                                    <span id="accelValue" class="jpk-mono">Checking&hellip;</span>
+                        <div id="sectionHardware" class="base-collapsible-content collapsed">
+                            <div class="base-record-card">
+                                <div class="base-record-row">
+                                    <span class="base-record-label">Hardware acceleration</span>
+                                    <span id="accelValue" class="base-mono">Checking&hellip;</span>
                                 </div>
                             </div>
 
@@ -79,12 +79,12 @@
                         </div>
                     </div>
 
-                    <div class="jpk-collapsible-section">
-                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionPlayback">
-                            <span class="jpk-collapsible-title">Playback</span>
-                            <span class="jpk-collapsible-icon">&#9660;</span>
+                    <div class="base-collapsible-section">
+                        <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionPlayback">
+                            <span class="base-collapsible-title">Playback</span>
+                            <span class="base-collapsible-icon">&#9660;</span>
                         </button>
-                        <div id="sectionPlayback" class="jpk-collapsible-content collapsed">
+                        <div id="sectionPlayback" class="base-collapsible-content collapsed">
                             <div class="selectContainer">
                                 <label class="selectLabel">Default language</label>
                                 <div class="lc-sublang-mount"></div>
@@ -93,12 +93,12 @@
                         </div>
                     </div>
 
-                    <div class="jpk-collapsible-section">
-                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionSubtitles">
-                            <span class="jpk-collapsible-title">Subtitle appearance</span>
-                            <span class="jpk-collapsible-icon">&#9660;</span>
+                    <div class="base-collapsible-section">
+                        <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionSubtitles">
+                            <span class="base-collapsible-title">Subtitle appearance</span>
+                            <span class="base-collapsible-icon">&#9660;</span>
                         </button>
-                        <div id="sectionSubtitles" class="jpk-collapsible-content collapsed">
+                        <div id="sectionSubtitles" class="base-collapsible-content collapsed">
                             <div class="fieldDescription">How burned-in subtitles look. Channels burn subtitles according to their own subtitle rule; this styles them wherever they appear. Leave everything untouched to render each subtitle exactly as it was authored, including its own bold, italic, and colour tags.</div>
 
                             <div class="inputContainer">
@@ -126,7 +126,7 @@
 
                             <div class="selectContainer">
                                 <label class="selectLabel" for="subBorder">Background</label>
-                                <select id="subBorder" class="jpk-selector-dropdown">
+                                <select is="emby-select" id="subBorder">
                                     <option value="Default">As authored</option>
                                     <option value="Outline">Outline</option>
                                     <option value="Box">Solid box</option>
@@ -141,12 +141,12 @@
                         </div>
                     </div>
 
-                    <div class="jpk-collapsible-section">
-                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionSessions">
-                            <span class="jpk-collapsible-title">Sessions</span>
-                            <span class="jpk-collapsible-icon">&#9660;</span>
+                    <div class="base-collapsible-section">
+                        <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionSessions">
+                            <span class="base-collapsible-title">Sessions</span>
+                            <span class="base-collapsible-icon">&#9660;</span>
                         </button>
-                        <div id="sectionSessions" class="jpk-collapsible-content collapsed">
+                        <div id="sectionSessions" class="base-collapsible-content collapsed">
                             <div class="inputContainer">
                                 <label for="maxSessions">Maximum concurrent streams</label>
                                 <input is="emby-input" type="number" id="maxSessions" min="0" step="1" autocomplete="off" />
@@ -167,45 +167,45 @@
                         </div>
                     </div>
 
-                    <button is="emby-button" type="button" id="btnSaveSettings" class="raised block jpk-button-submit">
+                    <button is="emby-button" type="button" id="btnSaveSettings" class="raised base-button primary fill">
                         <span>Save settings</span>
                     </button>
-                    <span id="settingsStatus" class="jpk-status-text"></span>
+                    <span id="settingsStatus" class="base-status-text"></span>
 
                     <div class="sectionTitleContainer flex align-items-center">
                         <h1 class="sectionTitle">Troubleshooting</h1>
                     </div>
 
-                    <div class="jpk-collapsible-section">
-                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionStress">
-                            <span class="jpk-collapsible-title">Stress test</span>
-                            <span class="jpk-collapsible-icon">&#9660;</span>
+                    <div class="base-collapsible-section">
+                        <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionStress">
+                            <span class="base-collapsible-title">Stress test</span>
+                            <span class="base-collapsible-icon">&#9660;</span>
                         </button>
-                        <div id="sectionStress" class="jpk-collapsible-content collapsed">
+                        <div id="sectionStress" class="base-collapsible-content collapsed">
                             <div class="fieldDescription">Finds how many streams this server can encode at once using the real channel pipeline. Each round encodes a minute of the test item with one more stream than the last, until a stream drops below 30 fps. That count is your Maximum concurrent streams. It runs for a few minutes, loads the server heavily, and needs all channel streams stopped first.</div>
                             <div class="selectContainer">
                                 <label class="selectLabel">Test item</label>
                                 <div class="lc-stressitem-mount"></div>
                                 <div class="fieldDescription">Search for one movie or episode to test with. Something demanding like 4K or HDR gives the most honest number. This choice is not saved.</div>
                             </div>
-                            <button is="emby-button" type="button" id="stressRun" class="raised block button-submit"><span>Run stress test</span></button>
-                            <button is="emby-button" type="button" id="stressCancel" class="raised block jpk-button-destructive hide"><span>Cancel test</span></button>
-                            <span id="stressStatus" class="jpk-status-text"></span>
+                            <button is="emby-button" type="button" id="stressRun" class="raised base-button primary fill"><span>Run stress test</span></button>
+                            <button is="emby-button" type="button" id="stressCancel" class="raised base-button destructive fill hide"><span>Cancel test</span></button>
+                            <span id="stressStatus" class="base-status-text"></span>
                             <div id="stressResult" class="fieldDescription"></div>
                         </div>
                     </div>
 
-                    <div class="jpk-collapsible-section">
-                        <button type="button" class="jpk-collapsible-header collapsed" aria-expanded="false" data-target="sectionReset">
-                            <span class="jpk-collapsible-title">Reset</span>
-                            <span class="jpk-collapsible-icon">&#9660;</span>
+                    <div class="base-collapsible-section">
+                        <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionReset">
+                            <span class="base-collapsible-title">Reset</span>
+                            <span class="base-collapsible-icon">&#9660;</span>
                         </button>
-                        <div id="sectionReset" class="jpk-collapsible-content collapsed">
+                        <div id="sectionReset" class="base-collapsible-content collapsed">
                             <div class="fieldDescription">Rebuilds every channel schedule, the guide, and every channel's buffer cards from your current settings. Use it to clear a stale schedule, like after changing a channel's genres or filters.</div>
-                            <button is="emby-button" type="button" id="btnResetSchedule" class="raised block jpk-button-destructive">
+                            <button is="emby-button" type="button" id="btnResetSchedule" class="raised base-button destructive fill">
                                 <span>Reset schedule</span>
                             </button>
-                            <span id="resetStatus" class="jpk-status-text"></span>
+                            <span id="resetStatus" class="base-status-text"></span>
                         </div>
                     </div>
 
@@ -217,19 +217,19 @@
     <style>
         /* Language and test-item chips, matched to the channel editor's pickers (blue capsule) so they are not the
            unstyled grey default. */
-        .jpk-chip-select .jpk-tags { gap: 6px; margin: 0 0 8px 0; }
-        .jpk-chip-select .jpk-tags:empty { display: none; margin: 0; }
-        .jpk-chip-select .jpk-tag {
-            gap: 8px; background: var(--jpk-blue-bg); color: #fff;
+        .lc-chip-select .base-tags { gap: 6px; margin: 0 0 8px 0; }
+        .lc-chip-select .base-tags:empty { display: none; margin: 0; }
+        .lc-chip-select .base-tag {
+            gap: 8px; background: var(--base-blue-bg); color: #fff;
             border: 1px solid rgba(52, 152, 219, 0.5); border-radius: 14px;
             padding: 3px 4px 3px 12px; font-size: 0.9em; line-height: 1.6;
         }
-        .jpk-chip-select .jpk-tag-remove {
+        .lc-chip-select .base-tag-remove {
             display: inline-flex; align-items: center; justify-content: center;
             width: 18px; height: 18px; padding: 0; border-radius: 50%;
             background: rgba(255, 255, 255, 0.12); color: #fff; opacity: 1; font-size: 1em; line-height: 1;
         }
-        .jpk-chip-select .jpk-tag-remove:hover { background: var(--jpk-red-fg); color: #fff; opacity: 1; }
+        .lc-chip-select .base-tag-remove:hover { background: var(--base-red-fg); color: #fff; opacity: 1; }
     </style>
 
     <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">

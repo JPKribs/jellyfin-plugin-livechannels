@@ -17,28 +17,28 @@
                         Every channel currently encoding on the server, refreshed as you watch. Each one shows when it started, how long it has run, and how fast it is transcoding, where 1.0x keeps up with realtime. Select a session to review its ffmpeg logs, copy them for diagnostics, or kill the stream.
                     </div>
 
-                    <div id="sessionsEmpty" class="jpk-empty-section hidden">No channels are streaming right now.</div>
+                    <div id="sessionsEmpty" class="base-empty-section hidden">No channels are streaming right now.</div>
 
-                    <div id="sessionList" class="jpk-source-list"></div>
+                    <div id="sessionList" class="lc-source-list"></div>
 
-                    <span id="sessionsStatus" class="jpk-status-text"></span>
+                    <span id="sessionsStatus" class="base-status-text"></span>
 
                 </div>
             </form>
         </div>
     </div>
 
-    <div id="lcLogDialog" class="jpk-dialog hidden">
-        <div class="jpk-dialog-content lc-log-dialog">
-            <button type="button" class="jpk-dialog-close" id="lcLogClose" title="Close">&times;</button>
-            <h3 class="jpk-modal-title" id="lcLogTitle">Session</h3>
-            <div class="jpk-modal-body">
-                <pre id="lcLogText" class="jpk-code lc-log-text"></pre>
+    <div id="lcLogDialog" class="base-dialog hidden">
+        <div class="base-dialog-content lc-log-dialog">
+            <button type="button" class="base-dialog-close" id="lcLogClose" title="Close">&times;</button>
+            <h3 class="base-modal-title" id="lcLogTitle">Session</h3>
+            <div class="base-modal-body">
+                <pre id="lcLogText" class="base-code lc-log-text"></pre>
             </div>
-            <div class="jpk-modal-button-row">
-                <button is="emby-button" type="button" id="lcLogRefresh" class="raised jpk-secondary jpk-modal-button"><span>Refresh</span></button>
-                <button is="emby-button" type="button" id="lcLogCopy" class="raised jpk-button-submit jpk-modal-button"><span>Copy</span></button>
-                <button is="emby-button" type="button" id="lcLogKill" class="raised jpk-button-destructive jpk-modal-button"><span class="material-icons" aria-hidden="true">stop</span><span>Kill</span></button>
+            <div class="base-modal-button-row">
+                <button is="emby-button" type="button" id="lcLogRefresh" class="raised base-button secondary base-modal-button"><span>Refresh</span></button>
+                <button is="emby-button" type="button" id="lcLogCopy" class="raised base-button primary base-modal-button"><span>Copy</span></button>
+                <button is="emby-button" type="button" id="lcLogKill" class="raised base-button destructive base-modal-button"><span class="material-icons" aria-hidden="true">stop</span><span>Kill</span></button>
             </div>
         </div>
     </div>
@@ -55,9 +55,9 @@
         .lc-session-title { flex: 1; min-width: 0; }
         .lc-session-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .lc-session-number { color: rgba(255, 255, 255, 0.55); margin-right: 8px; }
-        .lc-session-rows .jpk-record-row { padding: 4px 0; }
+        .lc-session-rows .base-record-row { padding: 4px 0; }
         .lc-speed-dot { font-size: 1.15em; line-height: 1; }
-        .lc-session:hover { border-color: var(--jpk-accent); }
+        .lc-session:hover { border-color: var(--base-accent); }
         .lc-log-dialog { width: min(900px, 95vw); }
         .lc-log-text {
             max-height: 55vh; overflow: auto; white-space: pre-wrap; word-break: break-word;

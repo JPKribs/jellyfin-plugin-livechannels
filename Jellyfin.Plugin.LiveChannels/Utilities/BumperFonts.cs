@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using JPKribs.Jellyfin.Base;
 
 namespace Jellyfin.Plugin.LiveChannels.Utilities;
 
@@ -88,13 +89,9 @@ internal sealed class BumperFonts
             var path = Path.Combine(directory, file);
             if (!File.Exists(path) || new FileInfo(path).Length != stream.Length)
             {
-                var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                using (var output = new FileStream(temp, FileMode.Create, FileAccess.Write))
-                {
-                    stream.CopyTo(output);
-                }
-
-                File.Move(temp, path, overwrite: true);
+                using var buffer = new MemoryStream();
+                stream.CopyTo(buffer);
+                AtomicFile.WriteAllBytes(path, buffer.GetBuffer().AsSpan(0, (int)buffer.Length), flushToDisk: false);
             }
 
             if (FontMetrics.Load(path) is not { } metrics)

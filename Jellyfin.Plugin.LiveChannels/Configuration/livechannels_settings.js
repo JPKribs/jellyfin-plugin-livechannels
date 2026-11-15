@@ -38,14 +38,14 @@ export default function (view) {
         var selected = null; // { key, label }
 
         var wrap = document.createElement('div');
-        wrap.className = 'jpk-chip-select';
+        wrap.className = 'lc-chip-select';
         var chips = document.createElement('div');
-        chips.className = 'jpk-tags';
+        chips.className = 'base-tags';
         var searchHost = document.createElement('div');
         searchHost.innerHTML = '<input type="text" class="emby-input" placeholder="Search language…" autocomplete="off" />';
         var search = searchHost.querySelector('input');
         var results = document.createElement('div');
-        results.className = 'jpk-table';
+        results.className = 'base-table';
         results.style.display = 'none';
         wrap.appendChild(chips);
         wrap.appendChild(search);
@@ -57,11 +57,11 @@ export default function (view) {
             chips.innerHTML = '';
             if (!selected) { return; }
             var tag = document.createElement('span');
-            tag.className = 'jpk-tag';
+            tag.className = 'base-tag';
             var label = document.createElement('span');
             label.textContent = selected.label;
             var remove = document.createElement('span');
-            remove.className = 'jpk-tag-remove';
+            remove.className = 'base-tag-remove';
             remove.textContent = '×';
             remove.title = 'Remove';
             remove.addEventListener('click', function () { selected = null; renderChip(); });
@@ -82,7 +82,7 @@ export default function (view) {
                 if (!rows.length) { results.style.display = 'none'; return; }
                 rows.forEach(function (c) {
                     var row = document.createElement('div');
-                    row.className = 'jpk-table-row';
+                    row.className = 'base-table-row';
                     row.style.cursor = 'pointer';
                     row.textContent = c.label;
                     row.addEventListener('click', function () { selected = { key: c.key, label: c.label }; renderChip(); search.value = ''; hideResults(); });
@@ -239,15 +239,15 @@ export default function (view) {
         if (stressPicker) { return; }
         var selected = null;
         var wrap = document.createElement('div');
-        wrap.className = 'jpk-chip-select';
+        wrap.className = 'lc-chip-select';
         var chips = document.createElement('div');
-        chips.className = 'jpk-tags';
+        chips.className = 'base-tags';
         var searchHost = document.createElement('div');
         searchHost.innerHTML = '<input type="text" class="emby-input" autocomplete="off" />';
         var search = searchHost.querySelector('input');
         search.placeholder = 'Search movies and episodes…';
         var results = document.createElement('div');
-        results.className = 'jpk-table';
+        results.className = 'base-table';
         results.style.display = 'none';
         wrap.appendChild(chips);
         wrap.appendChild(search);
@@ -259,11 +259,11 @@ export default function (view) {
             chips.innerHTML = '';
             if (!selected) { return; }
             var tag = document.createElement('span');
-            tag.className = 'jpk-tag';
+            tag.className = 'base-tag';
             var label = document.createElement('span');
             label.textContent = selected.label;
             var remove = document.createElement('span');
-            remove.className = 'jpk-tag-remove';
+            remove.className = 'base-tag-remove';
             remove.textContent = '×';
             remove.title = 'Remove';
             remove.addEventListener('click', function () { selected = null; renderChip(); });
@@ -281,7 +281,7 @@ export default function (view) {
                 if (!items.length) { results.style.display = 'none'; return; }
                 items.forEach(function (i) {
                     var row = document.createElement('div');
-                    row.className = 'jpk-table-row';
+                    row.className = 'base-table-row';
                     row.style.cursor = 'pointer';
                     row.textContent = i.Name + (i.ProductionYear ? ' (' + i.ProductionYear + ')' : '') + (i.SeriesName ? ' — ' + i.SeriesName : '');
                     row.addEventListener('click', function () {

@@ -79,7 +79,7 @@ export default function (view) {
         if (!popularConfig) return;
         popularConfig.RatingBlocks = popularConfig.RatingBlocks || [];
         if (!popularConfig.RatingBlocks.length) {
-            host.innerHTML = '<div class="jpk-empty-section">No rating blocks. Any rating airs at any time. Add one to restrict by rating or time of day.</div>';
+            host.innerHTML = '<div class="base-empty-section">No rating blocks. Any rating airs at any time. Add one to restrict by rating or time of day.</div>';
             return;
         }
         popularConfig.RatingBlocks.forEach(function (block, index) {
@@ -96,18 +96,18 @@ export default function (view) {
             '<div class="lc-source-header">' +
                 '<span class="material-icons lc-source-icon" aria-hidden="true">schedule</span>' +
                 '<span class="lc-block-title">Rating block</span>' +
-                '<button is="emby-button" type="button" class="lc-remove raised jpk-icon-btn jpk-button-destructive" title="Remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
+                '<button is="emby-button" type="button" class="lc-remove raised base-button destructive" title="Remove"><span class="material-icons" aria-hidden="true">delete</span><span>Remove</span></button>' +
             '</div>' +
             '<div class="selectContainer"><label class="selectLabel">Minimum age rating</label>' +
-                '<select class="lc-block-min jpk-selector-dropdown"><option value="">No minimum</option>' + ratingOptions + '</select></div>' +
+                '<select is="emby-select" class="lc-block-min"><option value="">No minimum</option>' + ratingOptions + '</select></div>' +
             '<div class="selectContainer"><label class="selectLabel">Maximum age rating</label>' +
-                '<select class="lc-block-max jpk-selector-dropdown"><option value="">No limit</option>' + ratingOptions + '</select></div>' +
+                '<select is="emby-select" class="lc-block-max"><option value="">No limit</option>' + ratingOptions + '</select></div>' +
             '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
                 '<input type="checkbox" is="emby-checkbox" class="lc-block-unrated" /><span class="checkboxLabel">Include unrated</span></label></div>' +
             '<div class="checkboxContainer"><label class="emby-checkbox-label">' +
                 '<input type="checkbox" is="emby-checkbox" class="lc-block-kids" /><span class="checkboxLabel">Tag as kids</span></label></div>' +
             '<div class="selectContainer"><label class="selectLabel">Period</label>' +
-                '<select class="lc-block-period jpk-selector-dropdown"><option value="AllDay">All day</option><option value="Custom">Custom</option></select></div>' +
+                '<select is="emby-select" class="lc-block-period"><option value="AllDay">All day</option><option value="Custom">Custom</option></select></div>' +
             '<div class="lc-block-times">' +
                 '<div class="inputContainer"><label class="inputLabel">Start time</label><input is="emby-input" type="time" class="lc-block-start" /></div>' +
                 '<div class="inputContainer"><label class="inputLabel">End time</label><input is="emby-input" type="time" class="lc-block-end" /></div>' +

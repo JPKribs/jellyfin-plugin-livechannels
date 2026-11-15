@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Utilities;
+using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.MediaEncoding;
 using Microsoft.Extensions.Logging;
@@ -438,7 +439,7 @@ public sealed class PlaceholderService : IDisposable
     // Writes a message file under its content's name, or marks one already there as used.
     private void WriteOnce(string file, string text)
     {
-        if (AtomicFiles.WriteOnce(file, text))
+        if (!AtomicFile.WriteOnce(file, text))
         {
             Touch(file);
         }
