@@ -124,21 +124,22 @@ public static (int Index, TimeSpan Offset) CurrentProgram(IReadOnlyList<ProgramE
 ### JavaScript
 
 ```js
-// renderBlocks
-// Draws every rating and placeholder block of a channel into its list, or the empty sentence when it has none.
+// createBlockEditors
+// Builds the Rating Blocks and Placeholder Blocks card lists for one channel. Both lists save into the one
+// RatingBlocks array, rating blocks first.
 //
 // Inputs
-// host [HTMLElement]: The list the cards go in.
-// blocks [object[]]: The channel's blocks, changed in place when one is removed.
-// ratings [object]: { options, valueOf } from loadRatings.
-// shared [object]: The helper bag from createShared.
-export function renderBlocks(host, blocks, ratings, shared) {
+// options [object]: { ratings, shared, onChange }, where ratings comes from loadRatings.
+//
+// Output
+// [object]: { ratingElement, placeholderElement, setValue(blocks), getValue(), isValid() }.
+export function createBlockEditors(options) {
 ```
 
 * Comment every top level function, every function assigned to `shared`, and every exported function.
 * Do not comment the methods inside a returned handle. List them in the Output line instead.
 * Open each file with a header naming the file and saying what it holds in one sentence. Use no `// ====` banners.
-* Each page script imports Base by the relative path `./configurationpage?name=livechannels_jpkribs_shared.js`. `livechannels_placeholder.js` holds the rating and placeholder block cards the Channels and Popular pages share.
+* Each page script imports Base by the relative path `./configurationpage?name=livechannels_jpkribs_shared.js`. `livechannels_placeholder.js` holds the rating and placeholder block Repeaters the Channels and Popular pages share, and `syncCells`, which shows a card's fields for its values.
 * A new script or page is an `EmbeddedResource` in the csproj and a page in `Plugin.GetPages`.
 
 ### HTML
@@ -155,10 +156,10 @@ export function renderBlocks(host, blocks, ratings, shared) {
 ### CSS
 
 ```css
-/* lc-block-head */
-/* A block card's header line, with the title pushing Remove to the end. */
-/* Example: <div class="lc-block-head"><span class="lc-block-title">Rating block</span><button>Remove</button></div> */
-.lc-block-head { ... }
+/* lc-save */
+/* Space above the channel's Save Bar under the last section. */
+/* Example: <div class="lc-save"><div class="base-save-bar">...</div></div> */
+.lc-save { margin-top: var(--base-gap-wide); }
 ```
 
 * Three lines above each component, the name, what it looks like, and one example.

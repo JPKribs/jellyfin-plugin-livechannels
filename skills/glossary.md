@@ -16,7 +16,7 @@ The agreed name for every concept in this plugin. The UI, the docs, messages, an
 | Enabled, Disabled | Whether a channel is served in Live TV. A disabled channel can be a draft | `Channel.Enabled` | Active, hidden |
 | Popular Channel | The built-in channel 0 that programs itself from what the server watches and adds | `PluginConfiguration.PopularChannel`, `ChannelService.Popular` | Trending channel, default channel |
 | Logo | The channel's image in the guide, uploaded or generated | `LogoData`, `DefaultLogoService` | Icon, artwork |
-| Generated logo style | How a channel with no upload draws its logo, as **Number** or **Symbol** | `LogoStyle` | Logo type |
+| Generated Logo Style | How a channel with no upload draws its logo, as **Number** or **Symbol** | `LogoStyle` | Logo type |
 | Symbol | A Material Symbols name drawn as a generated logo | `LogoSymbol` | Glyph, emoji |
 | Import, Export | Moving every channel between servers as one JSON file | `livechannels-export` | Backup, restore |
 
@@ -42,7 +42,7 @@ The agreed name for every concept in this plugin. The UI, the docs, messages, an
 | Term | Meaning | In Code | Not |
 | :--- | :--- | :--- | :--- |
 | Rating block | A limit on which age ratings air, all day or in a window of the day | `RatingBlock` | Rating rule, daypart |
-| Rating limits | The list of rating and placeholder blocks on a channel | `Channel.RatingBlocks` | Parental controls |
+| Age Ratings | The list of rating blocks on a channel, beside its Placeholder Blocks | `Channel.RatingBlocks` | Parental controls |
 | Period | When a block applies, **All day** or **Custom** | `RatingBlockPeriod` | Schedule, window type |
 | Transition window | How close to a window change an item must fit both windows | `TransitionWindowMinutes` | Grace period, buffer |
 | Placeholder block | A window of the day when the channel is off air and loops a card | `RatingBlock.IsPlaceholder` | Off air block, blackout |
@@ -62,7 +62,7 @@ The agreed name for every concept in this plugin. The UI, the docs, messages, an
 | Schedule | When each loop item airs, kept so the guide and the stream agree | `StreamSchedule`, `ChannelService.Schedule` | Timeline, EPG data |
 | Splice anchor | The point a rebuilt schedule continues from, so the program on air keeps its slot. Used in code, not the UI | Splice anchor | Resume point |
 | Guide | Jellyfin's Live TV program guide | `ChannelService.Guide` | EPG, listings |
-| Reset schedule | Rebuilds every schedule, the guide, and the buffer cards | `POST livechannels/schedule/reset` | Clear cache, wipe |
+| Reset Schedule | Rebuilds every schedule, the guide, and the buffer cards | `POST livechannels/schedule/reset` | Clear cache, wipe |
 
 ## Cards
 

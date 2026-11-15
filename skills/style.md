@@ -96,7 +96,7 @@ A `fieldDescription` sits under every field that is not obvious from its label.
 | :--- | :--- |
 | Bakes subtitles in; Forced only burns the forced track. | Bakes subtitles into the picture for everyone. |
 | Even one stream could not hold realtime; consider lowering resolution. | Even one stream could not hold realtime. Lower the resolution or bitrate. |
-| Set to 3 — remember to Save. | Set to 3. Select Save settings to keep it. |
+| Set to 3 — remember to Save. | Set to 3. Select Save Settings to keep it. |
 | This setting enables the generation of Up Next cards. | Plays a 10 second card before each item. |
 
 A section intro is one `fieldDescription` right under the section title. It says what the section is for in one sentence.
@@ -114,7 +114,7 @@ A placeholder shows an example of a valid value. It is never the only place an i
 ### Buttons
 
 * A verb, or a verb and a noun. **Save**, **Add Source**, **Run Now**.
-* Name the object when the page has more than one of that action. **Add Rating Block** and **Add Placeholder Block** sit side by side.
+* Name the object when the page has more than one of that action. **Add Rating Block** and **Add Placeholder Block** share the Filters section.
 * A primary Save is **Save**. Use **Save** and a noun only when the noun helps, such as **Save Channel** under an editor.
 * An icon only button carries a `title` of one to three words, such as `Remove`, `Move Up`, or `Retry`. Never a sentence.
 * A button that runs for a while shows progress in place. See [Progress](#progress).
@@ -368,7 +368,7 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 | A large searchable list | `createPaginatedTable` |
 | Edit table rows in place | `base-bulk-edit-bar` and `base-edit-row` |
 | Uploaded files | `base-asset-list` |
-| Grouped fields inside a section, such as one source | `base-panel` with `base-panel-header` and `base-panel-body` |
+| Records of grouped fields, such as sources or rating blocks | `createRepeater` with `layout: 'card'`, and `custom` fields for any other Base control |
 | A thumbnail in a table row | A column `image(item)` loader with `imageShape`, one shape for each column |
 | A mark on a table row, such as picked | The table's `rowClass(item, index)` |
 
@@ -382,7 +382,7 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 | The state of one item | `shared.statusBadge(text, state)` |
 | A label on an item | `shared.badge(color, label)` |
 | Counts at the top of a page | `shared.renderCards` with `base-cards`, and `compact` for many counts on a phone |
-| Label and value pairs | `base-record-card` |
+| Label and value pairs | `createDefinitionList` |
 | A notice in the page | `base-info`, `base-success`, `base-warn`, `base-error`, `base-neutral` |
 | Raw failure text | `base-error-message` |
 | The result of an action | `shared.setStatus` |
@@ -454,15 +454,15 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 
 ## Hand Built Pieces
 
-These pieces are still built by hand in this plugin while Base has a component for most of the need. Each waits on the gap named beside it. Report the gap to Base, replace the piece in the commit that moves to the Base version that closes it, and delete its `lc-` styles in the same commit. Add nothing to this list.
+Every control on the pages is a Base component. These small steps around Base components remain, each waiting on the Base option named beside it. Report the gap to Base, drop the step in the commit that moves to the Base version that adds the option, and add nothing to this list.
 
-| Hand built today | Replace with | Waits on |
+| Step around Base today | Where | Waits on |
 | :--- | :--- | :--- |
-| The item rows of a Whitelist or Blacklist source (`.lc-list`, `.lc-item`) | `createCheckboxList` with a server `search`, or `createMediaPicker` | A show row that expands to pick single episodes, and a list that shows items before anything is typed |
-| The source, rating block, and placeholder block cards on `base-panel` (`.lc-block-head`) | `createRepeater` with `layout: 'card'` | A field shown only for some values of another, and two kinds of card in one list |
-| The session cards (`.lc-session*`) | `createMediaCard` in a `createList` | A logo fetched with the token in a header, since an image address cannot carry it |
-| The logo upload and its generated preview (`.lc-logo-row`) | `createImagePicker` | A square crop on upload, and a preview drawn when nothing is uploaded |
-| The subtitle **Text colour** and **Outline colour** text fields | `createColorPicker` | A blank value that keeps each subtitle's own color |
+| `syncCells` hides a card's field cells by their `data-key` with `setVisible`, and sets the **Included Items** or **Excluded Items** label | Source, rating block, and placeholder block cards | A Repeater field option such as `visible(item)` and a label that follows the item |
+| A capture listener on the Repeater's Add button adds a row with `addRow(defaults)` | Rating block and placeholder block cards | A Repeater option such as `newItem()` that fills a new row |
+| The generated logo is shown with `setValue(dataUrl)`, and its Remove button is hidden | Logo Image Picker | An Image Picker fallback that takes an image address |
+| The server's error replaces the failed line with `setState('failed', text)` on the next tick | Save Bars on Channels, Popular, and Settings | A Save Bar that shows the message of the Error `onSave` rejects with |
+| The **Apply** button under the stress test recommendation is a `base-button` built in script | Settings, Stress Test | Banner `actions` |
 
 ## Checklist
 

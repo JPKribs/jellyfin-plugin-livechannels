@@ -29,29 +29,29 @@ The Channel section holds the name, number, and logo.
 
 | Setting | What it does | Default |
 | --- | --- | --- |
-| **Logo** (upload) | A custom image, centre-cropped to a square (stored at up to 512 px, 2 MB limit). | none |
-| **Generated logo style** | With no upload, the plugin draws a logo: **Number** shows the channel number, **Symbol** shows a Material Symbols icon. | Number |
+| **Logo** | **Upload** picks a custom image, cropped from its center to a square and stored at up to 512 px (2 MB limit). **Replace** picks another, and **Remove** goes back to the generated logo. | none |
+| **Generated Logo Style** | With no upload, the plugin draws a logo: **Number** shows the channel number, **Symbol** shows a Material Symbols icon. | Number |
 | **Symbol** | Any [Material Symbols](https://fonts.google.com/icons) name, drawn in the centre for the Symbol style. An unknown name falls back to the number. | empty |
-| **Show channel name on the generated logo** | Draws the name along the bottom, wrapped to two lines or abbreviated to initials when long. | on |
+| **Show Channel Name on the Generated Logo** | Draws the name along the bottom, wrapped to two lines or abbreviated to initials when long. | on |
 
-The preview in the editor is drawn client side with the same colours and layout the server generates, so what you see is what the guide gets.
+With no upload, the logo frame shows the generated logo, drawn in the page with the same colors and layout the server generates, so what you see is what the guide gets.
 
 ### Content sources
 
-A channel plays the union of one or more **sources**. Each source is one of two kinds:
+A channel plays the union of one or more **sources**. Each source is a card added with **Add Source** and removed with its close button. Its **Source Type** is one of two kinds:
 
 * **Library** narrows one library with a **Selection**:
-  * **All content** takes everything in the library.
-  * **Genre** takes items carrying any included genre (or every included genre with **Match all genres** on). An **Exclude** list drops items carrying any of those genres even if they matched. Series level genres apply to their episodes.
-  * **Whitelist** takes only hand-picked shows and movies. Picking a show pulls in all of its episodes, and a show row expands so individual episodes can be picked instead.
-  * **Blacklist** takes everything except the picked items.
+  * **All Content** takes everything in the library.
+  * **Genre** takes items carrying any of the **Include Genres** (or every one with **Match All Genres** on). **Exclude Genres** drops items carrying any of those genres even if they matched. Series level genres apply to their episodes.
+  * **Whitelist** takes only the **Included Items**. Search the library by name and pick shows, movies, or single episodes. Picking a show pulls in all of its episodes.
+  * **Blacklist** takes everything except the **Excluded Items**, picked the same way.
 * **Collection** takes every item in a Jellyfin collection, expanding a series to its episodes.
 
 A library source using a genre selection.
 
 ![Channel Content](screenshots/Channel%20Content.png)
 
-All channel level filters below still apply on top of every source. Only items with a real media file and a known runtime can be scheduled.
+Changing a source's library clears its included genres and picked items. A card shows only the fields its type and selection use. All channel level filters below still apply on top of every source. Only items with a real media file and a known runtime can be scheduled.
 
 ### Filters
 
@@ -59,46 +59,46 @@ The Filters section with two time of day rating blocks.
 
 ![Channel Filters](screenshots/Channel%20Filters.png)
 
-#### Rating limits
+#### Age Ratings
 
-Rating blocks limit which ratings air, optionally by time of day. With no blocks, every rating airs. Each block has:
+Rating blocks limit which ratings air, optionally by time of day. With no blocks, every rating airs. **Add Rating Block** adds a card, and each block has:
 
 | Setting | What it does |
 | --- | --- |
-| **Minimum age rating** | The lowest rating allowed while the block is active, useful for an adults-only channel. |
-| **Maximum age rating** | The highest rating allowed, the usual parental cap. |
-| **Include unrated** | Whether content with no rating may air under this block. |
-| **Tag as kids** | Tags the channel's programs as kids content in the guide while the block is active. |
-| **Period** | **All day**, or **Custom** with a start and end time. A custom window may wrap past midnight (22:00 to 06:00 works). |
+| **Minimum Age Rating** | The lowest rating allowed while the block is active, useful for an adults-only channel. |
+| **Maximum Age Rating** | The highest rating allowed, the usual parental cap. It must be at or above the minimum, and the card says so before the channel saves. |
+| **Include Unrated** | Whether content with no rating may air under this block. |
+| **Tag As Kids** | Tags the channel's programs as kids content in the guide while the block is active. |
+| **Period** | **All Day**, or **Custom** with a **Start Time** and **End Time**, shown once Custom is picked. A custom window may wrap past midnight (22:00 to 06:00 works). |
 
 Where two blocks overlap, the lowest minimum and the lowest maximum win. A channel with any custom (time of day) block schedules itself by the clock, so what airs at 3 PM really is what the daytime block allows.
 
-#### Placeholder blocks
+#### Placeholder Blocks
 
-A placeholder block takes the channel off air for a window of the day. The guide shows one program for the whole window, and the channel loops a 10 second card with a message. Whatever is airing when the window opens is cut there (the rest of it does not air), and when the window ends the channel goes on with the next item in its loop. An item that would air for less than 30 seconds before the window cuts it does not start at all: the window opens then instead (an item that ends before the window is unaffected). Changes you save while a window is on air reach viewers within about ten minutes: a new look or message shows once its card is rendered, and a window you remove, shorten or move ends then, joining whatever the guide now shows at that moment. Placeholder blocks never limit ratings, and two of them may not overlap.
+**Add Placeholder Block** adds a card. A placeholder block takes the channel off air for a window of the day. The guide shows one program for the whole window, and the channel loops a 10 second card with a message. Whatever is airing when the window opens is cut there (the rest of it does not air), and when the window ends the channel goes on with the next item in its loop. An item that would air for less than 30 seconds before the window cuts it does not start at all: the window opens then instead (an item that ends before the window is unaffected). Changes you save while a window is on air reach viewers within about ten minutes: a new look or message shows once its card is rendered, and a window you remove, shorten or move ends then, joining whatever the guide now shows at that moment. Placeholder blocks never limit ratings, and two of them may not overlap.
 
 | Setting | What it does | Default |
 | --- | --- | --- |
-| **Start time** and **End time** | The window. It may wrap past midnight (23:30 to 06:00 works). | 00:00 to 06:00 |
-| **Guide name** | What the guide calls the window. It shows no year, episode or rating. | `-` |
-| **Style** | The card's look: **Default** (the tune-in card's flowing lines), **Static**, **Error** (colour bars), **Ocean**, **Night sky**, **Lava lamp**, **Rain**, **Embers**, **Aurora**, or **Custom**. Every card is silent. | Default |
-| **Image, GIF or video** | For **Custom**, a path on the server (required for Custom). A GIF or video should be exactly 10 seconds long and end where it starts, so it loops cleanly; a shorter one repeats and a longer one is cut at 10 seconds. A file that is missing when the cards render falls back to the Default look. | none |
+| **Start Time** and **End Time** | The window. It may wrap past midnight (23:30 to 06:00 works). | 00:00 to 06:00 |
+| **Guide Name** | What the guide calls the window. It shows no year, episode or rating. Left empty, it saves as `-`. | `-` |
+| **Style** | The card's look: **Default** (the tune-in card's flowing lines), **Static**, **Error** (color bars), **Ocean**, **Night Sky**, **Lava Lamp**, **Rain**, **Embers**, **Aurora**, or **Custom**. Every card is silent. | Default |
+| **Image, GIF or Video** | For **Custom**, a path on the server (required for Custom), shown once Custom is picked. A GIF or video should be exactly 10 seconds long and end where it starts, so it loops cleanly; a shorter one repeats and a longer one is cut at 10 seconds. A file that is missing when the cards render falls back to the Default look. | none |
 | **Title** | The large line of the message. Leave it empty to leave it off. | Thank you for watching! |
 | **Message** | The smaller line. `{time}` becomes the time the channel resumes and `{contentName}` what it resumes with (an episode by its series name). | We will resume at {time} with {contentName}. |
 
-The cards render with the other buffer cards (**Generate Buffer Cards** in Scheduled Tasks, which runs at startup, after **Reset schedule**, and after you save a channel that has a placeholder block), and only for channels that have one. The message is drawn on while the card plays, so each airing names its own time and content without another render. Until a card is rendered, or if it will not play, its window shows the message over black. Changing only a placeholder's name, style or message keeps every channel's schedule as it is.
+The cards render with the other buffer cards (**Generate Buffer Cards** in Scheduled Tasks, which runs at startup, after **Reset Schedule**, and after you save a channel that has a placeholder block), and only for channels that have one. The message is drawn on while the card plays, so each airing names its own time and content without another render. Until a card is rendered, or if it will not play, its window shows the message over black. Changing only a placeholder's name, style or message keeps every channel's schedule as it is.
 
 #### Everything else
 
 | Setting | What it does | Default |
 | --- | --- | --- |
-| **Transition window (minutes)** | Items starting this close to a rating window change must satisfy both the current and the upcoming window, so long content stays compliant as it bleeds across the boundary. Set it to your longest content. | 0 (off) |
+| **Transition Window (Minutes)** | Items starting this close to a rating window change must satisfy both the current and the upcoming window, so long content stays compliant as it bleeds across the boundary. Set it to your longest content. | 0 (off) |
 | **Years** | Limit to production years. Enter years and ranges separated by commas, for example `1990-1999` or `1985, 1999, 2003`. Episodes use their own year, so a long-running series contributes only its episodes from those years. | all years |
-| **Minimum community rating** | Only content the audience rated at least this, on a 0 to 10 scale (7.5 makes a best-of channel). Content with no community rating is dropped when set. | 0 (off) |
-| **Minimum critic rating** | Only content with at least this critic score, on a 0 to 100 scale. Content with no critic rating is dropped when set. | 0 (off) |
+| **Minimum Community Rating** | A slider. Only content the audience rated at least this, on a 0 to 10 scale in steps of 0.1 (7.5 makes a best-of channel). Content with no community rating is dropped when set. | 0 (off) |
+| **Minimum Critic Rating** | A slider. Only content with at least this critic score, on a 0 to 100 scale. Content with no critic rating is dropped when set. | 0 (off) |
 | **Studios** | Only content from these studios or networks (an HBO channel). For shows this also matches the series' studio. | all studios |
 | **People** | Only content featuring these actors or directors, matched by person. | everyone |
-| **Audio language** | Only content with an audio track in this language, and that track is the one that plays. Leave it on all languages and each item plays its audio in your [Default language](#playback) when it has it. | all languages |
+| **Audio Language** | Only content with an audio track in this language, and that track is the one that plays. Leave it on all languages and each item plays its audio in your [Default language](#playback) when it has it. | all languages |
 
 ### Channel settings
 
@@ -108,18 +108,21 @@ The Channel Settings section covers playback, guide tags, episode grouping, cont
 
 | Setting | What it does | Default |
 | --- | --- | --- |
-| **Subtitle burn in** | Bakes a subtitle track into the picture for every viewer. **Never** burns nothing. **Forced only** burns the forced track, switching to a full track in your [Default language](#playback) when the audio is tagged with another language (untagged audio, including `und`, burns nothing extra). **Always** burns a forced track when there is one, else a track in your Default language, else the default or first track. A forced track in a language you don't read is skipped in favour of one you do. Picture subtitles (PGS, VOBSUB) are scaled to the picture, so a cropped Blu-ray encode keeps its captions on screen. Subtitles come from the same extracted file Jellyfin's own transcodes use, so the track's bold, italic, and colour markup carries into the picture and attached fonts are honoured. Appearance is styled once on the [Settings tab](#subtitle-appearance). | Never |
+| **Subtitle Burn In** | Bakes a subtitle track into the picture for every viewer. **Never** burns nothing. **Forced only** burns the forced track, switching to a full track in your [Default language](#playback) when the audio is tagged with another language (untagged audio, including `und`, burns nothing extra). **Always** burns a forced track when there is one, else a track in your Default language, else the default or first track. A forced track in a language you don't read is skipped in favour of one you do. Picture subtitles (PGS, VOBSUB) are scaled to the picture, so a cropped Blu-ray encode keeps its captions on screen. Subtitles come from the same extracted file Jellyfin's own transcodes use, so the track's bold, italic, and colour markup carries into the picture and attached fonts are honoured. Appearance is styled once on the [Settings tab](#subtitle-appearance). | Never |
 | **Category** | Tags the whole channel in the guide as **News** or **Sports**. Kids is set per rating block, and the movie tag applies automatically while a movie is playing, so a channel can carry up to three tags at once. | None |
-| **Content types** | What airs: **Episodes** (on), **Movies** (on), **Specials** (season 0, off), **Music videos** (on), **Home videos** (off). | see left |
-| **Episodes per block** | Consecutive episodes of one series before moving on. 1 disables grouping. | 1 |
-| **Show Up Next cards** | Plays a 10 second card before each item: its artwork (a movie's poster; for anything else a landscape image, the episode's thumbnail or else the series backdrop, falling back to the series poster; each in a frame shaped like the image, or none), its title, season and episode (season 0 shows **Special**, a double episode shows its first number), episode name or tagline, year, genres, runtime and review score, with the parental rating in the top right (an episode shows its series' rating), a countdown, and a smaller **Then** line naming what airs after it and when (an episode by its series and season and episode). The card is part of the item's slot in the guide, so items still start on schedule; switching it on or off moves the guide by 10 seconds per item from then on but never moves what is airing. Cards render while the previous item plays and are cached in the [stream file location](#sessions), and a slot whose card was not ready in time shows black until its item starts. | on |
-| **Keep multipart episodes together** | Holds every part of a multipart story ("The Trap (1)", "(2)", "(3)", and so on) in the same block so it never splits, even when that runs past the episodes per block. | on |
-| **Loop order** | **Shuffle** is deterministic and repeatable, so the guide and the stream always agree, and each series contributes one block per loop pass so nothing dominates. **Alphabetical** plays by name. **Chronological** plays oldest to newest by release date. | Shuffle |
-| **Episode order** | Within a series, **Air order** or **Random**. | Air order |
-| **Favor content type** | On a shuffled channel, weights **Movies**, **Shows**, or **Music videos** more heavily by repeating them toward a target share. | No preference |
-| **Favor strength** | How strong that weighting is: **Slight**, **Moderate**, or **Heavy**. Shown once a content type is favored. | Moderate |
+| **Content types** | What airs: **Episodes** (on), **Movies** (on), **Specials** (season 0, off), **Music Videos** (on), **Home Videos** (off). | see left |
+| **Episodes per Block** | Consecutive episodes of one series before moving on. 1 disables grouping. | 1 |
+| **Show Up Next Cards** | Plays a 10 second card before each item: its artwork (a movie's poster; for anything else a landscape image, the episode's thumbnail or else the series backdrop, falling back to the series poster; each in a frame shaped like the image, or none), its title, season and episode (season 0 shows **Special**, a double episode shows its first number), episode name or tagline, year, genres, runtime and review score, with the parental rating in the top right (an episode shows its series' rating), a countdown, and a smaller **Then** line naming what airs after it and when (an episode by its series and season and episode). The card is part of the item's slot in the guide, so items still start on schedule; switching it on or off moves the guide by 10 seconds per item from then on but never moves what is airing. Cards render while the previous item plays and are cached in the [stream file location](#sessions), and a slot whose card was not ready in time shows black until its item starts. | on |
+| **Keep Multipart Episodes Together** | Holds every part of a multipart story ("The Trap (1)", "(2)", "(3)", and so on) in the same block so it never splits, even when that runs past the episodes per block. | on |
+| **Loop Order** | **Shuffle** is deterministic and repeatable, so the guide and the stream always agree, and each series contributes one block per loop pass so nothing dominates. **Alphabetical** plays by name. **Chronological** plays oldest to newest by release date. | Shuffle |
+| **Episode Order** | Within a series, **Air order** or **Random**. | Air order |
+| **Favor Content Type** | On a shuffled channel, weights **Movies**, **Shows**, or **Music videos** more heavily by repeating them toward a target share. | No preference |
+| **Favor Strength** | How strong that weighting is: **Slight**, **Moderate**, or **Heavy**. Shown once a content type is favored. | Moderate |
 
-### Import and export
+### Saving, Import, and Export
+
+**Save Channel** sits under the editor. Its line shows **Unsaved changes.** while the channel differs from what was loaded, says why a save stopped, such as a field marked in red, and shows **Saved. Refreshing Live TV…** once the server takes it.
+
 
 **Export** writes every channel (filters, appearance, loop behaviour, and logos) to one JSON file. **Import** merges such a file back: a channel whose number matches an existing one is updated in place, others are added. Library and genre filters carry over when the target server has libraries with matching names, and hand-picked items keep only what exists on the target.
 
@@ -138,14 +141,14 @@ The Popular tab with its Channel section open.
 | **Enable the Popular Channel** | Turns channel 0 on or off. | on |
 | **Name** | The display name. | Popular |
 | **Icon** | A Material Symbols name for the generated logo (this channel always uses the Symbol style). | diversity_1 |
-| **Show channel name on the generated logo** | As on the Channels tab. | on |
-| **Subtitle burn in** | As on the Channels tab. | Never |
-| **Show Up Next cards** | As on the Channels tab. | on |
-| **Rating limits** and **Transition window** | Rating limits select the population, so the channel keeps the top titles that are valid for the cap. | none |
+| **Show Channel Name on the Generated Logo** | As on the Channels tab. | on |
+| **Subtitle Burn In** | As on the Channels tab. | Never |
+| **Show Up Next Cards** | As on the Channels tab. | on |
+| **Age Ratings**, **Placeholder Blocks**, and **Transition Window** | As on the Channels tab. Rating blocks select the population, so the channel keeps the top titles that are valid for the cap. | none |
 | **Category** | News or Sports tag. | None |
-| **Episodes per block**, **Episode order**, **Keep multipart episodes together** | As on the Channels tab. | 4, Air order, on |
+| **Episodes per Block**, **Episode Order**, **Keep Multipart Episodes Together** | As on the Channels tab. | 4, Air order, on |
 | **Content types** | Episodes, movies, and specials toggles. | episodes and movies on |
-| **Loop order** | Shuffle, Alphabetical, or Chronological. | Shuffle |
+| **Loop Order** | Shuffle, Alphabetical, or Chronological. | Shuffle |
 
 !!! warning "Privacy and parental controls"
     The Popular channel is built from the watch history of **every user on the server**, and its guide is shared: anyone who can see Live TV sees the same channel 0 lineup, so its recently played picks reveal what other users have been watching. Because the one lineup airs to everyone, a title only goes on it when **every user with Live TV access** may see it in the library: a title outside one user's libraries, or above their parental controls, is left off for all. On a server shared with users who should not see each other's viewing, turn the channel off.
@@ -154,7 +157,7 @@ The Popular tab with its Channel section open.
 
 ## Sessions tab
 
-Lists every channel currently encoding, one row per encoder (not per viewer): logo, channel number and name, start time, runtime, and the live encode speed. 1.0x means the server is keeping up, and a session with no viewers shows a countdown until it stops. Selecting a session opens its ffmpeg log, where **Copy All** copies the whole log, **Refresh** reads it again, and **Kill** stops the stream.
+Lists every channel currently encoding, one row per encoder (not per viewer): logo, name and channel number, start time, runtime, and the live encode speed as a badge. 1.0x and over is green and **Keeping up**, from 0.95x orange and **Slightly behind**, and under that red and **Falling behind**. A session with no viewers shows an orange **No viewers** badge counting down until it stops. Selecting a session opens its ffmpeg log, where **Copy All** copies the whole log, **Refresh** reads it again, and **Kill** stops the stream.
 
 **Kill** stops the stream and frees its encoder immediately, even if someone is watching. It is the only thing that will: the caps and timers below never close a stream Jellyfin reports as playing.
 
@@ -181,13 +184,13 @@ The Encoding section.
 | Setting | What it does | Default |
 | --- | --- | --- |
 | **Resolution** | Every item is scaled and letterboxed to this one fixed size: **720p**, **1080p**, **1440p**, or **4K**. One constant format is what lets a linear stream play seamlessly across items. | 720p |
-| **Video codec** | **H.264** (universal) or **HEVC / H.265** (smaller, less compatible). The concrete encoder follows Jellyfin's hardware acceleration. | H.264 |
-| **Audio codec** | **AAC** (universal), **AC3**, or **E-AC3** (Dolby Digital). | AAC |
-| **Video bitrate (kbps)** | The target and maximum video bitrate. | 4000 |
+| **Video Codec** | **H.264** (universal) or **HEVC / H.265** (smaller, less compatible). The concrete encoder follows Jellyfin's hardware acceleration. | H.264 |
+| **Audio Codec** | **AAC** (universal), **AC3**, or **E-AC3** (Dolby Digital). | AAC |
+| **Video Bitrate (kbps)** | The target and maximum video bitrate. | 4000 |
 
-### Hardware acceleration
+### Hardware Acceleration
 
-The card shows which accelerator channel streams will use, read from Jellyfin's own Playback settings. Encoding follows it for every vendor. Hardware decoding is used with VideoToolbox, QSV, and VA-API (NVENC and AMF accelerate encoding only). On Linux with Intel hardware the whole pipeline runs on the GPU, including HDR tone mapping and subtitle burn in.
+The **Hardware Acceleration** line shows which accelerator channel streams will use, read from Jellyfin's own Playback settings. Encoding follows it for every vendor. Hardware decoding is used with VideoToolbox, QSV, and VA-API (NVENC and AMF accelerate encoding only). On Linux with Intel hardware the whole pipeline runs on the GPU, including HDR tone mapping and subtitle burn in.
 
 The Hardware Acceleration section on a server with no accelerator configured.
 
@@ -195,7 +198,7 @@ The Hardware Acceleration section on a server with no accelerator configured.
 
 | Setting | What it does | Default |
 | --- | --- | --- |
-| **Disable hardware acceleration** | Forces software encoding and decoding, the one path guaranteed to work on any system, codec, and media type. Turn it on if channels fail to play with hardware acceleration. | off |
+| **Disable Hardware Acceleration** | Forces software encoding and decoding, the one path guaranteed to work on any system, codec, and media type. Turn it on if channels fail to play with hardware acceleration. | off |
 
 ### Playback
 
@@ -205,11 +208,11 @@ The Playback section.
 
 | Setting | What it does | Default |
 | --- | --- | --- |
-| **Default language** | Your native language. Each item plays its audio in it when it has it (the default track in that language, else the first one, else the item's own default track); a channel's **Audio language** overrides it. A channel set to **Forced only** burns full subtitles when content's audio is in another language, so foreign content stays followable. | English |
+| **Default Language** | Your native language. Each item plays its audio in it when it has it (the default track in that language, else the first one, else the item's own default track); a channel's **Audio Language** overrides it. A channel set to **Forced only** burns full subtitles when content's audio is in another language, so foreign content stays followable. | English |
 
-### Subtitle appearance
+### Subtitle Appearance
 
-How burned-in subtitles look, wherever a channel burns them. Leave everything untouched to render each subtitle exactly as it was authored, including its own bold, italic, and colour tags.
+How burned-in subtitles look, wherever a channel burns them. Leave everything untouched to render each subtitle exactly as it was authored, including its own bold, italic, and color tags.
 
 The Subtitle Appearance section with its defaults.
 
@@ -218,9 +221,9 @@ The Subtitle Appearance section with its defaults.
 | Setting | What it does | Default |
 | --- | --- | --- |
 | **Font** | A font family installed on the server, such as Arial. Blank uses the subtitle's own font. | blank |
-| **Size (%)** | A percentage of normal, 50 to 300. 100 keeps the authored size. | 100 |
-| **Text colour** | The text colour as `#RRGGBB`. Blank keeps the subtitle's own colour. | blank |
-| **Outline colour** | The outline or box colour as `#RRGGBB`. | blank |
+| **Size** | A slider in percent of normal, 50 to 300 in steps of 5. 100 keeps the authored size. | 100 |
+| **Text Color** | **As Authored** keeps each subtitle's own color. **Custom** turns on a color picker, saved as `#RRGGBB`. | As Authored |
+| **Outline Color** | The outline or box color, **As Authored** or **Custom** like the text color. | As Authored |
 | **Background** | **As authored**, **Outline**, or **Solid box**. A solid box is the most readable over bright scenes. | As authored |
 | **Bold** | Draws the text bold. | off |
 
@@ -232,9 +235,9 @@ The Sessions section caps how many streams encode and where their files go.
 
 | Setting | What it does | Default |
 | --- | --- | --- |
-| **Maximum concurrent streams** | The most channels that may encode at once. Over the cap, the oldest stream nobody is watching is closed to make room. Streams being watched are never closed for it, so the count can run over while everything is in use. 0 means no limit. The [stress test](#troubleshooting) measures the right value for your server. | 3 |
-| **Stream time limit (minutes)** | Closes any stream open longer than this once nobody is watching it, a backstop for clients that never send a stop. 0 turns it off. | 0 |
-| **Stream file location** | Where each channel's playlist and rolling stream segments are written while playing, along with everything else the plugin can rebuild (tune-in cards, Up Next cards, generated logos and fonts), taking effect on restart. Blank uses Jellyfin's cache. Schedules and learned item lengths live in Jellyfin's data folder instead, so clearing the cache never moves what is on air. Pick a new or empty folder: the plugin cleans up old stream files inside its folder automatically, so it refuses a directory that already contains other content. Only a short rolling window of segments is kept per channel, so disk use stays small regardless of watch time. | blank |
+| **Maximum Concurrent Streams** | The most channels that may encode at once. Over the cap, the oldest stream nobody is watching is closed to make room. Streams being watched are never closed for it, so the count can run over while everything is in use. 0 means no limit. The [stress test](#troubleshooting) measures the right value for your server. | 3 |
+| **Stream Time Limit (Minutes)** | Closes any stream open longer than this once nobody is watching it, a backstop for clients that never send a stop. 0 turns it off. | 0 |
+| **Stream File Location** | Where each channel's playlist and rolling stream segments are written while playing, along with everything else the plugin can rebuild (tune-in cards, Up Next cards, generated logos and fonts), taking effect on restart. Blank uses Jellyfin's cache. Schedules and learned item lengths live in Jellyfin's data folder instead, so clearing the cache never moves what is on air. Pick a new or empty folder: the plugin cleans up old stream files inside its folder automatically, so it refuses a directory that already contains other content. Only a short rolling window of segments is kept per channel, so disk use stays small regardless of watch time. | blank |
 
 ### Troubleshooting
 
@@ -242,13 +245,13 @@ The Stress Test section picks a test item and runs the measurement.
 
 ![Stress Test](screenshots/Stress%20Test.png)
 
-**Stress test.** Measures how many concurrent streams the server can sustain, using the real channel pipeline. Pick one demanding movie or episode (4K or HDR gives the most honest number), then each round encodes a minute of it with one more simultaneous stream than the last, until a stream drops below realtime. The last fully passing round is the recommendation, with an **Apply** link that fills in Maximum concurrent streams for you. The test refuses to start while channel streams are active, and a viewer tuning in cancels it, since a real viewer always wins the encoder. Nothing about the test is saved.
+**Stress test.** Measures how many concurrent streams the server can sustain, using the real channel pipeline. Pick one demanding movie or episode (4K or HDR gives the most honest number), then each round encodes a minute of it with one more simultaneous stream than the last, until a stream drops below realtime. Each round shows a **Passed** or **Failed** badge with its slowest frame rate. The last fully passing round is the recommendation, shown in a box with an **Apply** button that fills in Maximum Concurrent Streams for you. Select **Save Settings** to keep it. The test refuses to start while channel streams are active, and a viewer tuning in cancels it, since a real viewer always wins the encoder. Nothing about the test is saved.
 
-**Reset schedule.** Rebuilds everything from the current settings: it clears the cached schedules and buffer cards, then runs Jellyfin's Refresh Guide task (which rebuilds every schedule and the guide) and the **Generate Buffer Cards** task. The program on air keeps its slot. Use it to clear a stale schedule, like after changing a channel's filters.
+**Reset Schedule.** Rebuilds everything from the current settings: it clears the cached schedules and buffer cards, then runs Jellyfin's Refresh Guide task (which rebuilds every schedule and the guide) and the **Generate Buffer Cards** task. The program on air keeps its slot. Use it to clear a stale schedule, like after changing a channel's filters.
 
-**Generate Buffer Cards.** A scheduled task in the Live TV section of Dashboard > Scheduled Tasks. For every enabled channel that does not have current ones, it renders the 10 second tune-in card (the channel's logo and a "Starting in" countdown, shown while the stream starts) and, on channels with Up Next cards, everything those cards share: the animated backdrop, the "Up Next" header, the logo and the chord. The card before each item then only adds the item's text, artwork and ratings. It works from your channel settings rather than the guide. It runs at start-up and after Reset schedule, and you can run it by hand after changing a logo or the output settings. Tuning in never renders a card: a channel without one opens straight on its content.
+**Generate Buffer Cards.** A scheduled task in the Live TV section of Dashboard > Scheduled Tasks. For every enabled channel that does not have current ones, it renders the 10 second tune-in card (the channel's logo and a "Starting in" countdown, shown while the stream starts) and, on channels with Up Next cards, everything those cards share: the animated backdrop, the "Up Next" header, the logo and the chord. The card before each item then only adds the item's text, artwork and ratings. It works from your channel settings rather than the guide. It runs at start-up and after Reset Schedule, and you can run it by hand after changing a logo or the output settings. Tuning in never renders a card: a channel without one opens straight on its content.
 
-**Missing media files.** The guide still lists an item whose file was deleted or sits on storage that is offline. When a channel is tuned (or its encoder restarts), it starts on the program the guide shows, steps past a missing item to the next one, and leaves missing files out of the next 24 hours of its playlist. Skipping an item starts the next one early, so the picture can run ahead of the guide by up to the skipped item's length. A file that goes missing more than 24 hours ahead of a viewer who keeps watching can also put the stream out of step until the encoder restarts. A **Reset schedule** after removing or restoring media puts everything back in line.
+**Missing media files.** The guide still lists an item whose file was deleted or sits on storage that is offline. When a channel is tuned (or its encoder restarts), it starts on the program the guide shows, steps past a missing item to the next one, and leaves missing files out of the next 24 hours of its playlist. Skipping an item starts the next one early, so the picture can run ahead of the guide by up to the skipped item's length. A file that goes missing more than 24 hours ahead of a viewer who keeps watching can also put the stream out of step until the encoder restarts. A **Reset Schedule** after removing or restoring media puts everything back in line.
 
 ---
 
