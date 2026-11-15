@@ -6,7 +6,7 @@ Everything the plugin can be told to do, tab by tab. The configuration lives at 
 
 ### The channel list
 
-The dropdown at the top selects the channel being edited. **New channel** creates one with the next free number, **Delete** removes the selected channel, and the **Enabled** button toggles whether it is served. Disabled channels are absent from Live TV and can be incomplete drafts.
+The dropdown at the top selects the channel being edited. **New** creates a channel with the next free number, **Delete** removes the selected channel, and the **Enabled** button toggles whether it is served. Disabled channels are absent from Live TV and can be incomplete drafts.
 
 The editor works on a copy. Nothing changes on the server until **Save channel**, and switching to another channel with unsaved edits asks before discarding them. Saving triggers a guide refresh, so edits show up in Live TV right away.
 
@@ -154,7 +154,7 @@ The Popular tab with its Channel section open.
 
 ## Sessions tab
 
-Lists every channel currently encoding, one row per encoder (not per viewer): logo, channel number and name, start time, runtime, and the live encode speed. 1.0x means the server is keeping up, and a session with no viewers shows a countdown until it stops. Selecting a session opens its ffmpeg log with **Refresh**, **Copy**, and **Kill**.
+Lists every channel currently encoding, one row per encoder (not per viewer): logo, channel number and name, start time, runtime, and the live encode speed. 1.0x means the server is keeping up, and a session with no viewers shows a countdown until it stops. Selecting a session opens its ffmpeg log, where **Copy All** copies the whole log, **Refresh** reads it again, and **Kill** stops the stream.
 
 **Kill** stops the stream and frees its encoder immediately, even if someone is watching. It is the only thing that will: the caps and timers below never close a stream Jellyfin reports as playing.
 

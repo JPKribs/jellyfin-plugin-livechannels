@@ -17,5 +17,14 @@ artifacts:
 changelog:
   fixed:
   - The arrows on collapsible sections are back to their usual size
+  changed:
+  - The dashboard pages take their look from JPKribs.Jellyfin.Base 2026.11.17, with its buttons, panels, and count cards
+  - Studios, People, Audio language, Default language, and the genre lists pick values with a typeahead that shows each choice as a removable chip
+  - Drop-down fields use Jellyfin's own select style
+  - The stress test picks its test item from a library search that shows each result's artwork
+  - The ffmpeg log of a session opens in a log viewer with Copy All
   developer:
-  - Uses JPKribs.Jellyfin.Base 2026.11.13.3
+  - Uses JPKribs.Jellyfin.Base 2026.11.17, whose AtomicFile replaces the local AtomicFiles and the hand written temp file writes for logos and fonts
+  - The pages use Base's Chip Select, Media Picker, Log Viewer, Status Dot, Panel, and count cards in place of hand built pickers, chips, a log dialog, and cards
+  - The rating and placeholder block cards are shared by the Channels and Popular pages in livechannels_placeholder.js
+  - Adds starthere.md, agent.md, and the guides in skills, and removes SETTINGS.md, which only pointed at the docs
