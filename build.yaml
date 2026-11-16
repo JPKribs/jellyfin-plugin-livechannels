@@ -18,7 +18,7 @@ changelog:
   fixed:
   - The arrows on collapsible sections are back to their usual size
   changed:
-  - The dashboard pages take their look from JPKribs.Jellyfin.Base 2026.11.18, with its buttons, cards, and count cards
+  - The dashboard pages take their look from JPKribs.Jellyfin.Base 2026.11.19, with its buttons, cards, and count cards
   - Sources, rating blocks, and placeholder blocks are cards with their own Add and close buttons, and each card shows only the fields its choices use
   - Rating blocks and placeholder blocks sit in their own lists, and a maximum age rating below the minimum is marked on the card before the channel saves
   - Whitelist and Blacklist sources pick shows, movies, and single episodes from a library search with artwork
@@ -35,7 +35,7 @@ changelog:
   - The stress test picks its test item from a library search that shows each result's artwork
   - The ffmpeg log of a session opens in a log viewer with Copy All
   developer:
-  - Uses JPKribs.Jellyfin.Base 2026.11.18, whose AtomicFile replaces the local AtomicFiles and the hand written temp file writes for logos and fonts, and whose Repeater visible, labelFor, and newItem, Image Picker fallback, Banner actions, Save Bar failure messages, and dialog page option replace the local syncCells, Add button listeners, logo Remove hiding, failed line timers, hand built Apply button, and log dialog close on page hide
+  - Uses JPKribs.Jellyfin.Base 2026.11.19, whose AtomicFile replaces the local AtomicFiles and the hand written temp file writes for logos and fonts, and whose Repeater visible, labelFor, and newItem, Image Picker fallback, Banner actions, Save Bar failure messages, and dialog page option replace the local syncCells, Add button listeners, logo Remove hiding, failed line timers, hand built Apply button, and log dialog close on page hide
   - The pages use Base's Chip Select, Media Picker, Log Viewer, Repeater, Image Picker, Slider Field, Color Picker, Inherit Field, Save Bar, Media Card, List, Definition List, Banner, and count cards in place of hand built pickers, chips, item rows, block cards, session cards, a log dialog, and status text
   - The rating and placeholder block Repeaters are shared by the Channels and Popular pages in livechannels_placeholder.js
   - Adds starthere.md, agent.md, and the guides in skills, and removes SETTINGS.md, which only pointed at the docs

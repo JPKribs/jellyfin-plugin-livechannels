@@ -279,7 +279,7 @@ Every save looks the same.
 * Every save is Base's `createSaveBar` with `fill: true`, and its button reads **Save**.
 * One Save Bar per thing that saves. A page with one save has one bar at the bottom of what it saves, and a section that saves on its own has one bar at the bottom of its content.
 * The Save Bar is the last element of what it saves. Nothing sits beside it or below it in that section.
-* Other actions that belong with the save, such as Reset to Defaults, Clear, Test, Run Now, or Refresh, go in one `base-button-row` directly above the Save Bar. A select that belongs with them stays a normal select in that row.
+* Other actions that belong with the save, such as Reset to Defaults, Clear, Test, Run Now, or Refresh, go in one `base-button-row` directly above the Save Bar. A select that belongs with them stays a normal select in that row. Base spaces that row. Its buttons have no margin of their own, so their edges line up with the Save Bar's, the row sits one `--base-gap-narrow` above the Save Bar, and its buttons use the same font weight as Save. A plugin adds no margin, gap, or weight of its own. The Save Bar's element goes directly after the row, never inside a wrapper, since Base spaces them as siblings.
 * The Save Bar shows the outcome. Never add a status span or a hand placed Save button beside it, and never position a Save Bar with plugin CSS.
 * Wire `setDirty` from the page's change tracking, and have `onSave` return the save promise. The channel editor tracks changes with `createChangeTracker` and asks before discarding edits.
 * An editor dialog closes with **Done** in `openEditorDialog`.
