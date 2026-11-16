@@ -1,5 +1,5 @@
 import { createChipSelect, createConfigPage, createImagePicker, createMediaPicker, createRepeater, createSaveBar, createSliderField, confirmDialog, downloadJson, pickJsonFile } from './configurationpage?name=livechannels_jpkribs_shared.js';
-import { createBlockEditors, loadRatings, migrateRatingBlocks, ratingInfo, syncCells } from './configurationpage?name=livechannels_placeholder.js';
+import { createBlockEditors, loadRatings, migrateRatingBlocks, ratingInfo } from './configurationpage?name=livechannels_placeholder.js';
 
 export default function (view) {
     'use strict';
@@ -277,24 +277,19 @@ export default function (view) {
     }
 
     // renderLogoPreview
-    // Shows the uploaded logo in the Image Picker, or the generated logo while nothing is uploaded. The generated
-    // logo is only a preview, so its Remove button stays hidden.
+    // Shows the uploaded logo in the Image Picker, with the generated logo as its fallback while nothing is
+    // uploaded.
     function renderLogoPreview() {
         // The symbol field only applies to the generated 'Symbol' style.
         Shared.setVisible('logoSymbolRow', el('logoStyle').value === 'Symbol');
         if (!logoPicker) return;
-        if (logoData) {
-            logoPicker.setValue('data:' + (logoContentType || 'image/png') + ';base64,' + logoData);
-            return;
-        }
-        logoPicker.setValue(defaultLogoDataUrl(
+        logoPicker.setFallback(defaultLogoDataUrl(
             parseInt(el('channelNumber').value, 10) || 0,
             el('channelName').value || '',
             el('logoStyle').value,
             el('logoSymbol').value,
             el('logoShowName').checked));
-        var remove = logoPicker.element.querySelector('.base-image-picker-remove');
-        if (remove) remove.hidden = true;
+        logoPicker.setValue(logoData ? 'data:' + (logoContentType || 'image/png') + ';base64,' + logoData : null);
     }
 
     // onLogoPicked
@@ -456,18 +451,19 @@ export default function (view) {
         });
     }
 
+    // isLibrary, isGenre, isPicked
+    // Decide which fields a source card shows for its type and selection.
+    function isLibrary(item) { return item.Kind !== 'Collection'; }
+    function isGenre(item) { return isLibrary(item) && item.Selection === 'Genre'; }
+    function isPicked(item) { return isLibrary(item) && (item.Selection === 'Whitelist' || item.Selection === 'Blacklist'); }
+
     // syncSources
-    // Shows each source card's fields for its type and selection, and keeps its pickers on its library.
+    // Keeps each source card's pickers on its library.
     function syncSources() {
-        syncCells(sourceList, Shared, function (item, card) {
-            var library = item.Kind !== 'Collection';
-            var genres = library && item.Selection === 'Genre';
-            var items = library && (item.Selection === 'Whitelist' || item.Selection === 'Blacklist');
-            followLibrary(card, item.LibraryId || '');
-            var label = card.querySelector('.base-field-cell[data-key="Items"] .base-field-cell-label');
-            if (label) label.textContent = item.Selection === 'Blacklist' ? 'Excluded Items' : 'Included Items';
-            return { LibraryId: library, Selection: library, Genres: genres, MatchAllGenres: genres, ExcludeGenres: genres, Items: items, CollectionId: !library };
-        });
+        var cards = sourceList.element.querySelectorAll('.base-repeater-card');
+        var values = sourceList.getValue();
+        if (cards.length !== values.length) return;
+        for (var i = 0; i < cards.length; i++) followLibrary(cards[i], values[i].LibraryId || '');
     }
 
     // toSourceItem
@@ -546,30 +542,33 @@ export default function (view) {
             fields: [
                 { key: 'Kind', label: 'Source Type', type: 'select', options: [{ value: 'Library', label: 'Library' }, { value: 'Collection', label: 'Collection' }] },
                 {
-                    key: 'LibraryId', label: 'Library', type: 'select', placeholder: 'Select a library',
+                    key: 'LibraryId', label: 'Library', type: 'select', placeholder: 'Select a library', visible: isLibrary,
                     options: libraries.map(function (l) { return { value: l.Id, label: l.Name }; }),
                     validate: function (value, item) { return item.Kind !== 'Collection' && !value ? 'Select a library.' : ''; }
                 },
                 {
-                    key: 'CollectionId', label: 'Collection', type: 'select', placeholder: 'Select a collection',
+                    key: 'CollectionId', label: 'Collection', type: 'select', placeholder: 'Select a collection', visible: function (item) { return !isLibrary(item); },
                     options: collections.map(function (c) { return { value: c.Id, label: c.Name }; }),
                     validate: function (value, item) { return item.Kind === 'Collection' && !value ? 'Select a collection.' : ''; }
                 },
                 {
-                    key: 'Selection', label: 'Selection', type: 'select', options: [
+                    key: 'Selection', label: 'Selection', type: 'select', visible: isLibrary, options: [
                         { value: 'AllContent', label: 'All Content' }, { value: 'Genre', label: 'Genre' },
                         { value: 'Whitelist', label: 'Whitelist' }, { value: 'Blacklist', label: 'Blacklist' }]
                 },
-                { key: 'Genres', label: 'Include Genres', type: 'custom', render: genreField('Genres', 'Add a genre') },
-                { key: 'MatchAllGenres', label: 'Match All Genres', type: 'toggle' },
-                { key: 'ExcludeGenres', label: 'Exclude Genres', type: 'custom', render: genreField('ExcludeGenres', 'Add a genre to exclude') },
-                { key: 'Items', label: 'Included Items', type: 'custom', render: itemsField }
+                { key: 'Genres', label: 'Include Genres', type: 'custom', visible: isGenre, render: genreField('Genres', 'Add a genre') },
+                { key: 'MatchAllGenres', label: 'Match All Genres', type: 'toggle', visible: isGenre },
+                { key: 'ExcludeGenres', label: 'Exclude Genres', type: 'custom', visible: isGenre, render: genreField('ExcludeGenres', 'Add a genre to exclude') },
+                {
+                    key: 'Items', label: 'Included Items', type: 'custom', visible: isPicked, render: itemsField,
+                    labelFor: function (item) { return item.Selection === 'Blacklist' ? 'Excluded Items' : 'Included Items'; }
+                }
             ],
             onChange: function () { syncSources(); markDirty(); }
         });
         el('librarySources').appendChild(sourceList.element);
 
-        blockEditors = createBlockEditors({ ratings: ratings, shared: Shared, onChange: markDirty });
+        blockEditors = createBlockEditors({ ratings: ratings, onChange: markDirty });
         el('ratingBlocks').appendChild(blockEditors.ratingElement);
         el('placeholderBlocks').appendChild(blockEditors.placeholderElement);
 
@@ -755,21 +754,9 @@ export default function (view) {
 
     // MARK: Persistence
 
-    // failSave
-    // Shows why a save stopped on the Save Bar's failed line, after the bar draws its own.
-    //
-    // Inputs
-    // message [string]: The sentence to show.
-    //
-    // Output
-    // [Promise]: A rejected promise, so the Save Bar counts the save as failed.
-    function failSave(message) {
-        setTimeout(function () { if (saveBar) saveBar.setState('failed', message); }, 0);
-        return Promise.reject(new Error(message));
-    }
-
     // saveChannel
-    // Checks the editor and saves the channel. The Save Bar runs it and shows its outcome.
+    // Checks the editor and saves the channel. The Save Bar runs it and shows its outcome, including the reason
+    // a rejected save gives.
     //
     // Output
     // [Promise]: Settles once the save is done.
@@ -777,15 +764,15 @@ export default function (view) {
         if (currentIndex < 0 || !editing) return Promise.resolve();
         var ch = editing;
         readEditorInto(ch);
-        if (!ch.Name) return failSave('A name is required.');
-        if (!ch.Sources.length) return failSave('Add at least one source.');
-        if (!sourceList.isValid() || !blockEditors.isValid()) return failSave('Fix the fields marked in red.');
+        if (!ch.Name) return Promise.reject(new Error('A name is required.'));
+        if (!ch.Sources.length) return Promise.reject(new Error('Add at least one source.'));
+        if (!sourceList.isValid() || !blockEditors.isValid()) return Promise.reject(new Error('Fix the fields marked in red.'));
 
         // The copy is complete and valid: persist a working set with it in place, and adopt that set only once
         // the server accepts it, so a rejected save leaves the stored channels (and the editor) as they were.
         var candidate = channels.slice();
         candidate[currentIndex] = JSON.parse(JSON.stringify(ch));
-        return persist(candidate, 'Could not save the channel.').catch(function (err) { return failSave(err.message); });
+        return persist(candidate, 'Could not save the channel.');
     }
 
     function stripInternal(list) {

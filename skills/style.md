@@ -456,15 +456,13 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 
 ## Hand Built Pieces
 
-Every control on the pages is a Base component. These small steps around Base components remain, each waiting on the Base option named beside it. Report the gap to Base, drop the step in the commit that moves to the Base version that adds the option, and add nothing to this list.
+Every control on the pages is a Base component, with nothing built around one. When a page needs something Base lacks, report the gap to Base and wait for the option. Never step around a component in the plugin.
 
-| Step around Base today | Where | Waits on |
-| :--- | :--- | :--- |
-| `syncCells` hides a card's field cells by their `data-key` with `setVisible`, and sets the **Included Items** or **Excluded Items** label | Source, rating block, and placeholder block cards | A Repeater field option such as `visible(item)` and a label that follows the item |
-| A capture listener on the Repeater's Add button adds a row with `addRow(defaults)` | Rating block and placeholder block cards | A Repeater option such as `newItem()` that fills a new row |
-| The generated logo is shown with `setValue(dataUrl)`, and its Remove button is hidden | Logo Image Picker | An Image Picker fallback that takes an image address |
-| The server's error replaces the failed line with `setState('failed', text)` on the next tick | Save Bars on Channels, Popular, and Settings | A Save Bar that shows the message of the Error `onSave` rejects with |
-| The **Apply** button under the stress test recommendation is a `base-button` built in script | Settings, Stress Test | Banner `actions` |
+* A card field that shows only for some values uses the Repeater field's `visible(item)`, and a label that follows the card uses `labelFor(item)`.
+* A new card's starting values come from the Repeater's `newItem()`.
+* The generated logo is the Image Picker's `fallback`, swapped with `setFallback`.
+* A save rejects with an Error, and the Save Bar shows its message.
+* A button that belongs to a Banner is one of its `actions`.
 
 ## Checklist
 

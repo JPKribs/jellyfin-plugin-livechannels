@@ -116,27 +116,6 @@ export function ratingInfo(ratings) {
     };
 }
 
-// syncCells
-// Shows each card's fields by the rule for its values, so a field that only applies to some values of another
-// hides with the rest.
-//
-// Inputs
-// repeater [object]: The card Repeater handle.
-// shared [object]: The helper bag from createShared.
-// rule [function]: Takes a card's values and its card element and returns { key: visible }.
-export function syncCells(repeater, shared, rule) {
-    var cards = repeater.element.querySelectorAll('.base-repeater-card');
-    var values = repeater.getValue();
-    if (cards.length !== values.length) return;
-    for (var i = 0; i < cards.length; i++) {
-        var shown = rule(values[i], cards[i]) || {};
-        Object.keys(shown).forEach(function (key) {
-            var cell = cards[i].querySelector('.base-field-cell[data-key="' + key + '"]');
-            if (cell) shared.setVisible(cell, !!shown[key]);
-        });
-    }
-}
-
 // textLimit
 // Checks a text field against the longest text the server keeps.
 //
@@ -154,18 +133,18 @@ function textLimit(value) {
 // RatingBlocks array, rating blocks first.
 //
 // Inputs
-// options [object]: { ratings, shared, onChange }, where ratings comes from loadRatings.
+// options [object]: { ratings, onChange }, where ratings comes from loadRatings.
 //
 // Output
 // [object]: { ratingElement, placeholderElement, setValue(blocks), getValue(), isValid() }.
 export function createBlockEditors(options) {
     var ratings = options.ratings;
-    var shared = options.shared;
 
     function changed() {
-        syncAll();
         if (options.onChange) options.onChange();
     }
+
+    function customPeriod(item) { return item.Period === 'Custom'; }
 
     var ratingList = createRepeater({
         layout: 'card',
@@ -184,9 +163,10 @@ export function createBlockEditors(options) {
             { key: 'IncludeUnrated', label: 'Include Unrated', type: 'toggle' },
             { key: 'IsKids', label: 'Tag As Kids', type: 'toggle' },
             { key: 'Period', label: 'Period', type: 'select', options: [{ value: 'AllDay', label: 'All Day' }, { value: 'Custom', label: 'Custom' }] },
-            { key: 'StartMinutes', label: 'Start Time', type: 'time' },
-            { key: 'EndMinutes', label: 'End Time', type: 'time' }
+            { key: 'StartMinutes', label: 'Start Time', type: 'time', visible: customPeriod },
+            { key: 'EndMinutes', label: 'End Time', type: 'time', visible: customPeriod }
         ],
+        newItem: function () { return toRatingItem({}); },
         onChange: changed
     });
 
@@ -200,35 +180,16 @@ export function createBlockEditors(options) {
             { key: 'EndMinutes', label: 'End Time', type: 'time' },
             { key: 'PlaceholderName', label: 'Guide Name', placeholder: DEFAULT_NAME, validate: textLimit },
             { key: 'PlaceholderStyle', label: 'Style', type: 'select', options: PLACEHOLDER_STYLES },
-            { key: 'PlaceholderMediaPath', label: 'Image, GIF or Video', placeholder: '/path/on/the/server/card.mp4' },
+            {
+                key: 'PlaceholderMediaPath', label: 'Image, GIF or Video', placeholder: '/path/on/the/server/card.mp4',
+                visible: function (item) { return item.PlaceholderStyle === 'Custom'; }
+            },
             { key: 'PlaceholderTitle', label: 'Title', validate: textLimit },
             { key: 'PlaceholderBody', label: 'Message', validate: textLimit }
         ],
+        newItem: function () { return toPlaceholderItem({}); },
         onChange: changed
     });
-
-    function syncAll() {
-        syncCells(ratingList, shared, function (item) {
-            var custom = item.Period === 'Custom';
-            return { StartMinutes: custom, EndMinutes: custom };
-        });
-        syncCells(placeholderList, shared, function (item) {
-            return { PlaceholderMediaPath: item.PlaceholderStyle === 'Custom' };
-        });
-    }
-
-    // A new card starts with the defaults rather than empty fields.
-    function addDefaults(list, item) {
-        var add = list.element.querySelector('.base-repeater-add');
-        if (!add) return;
-        add.addEventListener('click', function (e) {
-            e.stopImmediatePropagation();
-            list.addRow(item());
-            changed();
-        }, true);
-    }
-    addDefaults(ratingList, function () { return toRatingItem({}); });
-    addDefaults(placeholderList, function () { return toPlaceholderItem({}); });
 
     function toRatingItem(b) {
         return {
@@ -261,7 +222,6 @@ export function createBlockEditors(options) {
             blocks = blocks || [];
             ratingList.setValue(blocks.filter(function (b) { return !b.IsPlaceholder; }).map(toRatingItem));
             placeholderList.setValue(blocks.filter(function (b) { return b.IsPlaceholder; }).map(toPlaceholderItem));
-            syncAll();
         },
         getValue: function () {
             var rating = ratingList.getValue().map(function (i) {

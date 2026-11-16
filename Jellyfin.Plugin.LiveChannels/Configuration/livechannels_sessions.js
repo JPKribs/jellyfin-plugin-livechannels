@@ -20,14 +20,9 @@ export default function (view) {
         load: function () {
             // A fresh poller per show: the page stops it on viewhide.
             page.createPoller(loadSessions, 5000).start();
-        },
-        onHide: function () {
-            // Close an open log so its Escape and focus handlers do not outlive the page.
-            if (logDialog) { logDialog.dismiss(); }
         }
     });
     var Shared = page.shared;
-    var logDialog = null;
     var sessionList = createList({ layout: 'rows', render: function (s) { return sessionCard(s); }, emptyText: 'No channels are streaming right now.', label: 'Sessions' });
 
     function el(id) { return view.querySelector('#' + id); }
@@ -167,10 +162,12 @@ export default function (view) {
     function openLog(id, name) {
         _logSessionId = id;
         logViewer = createLogViewer({ maxLines: 20000, autoScroll: false, emptyText: 'Loading…', height: '55vh', label: 'ffmpeg log' });
-        logDialog = openDialog({
+        openDialog({
             title: name || 'Session',
             body: logViewer.element,
             size: 'large',
+            // The log closes when the page hides, so its Escape and focus handlers do not outlive the page.
+            page: page,
             buttons: [
                 { text: 'Kill', className: 'base-button destructive', action: function (close) {
                     var target = _logSessionId;
@@ -181,7 +178,6 @@ export default function (view) {
             ],
             onClose: function () {
                 _logSessionId = null;
-                logDialog = null;
                 if (logViewer) { logViewer.destroy(); logViewer = null; }
             }
         });

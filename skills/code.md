@@ -139,7 +139,7 @@ export function createBlockEditors(options) {
 * Comment every top level function, every function assigned to `shared`, and every exported function.
 * Do not comment the methods inside a returned handle. List them in the Output line instead.
 * Open each file with a header naming the file and saying what it holds in one sentence. Use no `// ====` banners.
-* Each page script imports Base by the relative path `./configurationpage?name=livechannels_jpkribs_shared.js`. `livechannels_placeholder.js` holds the rating and placeholder block Repeaters the Channels and Popular pages share, and `syncCells`, which shows a card's fields for its values.
+* Each page script imports Base by the relative path `./configurationpage?name=livechannels_jpkribs_shared.js`. `livechannels_placeholder.js` holds the rating and placeholder block Repeaters the Channels and Popular pages share, each card field showing only for the values its Repeater `visible(item)` allows.
 * A new script or page is an `EmbeddedResource` in the csproj and a page in `Plugin.GetPages`.
 
 ### HTML

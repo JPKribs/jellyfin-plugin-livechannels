@@ -144,15 +144,8 @@ export default function (view) {
         }).catch(function () { /* best effort */ });
     }
 
-    // failSave
-    // Shows why a save failed on the Save Bar's failed line, after the bar draws its own.
-    function failSave(message) {
-        setTimeout(function () { saveBar.setState('failed', message); }, 0);
-        return Promise.reject(new Error(message));
-    }
-
     // saveSettings
-    // Saves the settings. The Save Bar runs it and shows its outcome.
+    // Saves the settings. The Save Bar runs it and shows its outcome, including the server's reason.
     //
     // Output
     // [Promise]: Settles once the save is done.
@@ -186,7 +179,7 @@ export default function (view) {
             // The server rejects a color it cannot parse, so show what it said rather than a bare failure.
             var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
             return read.then(function (t) { return t ? t.replace(/^"|"$/g, '') : 'Could not save the settings.'; }, function () { return 'Could not save the settings.'; })
-                .then(failSave);
+                .then(function (message) { throw new Error(message); });
         });
     }
 
@@ -244,21 +237,17 @@ export default function (view) {
                 kind: s.Error ? 'error' : (good ? 'success' : 'warn'),
                 title: finished ? (good ? 'Recommended Maximum Concurrent Streams: ' + s.Recommended : 'Even one stream could not hold realtime with this item.') : '',
                 text: s.Error ? s.Error : (good ? '' : 'Lower the resolution or bitrate.'),
-                dismissible: false
+                dismissible: false,
+                actions: good ? [{
+                    text: 'Apply',
+                    onClick: function () {
+                        el('maxSessions').value = s.Recommended;
+                        saveBar.setDirty(true);
+                        Shared.setStatus('stressStatus', 'Set to ' + s.Recommended + '. Select Save to keep it.', false);
+                    }
+                }] : null
             });
             el('stressSummary').appendChild(stressSummary.element);
-            if (good) {
-                var apply = document.createElement('button');
-                apply.type = 'button';
-                apply.className = 'raised base-button secondary small';
-                apply.textContent = 'Apply';
-                apply.addEventListener('click', function () {
-                    el('maxSessions').value = s.Recommended;
-                    saveBar.setDirty(true);
-                    Shared.setStatus('stressStatus', 'Set to ' + s.Recommended + '. Select Save to keep it.', false);
-                });
-                el('stressSummary').appendChild(apply);
-            }
         }
         Shared.setVisible('stressCancel', s.Running);
         el('stressRun').disabled = !!s.Running;

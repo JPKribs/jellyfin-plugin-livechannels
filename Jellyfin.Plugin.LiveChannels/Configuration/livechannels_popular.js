@@ -34,7 +34,7 @@ export default function (view) {
     // ratings [object]: { choices, valueOf } from loadRatings.
     function ensureBlockEditors(ratings) {
         if (blockEditors) return;
-        blockEditors = createBlockEditors({ ratings: ratings, shared: Shared, onChange: function () { saveBar.setDirty(true); } });
+        blockEditors = createBlockEditors({ ratings: ratings, onChange: function () { saveBar.setDirty(true); } });
         el('popularRatingBlocks').appendChild(blockEditors.ratingElement);
         el('popularPlaceholderBlocks').appendChild(blockEditors.placeholderElement);
     }
@@ -73,20 +73,13 @@ export default function (view) {
         }).catch(function () { /* best effort */ });
     }
 
-    // failSave
-    // Shows why a save failed on the Save Bar's failed line, after the bar draws its own.
-    function failSave(message) {
-        setTimeout(function () { saveBar.setState('failed', message); }, 0);
-        return Promise.reject(new Error(message));
-    }
-
     // savePopular
-    // Saves the Popular Channel. The Save Bar runs it and shows its outcome.
+    // Saves the Popular Channel. The Save Bar runs it and shows its outcome, including the server's reason.
     //
     // Output
     // [Promise]: Settles once the save is done.
     function savePopular() {
-        if (!blockEditors || !blockEditors.isValid()) return failSave('Fix the fields marked in red.');
+        if (!blockEditors || !blockEditors.isValid()) return Promise.reject(new Error('Fix the fields marked in red.'));
         // Read the latest config so settings on the other tabs are preserved, then update just the popular channel.
         return Shared.getConfig().then(function (fresh) {
             var pc = fresh.PopularChannel || {};
@@ -122,7 +115,7 @@ export default function (view) {
             // Surface the server's validation message (like the settings page does) instead of a bare failure.
             var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
             return read.then(function (t) { return t ? t.replace(/^"|"$/g, '') : 'Could not save.'; }, function () { return 'Could not save.'; })
-                .then(failSave);
+                .then(function (message) { throw new Error(message); });
         });
     }
 
