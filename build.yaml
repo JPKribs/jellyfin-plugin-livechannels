@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "12.4.2.5"
+version: "12.4.2.6"
 targetAbi: "12.4.0.0"
 framework: "net10.0"
 overview: "Build looping virtual TV channels that appear natively in Jellyfin's Live TV."
@@ -15,29 +15,7 @@ owner: "JPKribs"
 artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
-  fixed:
-  - The Stream Time Limit help said it closes a stream someone is watching. It says it closes a stream once no one is watching it, as it does
-  - In a source or block card, the genre, item, and language pickers opened their lists off screen, so nothing seemed to look up. The lists open under their fields
-  - Include Genres and Exclude Genres offered no genres for a music video or home video library, and Whitelist and Blacklist could not find music videos or home videos. Both cover every kind a channel plays, and a library with no genres says so
   changed:
-  - The dashboard pages take their look from JPKribs.Jellyfin.Base 2026.11.19, with its buttons, cards, and count cards
-  - Sources, rating blocks, and placeholder blocks are cards with their own Add and close buttons, and each card shows only the fields its choices use
-  - Rating blocks and placeholder blocks sit in their own lists, and a maximum age rating below the minimum is marked on the card before the channel saves
-  - Whitelist and Blacklist sources pick shows, movies, and single episodes from a library search with artwork
-  - The logo is picked with an image picker that crops it to a square and shows the generated logo while nothing is uploaded
-  - Minimum Community Rating, Minimum Critic Rating, and subtitle Size are sliders
-  - Subtitle Text Color and Outline Color use a color picker, with As Authored keeping each subtitle's own color
-  - Each page saves from a save bar that shows unsaved changes and why a save stopped
-  - Every Save is the same full width Save Bar, with any other actions in a full width row above it
-  - Sessions are media rows with the channel logo, a speed badge, and a No viewers countdown badge
-  - Stress test rounds show Passed or Failed badges, and the recommendation sits in a box with its Apply button inside
-  - Labels use Title Case
-  - Studios, People, Audio language, Default language, and the genre lists pick values with a typeahead that shows each choice as a removable chip
-  - Drop-down fields use Jellyfin's own select style
-  - The stress test picks its test item from a library search that shows each result's artwork
-  - The ffmpeg log of a session opens in a log viewer with Copy All
+  - On the Hardware Acceleration and Stress Test sections, each value sits right after its label instead of after a wide fixed gap
   developer:
-  - Uses JPKribs.Jellyfin.Base 2026.11.19, whose AtomicFile replaces the local AtomicFiles and the hand written temp file writes for logos and fonts, and whose Repeater visible, labelFor, and newItem, Image Picker fallback, Banner actions, Save Bar failure messages, and dialog page option replace the local syncCells, Add button listeners, logo Remove hiding, failed line timers, hand built Apply button, and log dialog close on page hide
-  - The pages use Base's Chip Select, Media Picker, Log Viewer, Repeater, Image Picker, Slider Field, Color Picker, Inherit Field, Save Bar, Media Card, List, Definition List, Banner, and count cards in place of hand built pickers, chips, item rows, block cards, session cards, a log dialog, and status text
-  - The rating and placeholder block Repeaters are shared by the Channels and Popular pages in livechannels_placeholder.js
-  - Adds starthere.md, agent.md, and the guides in skills, and removes SETTINGS.md, which only pointed at the docs
+  - Uses JPKribs.Jellyfin.Base 2026.11.20, whose base-repeater-layout-card root class replaces the local stopgap rule on the Channels and Popular pages that kept Jellyfin's .card rule from moving picker lists off screen
