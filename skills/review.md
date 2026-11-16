@@ -44,7 +44,7 @@ The check to run on your own changes before you call them done. People and AI as
 * [ ] Each component is the one [style.md](style.md#components) names for the need.
 * [ ] Colors come from Base tokens and keep their [meaning](style.md#meaning).
 * [ ] The page works at 375 px wide.
-* [ ] Every changed page was opened on a test server and looked at, after a reload.
+* [ ] Every changed page was clicked through in the harness, then opened on a test server and looked at, after a hard reload. A harness run alone does not count.
 * [ ] Every changed page script passes `node --check` as an `.mjs` copy, and every name it imports from Base exists in `assets/jpkribs_shared.d.ts`.
 * [ ] Every top level group on a page has the same header, and a section with nothing to show is hidden.
 * [ ] Results use `setStatus`, confirms use `confirmDialog`, and nothing uses `Dashboard.alert` or `window.confirm`.

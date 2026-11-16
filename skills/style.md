@@ -281,6 +281,7 @@ Every save looks the same.
 * The Save Bar is the last element of what it saves. Nothing sits beside it or below it in that section.
 * Other actions that belong with the save, such as Reset to Defaults, Clear, Test, Run Now, or Refresh, go in one `base-button-row` directly above the Save Bar. A select that belongs with them stays a normal select in that row. Base spaces that row. Its buttons have no margin of their own, so their edges line up with the Save Bar's, the row sits one `--base-gap-narrow` above the Save Bar, and its buttons use the same font weight as Save. A plugin adds no margin, gap, or weight of its own. The Save Bar's element goes directly after the row, never inside a wrapper, since Base spaces them as siblings.
 * The Save Bar shows the outcome. Never add a status span or a hand placed Save button beside it, and never position a Save Bar with plugin CSS.
+* No divider line sits above a Save Bar.
 * Wire `setDirty` from the page's change tracking, and have `onSave` return the save promise. The channel editor tracks changes with `createChangeTracker` and asks before discarding edits.
 * An editor dialog closes with **Done** in `openEditorDialog`.
 * Read the config fresh before a save, change only what the page owns, and save it, so another tab's settings survive. The Channels page also refuses a save when the stored channels changed since it loaded.
@@ -300,7 +301,9 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 * The typings in that file document every option of every component. Read the component's block before using it.
 * Rows of fields with Add and Remove are a `createRepeater`. A list of checkboxes is a `createCheckboxList`. Values picked from a long list are a `createChipSelect`. Library items are a `createMediaPicker`. A log is a `createLogViewer`.
 * A hand built version of any of these is a defect, even when it looks the same.
+* A Base component used wrong is worse than none. Read its typings, use it the way they describe, and look at the result on a real server, not only in the code.
 * When a Base component lacks one thing the page needs, use the component and report the gap to Base. Never fall back to building it by hand.
+* Moving UI onto a Base component is UI work. Only stored data, routes, authentication, and secret handling are [stop and ask](../starthere.md#stop-and-ask) items, wherever the UI sits.
 
 ### Fields
 
@@ -322,10 +325,17 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 | Several fields side by side | `base-field-row` with `base-field` |
 | A secret | `bindSecretField`, `readSecretField`, and `clearSecretField` |
 | A template with `{name}` tokens | `placeholderHint` and `bindPlaceholders` |
+| One number on a range, such as a score or a size in percent | `createSliderField` |
+| A color | `createColorPicker`, inside `createInheritField` when it can also follow the authored value, such as **As Authored** and **Custom** |
+| A code, path, or link to copy | `createCopyField` |
+| An image upload, such as a logo | `createImagePicker` |
 | Code or JSON, read only | `base-code-block` |
 
 * Use `emby-select`, never `base-selector-dropdown`, for a field. `base-selector-dropdown` is only for the record picker.
 * Every input has a `<label for>`.
+* Never hand roll a slider, a color field, or a copy field. Each has a Base component.
+* Mount a Base component that holds inputs, such as a Chip Select or a Slider, in a host inside a `selectContainer`, never inside an `inputContainer`. Jellyfin's dashboard widens every input inside an `inputContainer`, so only a component whose typings say so goes there.
+* A lookup field must look up. Type part of a real name and check that the list opens under the field with matches.
 
 ### Buttons
 
@@ -375,7 +385,9 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 | A mark on a table row, such as picked | The table's `rowClass(item, index)` |
 
 * A record picker's actions read **New**, **Rename**, **Remove**, then **Import** and **Export**, in that order.
-* Use `createPaginatedTable` for any list that can grow past one screen. Rows open with `actions.onRowClick`.
+* Use `createPaginatedTable` for any list that can grow past one screen. Rows open with `actions.onRowClick`. Give a list that can grow past one screen `height: 'fill'`, so it ends at the window bottom and scrolls inside.
+* A source card's genre fields and item field cover every kind of item a channel plays: movies, shows, episodes, music videos, and home videos (`Movie,Series,Episode,MusicVideo,Video`). A genre lookup that leaves out a kind offers nothing for a library of that kind.
+* An empty genre list means the library has no genres. The field then says no genres in the library match, and nothing else is wrong.
 
 ### Status
 
@@ -390,6 +402,7 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 | The result of an action | `shared.setStatus` |
 | A row of reset actions | `base-reset-group` with `base-reset-row` |
 
+* Count cards in one row each take their own color, and no two neighbours match.
 * Never use `Dashboard.alert` for a result. It blocks the page. Use `setStatus`.
 * A notice holds one sentence. Use a callout for something the reader must know before acting, not for a result.
 
@@ -436,6 +449,7 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 * Look at every changed page on a test server before calling it done. Reload the page after installing a build, since the dashboard caches scripts.
 * Spacing comes from `--base-gap-wide` and `--base-gap-narrow`. Never add margins between fields.
 * Never set a width in pixels on a field. Let it fill its container.
+* Rows are visibly separate, and every control says what it does next to it. A lone toggle word at the far edge of a row, such as "Override", is a defect.
 
 ## Accessibility
 
@@ -451,14 +465,22 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 * Keep plugin CSS for layout that only this plugin has. A component another plugin could use goes to Base.
 * Never override a `base-` class. Change Base instead.
 * When Base has a defect that breaks a page, report it and add one marked stopgap rule under a comment that names the defect. Delete the rule in the commit that moves to the Base version with the fix.
+* Watch for class collisions with Jellyfin's own CSS. A bare class a component carries, such as `card`, picks up Jellyfin's rules for it.
+* A Base component that draws fixed popups, such as a Chip Select or a Media Picker, must not sit inside an element with `contain`, `transform`, or `filter`. Each one moves the popup off screen.
 * Size a column in `rem` or `fr`. An `em` width changes with the font size of each row, so a smaller heading row falls out of line with its columns.
 * Never define a color token. Use Base's.
 
 ## Hand Built Pieces
 
-One marked stopgap stands in for a Base defect: `.base-repeater.card { contain: none; cursor: auto; }` on the Channels and Popular pages. Base's card Repeater carries a bare `card` class that Jellyfin's own `.card` rule styles, and its paint containment opens picker lists off screen. Delete the rule when Base names the class `base-repeater-card`.
+One marked stopgap stands in for a Base defect, in a `<style>` block at the top of the Channels and Popular pages:
 
-Every control on the pages is a Base component, with nothing built around one. When a page needs something Base lacks, report the gap to Base and wait for the option. Never step around a component in the plugin.
+```css
+.pluginConfigurationPage .base-repeater.card { contain: none; cursor: auto; }
+```
+
+Base's card Repeater carries a bare `card` class. Jellyfin's own `.card` rule gives it `contain: paint`, which moves the fixed lists of the genre, item, and language pickers inside a source or block card off screen. The comment above the rule names the defect. Delete the rule, and this paragraph, in the commit that moves to a Base version that names the class `base-repeater-card`.
+
+Every control on the pages is a Base component, with nothing built around one. Never put a stand-in where a Base option exists. When a page needs something Base lacks, name the missing option here, report it to the Base owner, and wait for it. Never keep a Base gap silently, and never step around a component in the plugin.
 
 * A card field that shows only for some values uses the Repeater field's `visible(item)`, and a label that follows the card uses `labelFor(item)`.
 * A new card's starting values come from the Repeater's `newItem()`.

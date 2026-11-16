@@ -166,19 +166,43 @@ Use `##` for README headings. Keep the README under 40 lines.
 
 * Capture every page and dialog a docs page describes.
 * Capture the dark theme only, which is Jellyfin's default.
-* Capture from a test server with generic channel and library names.
-* Capture with channels saved and a session running, so lists, counts, and the speed are filled.
-* Hide nothing with editing. When a value is private, change the test data instead.
+* Capture from the screenshot kit with headless Chromium at 2x, never from a live server or its data.
+* Use generic sample data, such as channels named Saturday Cartoons, Movie Night, and Sitcom Classics, libraries named Shows, Movies, and Music Videos, made up titles, and sessions with speeds.
+* Fill what the page shows, so lists, counts, badges, and speeds have values.
+* Hide nothing with editing. Change the sample data instead.
+
+### The Screenshot Kit
+
+`tools/screenshots/` holds everything the captures need.
+
+| File | Does |
+| :--- | :--- |
+| `server.py` | Serves the plugin pages, Base from the NuGet cache, the plugin's symbols font, and jellyfin-web, the way Jellyfin's `configurationpage` route does |
+| `harness.html` | Loads jellyfin-web's stylesheets in load order (index.html's two first, the dark theme, then every chunk except those that set another layout's root font), mounts one page, and with `chrome=1` draws the dashboard's drawer and tabs around it |
+| `upgrade.js` | Adds the classes and markup Jellyfin's `emby-*` elements add on upgrade, so the real CSS applies |
+| `stub.js` | A stand-in `ApiClient` with the generic sample data |
+| `chrome.css`, `chrome.js` | The dashboard drawer and header for the full window shots |
+| `livetv.html` | Jellyfin's Live TV channel grid with the channels' generated logos |
+| `shoot.mjs` | Opens each subject, sets it up, and writes every PNG to `docs/screenshots/` |
+
+Run it from the kit's folder. Set `BASEVER` to the Base version the plugin references, `JELLYFIN_WEB` to a jellyfin-web folder other than the macOS app's, `PLAYWRIGHT_CORE` to playwright-core's `index.mjs`, and `CHROMIUM` to a Chromium binary when the defaults do not fit.
+
+```bash
+python3 -I server.py 8831 &
+PLAYWRIGHT_CORE=/path/to/node_modules/playwright-core/index.mjs node shoot.mjs
+```
+
+`node shoot.mjs "Stress Test" Sessions` retakes only the named files. Look at every PNG it writes before committing it. A new subject is one more entry in the `shots` list of `shoot.mjs`, and new sample data goes in `stub.js`.
 
 ### Sizes
 
 | Kind | Size | How |
 | :--- | :--- | :--- |
-| Dialog | 800 wide | The browser at 800 px, cropped to the dialog |
-| Full page | 1920 wide | The browser at 1920 px, cropped to the content area |
-| Phone | 375 wide at 2x | The browser's device mode at 375 px |
+| Section or tab | 1428 wide | A 720 px window at 2x, cropped to the 714 px content area from the section header to the end of what it shows |
+| Full window | 1920 wide | A 960 px window at 2x with the dashboard drawer and tabs, for a whole tab |
+| Dialog | 1920 wide | A 960 px window at 2x with the dialog open over its page |
 
-Save every capture as PNG. Crop out the browser frame and the Jellyfin header unless the header is the subject.
+Save every capture as PNG. Keep each file's subject and width when retaking it.
 
 ### Names and Placement
 
@@ -195,7 +219,7 @@ Save every capture as PNG. Crop out the browser frame and the Jellyfin header un
 
 ### When to Retake
 
-Retake a screenshot in the same commit as any change that alters what it shows, including a label, a tab, a layout, or the Jellyfin version in the header. A new Base version changes how every component looks, so retake every screenshot when it is raised. A screenshot that shows a tab or label the plugin no longer has is a bug.
+Retake a screenshot in the same commit as any change that alters what it shows, including a label, a tab, a layout, or the Jellyfin version in the header. A new Base version changes how every component looks, so retake every screenshot with the kit when it is raised. A screenshot that shows a tab or label the plugin no longer has is a bug. When a subject no longer exists, delete its file and every link to it.
 
 ## Installing a Build by Hand
 
@@ -240,6 +264,7 @@ changelog:
     - The arrows on collapsible sections were too large. They are back to their usual size
 ```
 
+* List only this release. Drop a line that shipped in the last release, and a line a later change in this release replaced.
 * This is the one place that may say "now", "no longer", and "was".
 * Write full sentences with no closing period.
 * Write one entry per change a user would notice. Fold internal steps into the change they serve.

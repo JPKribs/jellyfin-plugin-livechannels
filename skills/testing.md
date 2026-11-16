@@ -16,7 +16,7 @@ Test each behavior at the lowest layer that can prove it. Go up a layer only for
 | Service | A service with Jellyfin's interfaces stood in, such as the guide, sessions, and timers | `dotnet test` | Seconds |
 | ffmpeg integration | A real argument list run through jellyfin-ffmpeg gives the right picture, sound, and timing | `dotnet test`, with jellyfin-ffmpeg found | Minutes |
 | Jellyfin image | The whole suite against the jellyfin-ffmpeg of the Jellyfin release the plugin targets | `.github/scripts/test-in-jellyfin.sh` | Minutes |
-| Config pages | Each page loads, draws, and saves | By hand on a test server | Minutes |
+| Config pages | Each page loads, draws, and saves | The screenshot harness, then by hand on a test server | Minutes |
 
 | A change to | Needs |
 | :--- | :--- |
@@ -111,10 +111,25 @@ Run it before a release, and after any change to a filter chain, an encoder choi
 
 ## Config Pages
 
+A page is checked twice: in the harness, then on a real server. The harness alone never makes a page done.
+
+### The Harness
+
+`tools/screenshots/` serves the four pages with Base and generic sample data, as [documentation.md](documentation.md#screenshots) describes. It loads Jellyfin's real stylesheets in order and mimics the classes Jellyfin's `emby-*` elements add on upgrade. Base's CSS alone hides real bugs, such as a field Jellyfin widens or a list Jellyfin's `.card` rule hides.
+
+Click through like a user.
+
+* Open every tab, every collapsible, and every dialog.
+* Type real keystrokes into every picker. Type part of a real name and check that the list opens under the field.
+* Look at each page at 1280 and 375 px wide, and look at every screenshot taken.
+
+### A Real Server
+
 1. Build the zip with `./build.sh`.
 2. Install it on a Jellyfin 12.4 test server, never on a server people use, and restart it.
-3. Open each changed tab under **Dashboard > Plugins > Live Channels**, reload it, and use every control the change touched.
-4. Check the page at 375 px wide.
+3. Open each changed tab under **Dashboard > Plugins > Live Channels** and hard reload it, since the dashboard caches scripts.
+4. Use every control the change touched.
+5. Check the page at 375 px wide.
 
 ## Checklist
 
@@ -123,4 +138,5 @@ Run it before a release, and after any change to a filter chain, an encoder choi
 * [ ] `dotnet test` passes, and the report says whether jellyfin-ffmpeg was found.
 * [ ] `.github/scripts/test-in-jellyfin.sh` passes for a change to the pipeline, and before a release.
 * [ ] Every changed page script passes `node --check`, and its Base imports exist.
-* [ ] Every changed page was opened on a test server.
+* [ ] Every changed page was clicked through in the harness at 1280 and 375 px, with real keystrokes in every picker.
+* [ ] Every changed page was opened on a test server after a hard reload.

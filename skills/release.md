@@ -48,11 +48,18 @@ Raising a part sets every part after it to `0`. `12.4.2.4` becomes `12.4.3.0` fo
 
 ## Set the Release
 
-Edit `build.yaml`.
+Follow these steps exactly, in this order. First merge the release branch into `master`, once every check above has passed on it, and work on `master` from here.
+
+```bash
+git checkout master
+git merge --ff-only <branch>
+```
+
+Then edit `build.yaml`.
 
 1. Set `version` to the new version.
 2. Replace the whole `changelog` with this release's entries. Each release lists only its own changes. See [documentation.md](documentation.md#release-notes) for how to write them.
-3. Name the Base version in `developer` when it changed, such as "Uses JPKribs.Jellyfin.Base 2026.11.17", with what it replaced locally.
+3. Name the Base version in `developer` when it changed, such as "Uses JPKribs.Jellyfin.Base 2026.11.19", with what it replaced locally.
 4. Keep `description` and `overview` true for this release. `manifest.json` takes its own description, so update both together.
 
 Commit it on its own.
@@ -67,16 +74,17 @@ git push
 
 ## Publish
 
-1. **Draft.** The **Create/Update Release Draft** workflow builds the zip and writes a draft release named `v<version>` with the changelog as its notes. A push to `master` that changes anything outside the docs and `.github` starts it, and the Actions tab starts it by hand.
-2. **Check.** Open the draft on GitHub. The notes must match `build.yaml`, and the zip and its `.md5` must be attached.
-3. **Release.** Publish the draft. The **Publish Plugin** workflow takes the attached zip's checksum, adds the version to `manifest.json`, and commits "Update manifest for release v<version>".
-4. **Pull.**
+1. **Draft.** The **Create/Update Release Draft** workflow builds the zip and writes a draft release named `v<version>` with the changelog as its notes. The push above starts it, since it changes files outside the docs and `.github`. Start it from the Actions tab only when the push did not.
+2. **Check.** Open the releases on GitHub once the workflow finishes. A push and a run by hand can each write a draft, so one version can have two drafts, one of them empty. Pick the draft whose notes match `build.yaml` and that has the zip and its `.md5` attached, and delete the other.
+3. **Release.** Publish that draft.
+4. **Manifest.** The **Publish Plugin** workflow takes the attached zip's checksum, adds the version to `manifest.json`, and commits "Update manifest for release v<version>". Check that the commit exists and that its checksum matches the release's `.md5`.
+5. **Pull.**
 
     ```bash
     git pull
     ```
 
-5. **Verify.** On a test server, add the repository URL, install the release from the catalog, restart, and open each tab.
+6. **Verify.** On a test server, add the repository URL, install the release from the catalog, restart, and open each tab after a hard reload.
 
 ## When a Release Is Wrong
 
@@ -94,5 +102,7 @@ git push
 * [ ] Docs, screenshots, Versioning, and How It Works describe this release.
 * [ ] `mkdocs build --strict` passes.
 * [ ] The changelog lists only this release, in the four keys.
-* [ ] The draft matches `build.yaml` before it is published.
+* [ ] The release branch was merged into `master` before the version was set.
+* [ ] The published draft matches `build.yaml` and has the zip and its `.md5`, and no second draft is left.
+* [ ] The manifest commit's checksum matches the release's `.md5`.
 * [ ] The manifest commit is pulled.
