@@ -1,13 +1,13 @@
 """Live Channels screenshot server: serves the plugin pages, Base and jellyfin-web the way Jellyfin does.
 
 Usage: python3 -I server.py 8831
-BASEVER picks the Base package (default 2026.11.19), JELLYFIN_WEB the jellyfin-web folder.
+BASEVER picks the Base package (default 2026.11.20), JELLYFIN_WEB the jellyfin-web folder.
 """
 import http.server, json, os, re, sys, urllib.parse
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.join(HERE, '..', '..', 'Jellyfin.Plugin.LiveChannels')
 JF = os.environ.get('JELLYFIN_WEB', '/Applications/Jellyfin.app/Contents/Resources/jellyfin-web')
-BASE = os.path.expanduser('~/.nuget/packages/jpkribs.jellyfin.base/%s/assets' % os.environ.get('BASEVER', '2026.11.19'))
+BASE = os.path.expanduser('~/.nuget/packages/jpkribs.jellyfin.base/%s/assets' % os.environ.get('BASEVER', '2026.11.20'))
 TYPES = {'.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml',
          '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.png': 'image/png'}
 

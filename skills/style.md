@@ -472,14 +472,6 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 
 ## Hand Built Pieces
 
-One marked stopgap stands in for a Base defect, in a `<style>` block at the top of the Channels and Popular pages:
-
-```css
-.pluginConfigurationPage .base-repeater.card { contain: none; cursor: auto; }
-```
-
-Base's card Repeater carries a bare `card` class. Jellyfin's own `.card` rule gives it `contain: paint`, which moves the fixed lists of the genre, item, and language pickers inside a source or block card off screen. The comment above the rule names the defect. Delete the rule, and this paragraph, in the commit that moves to a Base version that names the class `base-repeater-card`.
-
 Every control on the pages is a Base component, with nothing built around one. Never put a stand-in where a Base option exists. When a page needs something Base lacks, name the missing option here, report it to the Base owner, and wait for it. Never keep a Base gap silently, and never step around a component in the plugin.
 
 * A card field that shows only for some values uses the Repeater field's `visible(item)`, and a label that follows the card uses `labelFor(item)`.

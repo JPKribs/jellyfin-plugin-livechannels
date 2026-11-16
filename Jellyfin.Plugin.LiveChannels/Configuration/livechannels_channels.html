@@ -8,10 +8,6 @@
             src: url('configurationpage?name=livechannels_symbols.ttf') format('truetype');
             font-display: swap;
         }
-        /* Stopgap for a Base defect. A card Repeater carries a bare "card" class, and Jellyfin's own .card rule */
-        /* sets contain: paint, which traps the fixed dropdowns of the pickers inside it off screen. */
-        /* Delete this rule in the commit that moves to a Base version that names the class base-repeater-card. */
-        .pluginConfigurationPage .base-repeater.card { contain: none; cursor: auto; }
     </style>
     <div data-role="content">
         <div class="content-primary">
