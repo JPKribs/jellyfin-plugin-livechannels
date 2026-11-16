@@ -351,7 +351,7 @@ export default function (view) {
     function searchSourceItems(libraryId, query) {
         if (!libraryId) return Promise.resolve([]);
         return ApiClient.getItems(ApiClient.getCurrentUserId(), {
-            ParentId: libraryId, IncludeItemTypes: 'Series,Movie,Episode', Recursive: true,
+            ParentId: libraryId, IncludeItemTypes: 'Series,Movie,Episode,MusicVideo,Video', Recursive: true,
             searchTerm: query, SortBy: 'SortName', SortOrder: 'Ascending',
             Limit: 20, Fields: 'ProductionYear', EnableTotalRecordCount: false
         }).then(function (res) { return ((res && res.Items) || []).map(pickerItem); });
@@ -385,7 +385,7 @@ export default function (view) {
     // Renders a genre Chip Select for a source card.
     function genreField(key, placeholder) {
         return function (value, change) {
-            var chip = createChipSelect({ placeholder: placeholder, value: value || [], onChange: function () { change(); } });
+            var chip = createChipSelect({ placeholder: placeholder, value: value || [], noResultsText: 'No genres in this library match.', onChange: function () { change(); } });
             return sourcePart(key, chip,
                 function () { return chip.getValue().map(String); },
                 function (v) { chip.setValue(v || []); });
@@ -398,10 +398,10 @@ export default function (view) {
         var part = null;
         var picker = createMediaPicker({
             value: value || [],
-            itemTypes: ['Series', 'Movie', 'Episode'],
+            itemTypes: ['Series', 'Movie', 'Episode', 'MusicVideo', 'Video'],
             placeholder: 'Search this library',
             emptyText: 'No items picked.',
-            typeLabels: { Series: 'Show' },
+            typeLabels: { Series: 'Show', MusicVideo: 'Music Video', Video: 'Home Video' },
             maxHeight: 360,
             searchFn: function (query) { return searchSourceItems(part ? part.entry.library : '', query); },
             onChange: function () { change(); }
@@ -425,7 +425,7 @@ export default function (view) {
     function loadCardGenres(libraryId) {
         if (!libraryId) return Promise.resolve([]);
         if (!genreCache[libraryId]) {
-            genreCache[libraryId] = ApiClient.getJSON(ApiClient.getUrl('Genres', { ParentId: libraryId, IncludeItemTypes: 'Movie,Series,Episode', Recursive: true, Limit: 500, SortBy: 'SortName' }))
+            genreCache[libraryId] = ApiClient.getJSON(ApiClient.getUrl('Genres', { ParentId: libraryId, IncludeItemTypes: 'Movie,Series,Episode,MusicVideo,Video', Recursive: true, Limit: 500, SortBy: 'SortName' }))
                 .then(function (result) { return ((result && result.Items) || []).map(function (g) { return g.Name; }); })
                 .catch(function () { delete genreCache[libraryId]; return []; });
         }
