@@ -12,7 +12,7 @@ The agreed name for every concept in this plugin. The UI, the docs, messages, an
 | Term | Meaning | In Code | Not |
 | :--- | :--- | :--- | :--- |
 | Channel | A looping virtual TV channel built from the library and served in Live TV | `Channel` | Station, stream, feed |
-| Channel number | A channel's place in the guide. 0 is the Popular Channel | `Channel.Number` | Position, slot |
+| Channel Number | A channel's place in the guide. 0 is the Popular Channel | `Channel.Number` | Position, slot |
 | Enabled, Disabled | Whether a channel is served in Live TV. A disabled channel can be a draft. The count cards on the Channels tab total each | `Channel.Enabled` | Active, hidden |
 | Popular Channel | The built-in channel 0 that programs itself from what the server watches and adds | `PluginConfiguration.PopularChannel`, `ChannelService.Popular` | Trending channel, default channel |
 | Logo | The channel's image in the guide, uploaded through the logo Image Picker or generated | `LogoData`, `DefaultLogoService` | Icon, artwork |

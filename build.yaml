@@ -16,6 +16,7 @@ artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
   fixed:
+  - The Stream Time Limit help said it closes a stream someone is watching. It says it closes a stream once no one is watching it, as it does
   - In a source or block card, the genre, item, and language pickers opened their lists off screen, so nothing seemed to look up. The lists open under their fields
   - Include Genres and Exclude Genres offered no genres for a music video or home video library, and Whitelist and Blacklist could not find music videos or home videos. Both cover every kind a channel plays, and a library with no genres says so
   - The arrows on collapsible sections are back to their usual size

@@ -19,7 +19,7 @@ The count cards, the channel list, and the editor sections with the Save Bar bel
 | Setting | What it does | Default |
 | --- | --- | --- |
 | **Name** | The channel's display name in the guide. Required. | empty |
-| **Channel number** | The guide position. Required for an enabled channel and must be unique. 0 is reserved for the Popular Channel. | next free number |
+| **Channel Number** | The guide position. Required for an enabled channel and must be unique. 0 is reserved for the Popular Channel. | next free number |
 
 The Channel section holds the name, number, and logo, here with a generated Symbol logo.
 
@@ -243,7 +243,7 @@ The Subtitle Appearance section with a Custom text color and the outline left As
 | **Size** | A slider in percent of normal, 50 to 300 in steps of 5. 100 keeps the authored size. | 100 |
 | **Text Color** | A color field with **As Authored** and **Custom** beside it. **As Authored** keeps each subtitle's own color and dims the field. **Custom** uses the color picked in the field, saved as `#RRGGBB`. | As Authored |
 | **Outline Color** | The outline color, or the box color with a solid box, with **As Authored** and **Custom** like the text color. | As Authored |
-| **Background** | **As authored**, **Outline**, or **Solid box**. A solid box is the most readable over bright scenes. | As authored |
+| **Background** | **As Authored**, **Outline**, or **Solid box**. A solid box is the most readable over bright scenes. | As Authored |
 | **Bold** | Draws the text bold. | off |
 
 ### Sessions

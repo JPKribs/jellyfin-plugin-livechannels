@@ -49,7 +49,7 @@ These rules apply to every string a user can see. That includes HTML, JS, C# mes
 
 Title Case capitalizes every word except short articles, conjunctions, and prepositions in the middle, such as "a", "and", "of", "to", and "in". Keep acronyms as written, such as "ffmpeg", "GIF", "kbps", and "MB".
 
-Many labels on the pages are still in sentence case, such as **Channel number**. Put a label in Title Case when you change it, and change the docs in the same commit.
+Some labels and options on the pages are still in sentence case, such as **Solid box**. Put a label in Title Case when you change it, and change the docs in the same commit.
 
 ### Words to Use
 
