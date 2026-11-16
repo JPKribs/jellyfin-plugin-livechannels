@@ -456,6 +456,8 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 
 ## Hand Built Pieces
 
+One marked stopgap stands in for a Base defect: `.base-repeater.card { contain: none; cursor: auto; }` on the Channels and Popular pages. Base's card Repeater carries a bare `card` class that Jellyfin's own `.card` rule styles, and its paint containment opens picker lists off screen. Delete the rule when Base names the class `base-repeater-card`.
+
 Every control on the pages is a Base component, with nothing built around one. When a page needs something Base lacks, report the gap to Base and wait for the option. Never step around a component in the plugin.
 
 * A card field that shows only for some values uses the Repeater field's `visible(item)`, and a label that follows the card uses `labelFor(item)`.
