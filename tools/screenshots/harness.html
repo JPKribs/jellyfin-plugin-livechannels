@@ -1,0 +1,40 @@
+<!doctype html><html dir="ltr" class="layout-desktop"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Channels harness</title>
+<script>
+// Loads jellyfin-web's stylesheets in the order the server lists them, then lets the page start.
+window.__styles = fetch('/stylesheets.json').then(function (r) { return r.json(); }).then(function (list) {
+    return Promise.all(list.map(function (name) {
+        return new Promise(function (done) {
+            var link = document.createElement('link');
+            link.rel = 'stylesheet'; link.href = '/jf/' + name; link.onload = link.onerror = done;
+            document.head.insertBefore(link, document.getElementById('afterJellyfin'));
+        });
+    }));
+});
+</script>
+<meta id="afterJellyfin">
+<style>
+/* The plugin's own symbols font, as the Channels page declares it. */
+@font-face { font-family: 'LiveChannelsSymbols'; src: url('/configurationpage?name=livechannels_symbols.ttf') format('truetype'); font-display: block; }
+</style>
+<link rel="stylesheet" href="chrome.css">
+</head>
+<body class="force-scroll"><div id="chrome"></div><div class="skinBody mainAnimatedPages" id="host"></div>
+<script src="upgrade.js"></script>
+<script src="stub.js"></script>
+<script type="module">
+await window.__styles;
+var params = new URLSearchParams(location.search);
+var page = params.get('page') || 'livechannels_channels';
+if (params.get('stress')) window.__stress = window.__STRESS_DONE;
+if (params.get('chrome')) { document.body.classList.add('withChrome'); (await import('./chrome.js')).drawChrome(page); }
+await document.fonts.load('40px "LiveChannelsSymbols"');
+var html = await (await fetch('/configurationpage?name=' + page)).text();
+var host = document.getElementById('host');
+host.innerHTML = html;
+var view = host.firstElementChild;
+var mod = await import('/configurationpage?name=' + page + '.js');
+mod.default(view);
+view.dispatchEvent(new CustomEvent('viewshow'));
+window.__ready = true;
+</script></body></html>

@@ -1,0 +1,63 @@
+<!doctype html><html dir="ltr" class="layout-desktop"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live TV harness</title>
+<script>
+// Loads jellyfin-web's stylesheets in the order the server lists them, then lets the page start.
+window.__styles = fetch('/stylesheets.json').then(function (r) { return r.json(); }).then(function (list) {
+    return Promise.all(list.map(function (name) {
+        return new Promise(function (done) {
+            var link = document.createElement('link');
+            link.rel = 'stylesheet'; link.href = '/jf/' + name; link.onload = link.onerror = done;
+            document.head.insertBefore(link, document.getElementById('afterJellyfin'));
+        });
+    }));
+});
+</script>
+<meta id="afterJellyfin">
+<style>
+@font-face { font-family: 'LiveChannelsSymbols'; src: url('/configurationpage?name=livechannels_symbols.ttf') format('truetype'); font-display: block; }
+.ltHeader { display: flex; align-items: center; height: 46px; padding: 0 22px 0 30px; font-size: 14px; }
+.ltBrand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 17px; margin-right: 26px; }
+.ltBrandIcon { width: 26px; height: 26px; background: url('/jf/banner-dark.31011bc0c5e6acb07879.png') no-repeat 0 0 / auto 26px; }
+.ltNav { display: flex; gap: 22px; }
+.ltNav span { display: flex; align-items: center; gap: 8px; }
+.ltNav .material-icons, .ltRight .material-icons { font-size: 22px; }
+.ltRight { margin-left: auto; display: flex; align-items: center; gap: 26px; }
+.ltAvatar { width: 38px; height: 38px; border-radius: 50%; background: #00a4dc; display: flex; align-items: center; justify-content: center; }
+.ltAvatar .material-icons { font-size: 30px; }
+.ltBar { display: flex; align-items: center; padding: 10px 26px 12px 40px; }
+.ltTitle { font-size: 22px; display: flex; align-items: center; gap: 4px; }
+.ltCount { margin-left: 18px; width: 30px; height: 30px; border-radius: 50%; background: #303030; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+.ltTools { margin-left: auto; display: flex; align-items: center; gap: 22px; color: rgba(255,255,255,0.5); }
+.ltTools .material-icons { font-size: 24px; }
+.ltTools .ltOn { color: #fff; }
+.ltGrid { padding: 0 26px 0 30px; }
+.ltGrid .card { width: 20%; }
+</style>
+</head><body class="force-scroll"><div class="skinBody">
+<div class="ltHeader"><div class="ltBrand"><div class="ltBrandIcon"></div>Jellyfin</div>
+<div class="ltNav"><span><span class="material-icons">favorite</span>Favorites</span><span><span class="material-icons">live_tv</span>Live TV</span><span><span class="material-icons">movie</span>Movies</span><span><span class="material-icons">music_note</span>Music</span><span><span class="material-icons">tv</span>Shows</span></div>
+<div class="ltRight"><span class="material-icons">group</span><span class="material-icons">cast</span><span class="material-icons">search</span><div class="ltAvatar"><span class="material-icons">person</span></div></div></div>
+<div class="ltBar"><div class="ltTitle">Channels<span class="material-icons">arrow_drop_down</span></div><div class="ltCount">5</div>
+<div class="ltTools"><span class="material-icons ltOn">filter_alt</span><span class="material-icons">chevron_left</span><span class="material-icons ltOn">chevron_right</span></div></div>
+<div class="ltGrid itemsContainer vertical-wrap" id="grid"></div>
+</div>
+<script src="stub.js"></script>
+<script type="module">
+await window.__styles;
+await document.fonts.load('40px "LiveChannelsSymbols"');
+var rows = [
+    [0, 'Popular', 'diversity_1', 'Paper Kites', '7:41 PM - 9:28 PM'],
+    [1, 'Saturday Cartoons', 'cruelty_free', 'Space Pups', '8:30 PM - 8:52 PM'],
+    [2, 'Movie Night', 'movie', 'Midnight Harbor (1999)', '7:58 PM - 9:50 PM'],
+    [3, 'Sitcom Classics', '', 'Corner Diner', '8:22 PM - 8:45 PM'],
+    [4, 'Music Video Mix', 'music_note', 'Summer Static', '8:39 PM - 8:43 PM']
+];
+document.getElementById('grid').innerHTML = rows.map(function (r) {
+    return '<div class="card squareCard card-hoverable"><div class="cardBox cardBox-bottompadded"><div class="cardScalable"><div class="cardPadder cardPadder-square"></div>'
+        + '<div class="cardImageContainer coveredImage cardContent" style="background-image:url(' + window.__generatedLogo(r[0], r[1], r[2]) + ')"></div></div>'
+        + '<div class="cardText cardTextCentered cardText-first"><bdi>' + r[0] + ' ' + r[1] + '</bdi></div>'
+        + '<div class="cardText cardTextCentered cardText-secondary"><bdi>' + r[3] + '</bdi></div>'
+        + '<div class="cardText cardTextCentered cardText-secondary"><bdi>' + r[4] + '</bdi></div></div></div>';
+}).join('');
+window.__ready = true;
+</script></body></html>

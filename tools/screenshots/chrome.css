@@ -1,0 +1,20 @@
+/* The dashboard's drawer and header, drawn around the page for the full window shots (harness.html?chrome=1). */
+body.withChrome { padding-left: 240px; }
+body.withChrome #host { padding-top: 96px; }
+.lcDrawer { position: fixed; left: 0; top: 0; bottom: 0; width: 240px; background: #202020; color: #fff; overflow: hidden; z-index: 5; border-right: 1px solid rgba(255,255,255,0.08); font-family: "Noto Sans", sans-serif; }
+.lcBrand { display: flex; align-items: center; gap: 14px; padding: 16px 16px 20px; }
+.lcBrandIcon { width: 40px; height: 40px; background: url('/jf/banner-dark.31011bc0c5e6acb07879.png') no-repeat 0 0 / auto 40px; }
+.lcBrandName { font-size: 20px; line-height: 1.2; }
+.lcBrandVer { font-size: 13px; color: rgba(255,255,255,0.7); }
+.lcGroup { font-size: 14px; color: rgba(255,255,255,0.7); padding: 14px 16px 8px; }
+.lcItem { display: flex; align-items: center; gap: 22px; padding: 11px 16px; font-size: 16px; }
+.lcItem .material-icons { font-size: 24px; width: 28px; }
+.lcItem .lcMore { margin-left: auto; width: auto; }
+.lcItem.lcActive { background: rgba(0,164,220,0.16); }
+.lcHeader { position: fixed; left: 240px; right: 0; top: 0; height: 96px; background: #101010; z-index: 4; font-family: "Noto Sans", sans-serif; }
+.lcBack { position: absolute; left: 22px; top: 10px; color: #fff; font-size: 26px; padding: 6px; }
+.lcAvatar { position: absolute; right: 14px; top: 4px; width: 40px; height: 40px; border-radius: 50%; background: #00a4dc; color: #fff; display: flex; align-items: center; justify-content: center; }
+.lcAvatar .material-icons { font-size: 30px; }
+.lcTabs { position: absolute; left: 0; right: 0; top: 48px; display: flex; justify-content: center; }
+.lcTab { font-size: 14px; color: rgba(255,255,255,0.85); padding: 12px 18px 13px; border-bottom: 2px solid transparent; }
+.lcTab.lcActive { color: #00a4dc; border-bottom-color: #00a4dc; }
