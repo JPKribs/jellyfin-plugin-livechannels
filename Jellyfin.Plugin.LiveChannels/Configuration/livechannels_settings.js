@@ -27,7 +27,7 @@ export default function (view) {
     var scaleSlider = createSliderField({ min: 50, max: 300, step: 5, value: 100, suffix: '%', label: 'Size' });
     var textColor = colorField('#FFFFFF', 'Text Color');
     var outlineColor = colorField('#000000', 'Outline Color');
-    var saveBar = createSaveBar({ fill: true, saveText: 'Save Settings', savedText: 'Saved. Refreshing Live TV…', onSave: saveSettings });
+    var saveBar = createSaveBar({ fill: true, savedText: 'Saved. Refreshing Live TV…', onSave: saveSettings });
     var stressRounds = createDefinitionList({ items: [] });
     var stressSummary = null;
 
@@ -255,7 +255,7 @@ export default function (view) {
                 apply.addEventListener('click', function () {
                     el('maxSessions').value = s.Recommended;
                     saveBar.setDirty(true);
-                    Shared.setStatus('stressStatus', 'Set to ' + s.Recommended + '. Select Save Settings to keep it.', false);
+                    Shared.setStatus('stressStatus', 'Set to ' + s.Recommended + '. Select Save to keep it.', false);
                 });
                 el('stressSummary').appendChild(apply);
             }

@@ -96,7 +96,7 @@ A `fieldDescription` sits under every field that is not obvious from its label.
 | :--- | :--- |
 | Bakes subtitles in; Forced only burns the forced track. | Bakes subtitles into the picture for everyone. |
 | Even one stream could not hold realtime; consider lowering resolution. | Even one stream could not hold realtime. Lower the resolution or bitrate. |
-| Set to 3 — remember to Save. | Set to 3. Select Save Settings to keep it. |
+| Set to 3 — remember to Save. | Set to 3. Select Save to keep it. |
 | This setting enables the generation of Up Next cards. | Plays a 10 second card before each item. |
 
 A section intro is one `fieldDescription` right under the section title. It says what the section is for in one sentence.
@@ -115,7 +115,7 @@ A placeholder shows an example of a valid value. It is never the only place an i
 
 * A verb, or a verb and a noun. **Save**, **Add Source**, **Run Now**.
 * Name the object when the page has more than one of that action. **Add Rating Block** and **Add Placeholder Block** share the Filters section.
-* A primary Save is **Save**. Use **Save** and a noun only when the noun helps, such as **Save Channel** under an editor.
+* A Save is always **Save**, with no noun.
 * An icon only button carries a `title` of one to three words, such as `Remove`, `Move Up`, or `Retry`. Never a sentence.
 * A button that runs for a while shows progress in place. See [Progress](#progress).
 
@@ -274,16 +274,15 @@ Every config page uses Jellyfin's page shell.
 
 ### Saving
 
-Pick one model per page and keep it.
+Every save looks the same.
 
-| Model | Use it when | Save button |
-| :--- | :--- | :--- |
-| One Save per page | Settings depend on each other, as on every Live Channels page | `raised base-button primary fill` at the bottom |
-| One Save per section | Sections are independent and long | `raised base-button primary small` in `base-collapsible-actions flush` |
-| Editor dialog | Each record is edited on its own | **Done** in `openEditorDialog` |
-
-* Track unsaved changes with `createChangeTracker`. The channel editor uses it to ask before discarding edits.
-* Report the result with `shared.setStatus` next to the button.
+* Every save is Base's `createSaveBar` with `fill: true`, and its button reads **Save**.
+* One Save Bar per thing that saves. A page with one save has one bar at the bottom of what it saves, and a section that saves on its own has one bar at the bottom of its content.
+* The Save Bar is the last element of what it saves. Nothing sits beside it or below it in that section.
+* Other actions that belong with the save, such as Reset to Defaults, Clear, Test, Run Now, or Refresh, go in one `base-button-row` directly above the Save Bar. A select that belongs with them stays a normal select in that row.
+* The Save Bar shows the outcome. Never add a status span or a hand placed Save button beside it, and never position a Save Bar with plugin CSS.
+* Wire `setDirty` from the page's change tracking, and have `onSave` return the save promise. The channel editor tracks changes with `createChangeTracker` and asks before discarding edits.
+* An editor dialog closes with **Done** in `openEditorDialog`.
 * Read the config fresh before a save, change only what the page owns, and save it, so another tab's settings survive. The Channels page also refuses a save when the stored channels changed since it loaded.
 
 ## Components
@@ -335,11 +334,14 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 | Primary action | `raised base-button primary` |
 | Destructive action | `raised base-button destructive` |
 | Secondary action | `raised base-button secondary` |
-| Compact action in a section | add `small` |
+| Save | `createSaveBar` with `fill: true`. See [Saving](#saving) |
+| Action in the row above a Save Bar | `raised base-button secondary fill`, or `raised base-button destructive fill` for one that deletes or resets data, in one `base-button-row` |
+| Compact action in a section | add `small`, never in the row above a Save Bar |
 | Icon and label in a toolbar | `raised base-button` holding a `material-icons` span and a label |
 | Icon only in a row | `base-row-btn`, with `.dirty` for unsaved and `.success` after saving |
 
 * Every button is `<button is="emby-button" type="button">`.
+* Never build a Save button by hand.
 * Icons are `<span class="material-icons" aria-hidden="true">name</span>`.
 * Close a dialog with `base-dialog-close` and `&times;`. Never "✕" or another glyph.
 

@@ -8,7 +8,7 @@ Everything the plugin can be told to do, tab by tab. The configuration lives at 
 
 The dropdown at the top selects the channel being edited. **New** creates a channel with the next free number, **Delete** removes the selected channel, and the **Enabled** button toggles whether it is served. Disabled channels are absent from Live TV and can be incomplete drafts.
 
-The editor works on a copy. Nothing changes on the server until **Save channel**, and switching to another channel with unsaved edits asks before discarding them. Saving triggers a guide refresh, so edits show up in Live TV right away.
+The editor works on a copy. Nothing changes on the server until **Save**, and switching to another channel with unsaved edits asks before discarding them. Saving triggers a guide refresh, so edits show up in Live TV right away.
 
 The channel list with its enabled and disabled counts and the editor sections below.
 
@@ -121,7 +121,7 @@ The Channel Settings section covers playback, guide tags, episode grouping, cont
 
 ### Saving, Import, and Export
 
-**Save Channel** sits under the editor. Its line shows **Unsaved changes.** while the channel differs from what was loaded, says why a save stopped, such as a field marked in red, and shows **Saved. Refreshing Live TV…** once the server takes it.
+**Save** sits under the editor. Its line shows **Unsaved changes.** while the channel differs from what was loaded, says why a save stopped, such as a field marked in red, and shows **Saved. Refreshing Live TV…** once the server takes it.
 
 
 **Export** writes every channel (filters, appearance, loop behaviour, and logos) to one JSON file. **Import** merges such a file back: a channel whose number matches an existing one is updated in place, others are added. Library and genre filters carry over when the target server has libraries with matching names, and hand-picked items keep only what exists on the target.
@@ -245,7 +245,7 @@ The Stress Test section picks a test item and runs the measurement.
 
 ![Stress Test](screenshots/Stress%20Test.png)
 
-**Stress test.** Measures how many concurrent streams the server can sustain, using the real channel pipeline. Pick one demanding movie or episode (4K or HDR gives the most honest number), then each round encodes a minute of it with one more simultaneous stream than the last, until a stream drops below realtime. Each round shows a **Passed** or **Failed** badge with its slowest frame rate. The last fully passing round is the recommendation, shown in a box with an **Apply** button that fills in Maximum Concurrent Streams for you. Select **Save Settings** to keep it. The test refuses to start while channel streams are active, and a viewer tuning in cancels it, since a real viewer always wins the encoder. Nothing about the test is saved.
+**Stress test.** Measures how many concurrent streams the server can sustain, using the real channel pipeline. Pick one demanding movie or episode (4K or HDR gives the most honest number), then each round encodes a minute of it with one more simultaneous stream than the last, until a stream drops below realtime. Each round shows a **Passed** or **Failed** badge with its slowest frame rate. The last fully passing round is the recommendation, shown in a box with an **Apply** button that fills in Maximum Concurrent Streams for you. Select **Save** to keep it. The test refuses to start while channel streams are active, and a viewer tuning in cancels it, since a real viewer always wins the encoder. Nothing about the test is saved.
 
 **Reset Schedule.** Rebuilds everything from the current settings: it clears the cached schedules and buffer cards, then runs Jellyfin's Refresh Guide task (which rebuilds every schedule and the guide) and the **Generate Buffer Cards** task. The program on air keeps its slot. Use it to clear a stale schedule, like after changing a channel's filters.
 

@@ -156,10 +156,10 @@ export function createBlockEditors(options) {
 ### CSS
 
 ```css
-/* lc-save */
-/* Space above the channel's Save Bar under the last section. */
-/* Example: <div class="lc-save"><div class="base-save-bar">...</div></div> */
-.lc-save { margin-top: var(--base-gap-wide); }
+/* lc-guide-row */
+/* A guide row with a fixed time column and the program filling the rest. */
+/* Example: <div class="lc-guide-row"><span>8:00</span><span>Pilot</span></div> */
+.lc-guide-row { display: grid; grid-template-columns: 5rem 1fr; gap: var(--base-gap-wide); }
 ```
 
 * Three lines above each component, the name, what it looks like, and one example.

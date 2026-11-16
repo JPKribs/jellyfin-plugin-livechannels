@@ -27,7 +27,7 @@ export default function (view) {
     var channels = [];
     var currentIndex = -1;
     // The channel being edited: a deep COPY of channels[currentIndex]. Every editor control (fields, source
-    // cards, rating blocks) works on this copy, and only "Save channel" writes it back, so saving channel B
+    // cards, rating blocks) works on this copy, and only Save writes it back, so saving channel B
     // can never persist half-made edits to channel A, and switching away discards consistently (with a
     // confirm when something would be lost).
     var editing = null;
@@ -575,7 +575,6 @@ export default function (view) {
 
         saveBar = createSaveBar({
             fill: true,
-            saveText: 'Save Channel',
             savedText: 'Saved. Refreshing Live TV…',
             onSave: saveChannel
         });
@@ -661,7 +660,7 @@ export default function (view) {
         var stored = channels[currentIndex];
         if (!stored) { editing = null; editorTracker.markClean(); return; }
 
-        // Deep-copy the stored channel, so nothing the editor does leaks into the saved working set until Save Channel.
+        // Deep-copy the stored channel, so nothing the editor does leaks into the saved working set until Save.
         editing = JSON.parse(JSON.stringify(stored));
         editing.Sources = editing.Sources || [];
         var ch = editing;

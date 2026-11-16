@@ -141,7 +141,7 @@ export default function (view) {
             ensureBlockEditors(info);
             return Shared.getConfig().then(loadPopular);
         }).catch(function () {
-            Shared.setStatus('popularStatus', 'Could not load the settings. Reload the page to try again.', true);
+            saveBar.setState('failed', 'Could not load the settings. Reload the page to try again.');
         });
     }
 }

@@ -73,7 +73,7 @@
                                     <input is="emby-input" type="number" id="channelNumber" min="1" step="1" autocomplete="off" />
                                 </div>
                                 <h3 class="base-subsection-title">Logo</h3>
-                                <div id="logoPickerHost" class="inputContainer"></div>
+                                <div id="logoPickerHost" class="selectContainer"></div>
                                 <div class="selectContainer">
                                     <label class="selectLabel" for="logoStyle">Generated Logo Style</label>
                                     <select is="emby-select" id="logoStyle">
@@ -130,13 +130,13 @@
                                 </div>
 
                                 <h3 class="base-subsection-title">Review Scores</h3>
-                                <div class="inputContainer">
-                                    <label>Minimum Community Rating</label>
+                                <div class="selectContainer">
+                                    <label class="selectLabel">Minimum Community Rating</label>
                                     <div id="minCommunityRatingHost"></div>
                                     <div class="fieldDescription">Only include content rated at least this by the audience, on a 0 to 10 scale, like 7.5 for a best-of channel. 0 allows everything. Content with no community rating is dropped.</div>
                                 </div>
-                                <div class="inputContainer">
-                                    <label>Minimum Critic Rating</label>
+                                <div class="selectContainer">
+                                    <label class="selectLabel">Minimum Critic Rating</label>
                                     <div id="minCriticRatingHost"></div>
                                     <div class="fieldDescription">Only include content with at least this critic score, on a 0 to 100 scale. 0 allows everything. Content with no critic rating is dropped.</div>
                                 </div>
@@ -287,20 +287,13 @@
                             </div>
                         </div>
 
-                        <div id="channelSaveBar" class="lc-save"></div>
+                        <div id="channelSaveBar"></div>
                     </div>
 
                 </div>
             </form>
         </div>
     </div>
-
-    <style>
-        /* lc-save */
-        /* Space above the channel's Save Bar under the last section. */
-        /* Example: <div class="lc-save"><div class="base-save-bar">...</div></div> */
-        .lc-save { margin-top: var(--base-gap-wide); }
-    </style>
 
     <link rel="stylesheet" href="configurationpage?name=livechannels_jpkribs_shared.css">
 </div>

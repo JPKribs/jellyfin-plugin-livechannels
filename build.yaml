@@ -26,6 +26,7 @@ changelog:
   - Minimum Community Rating, Minimum Critic Rating, and subtitle Size are sliders
   - Subtitle Text Color and Outline Color use a color picker, with As Authored keeping each subtitle's own color
   - Each page saves from a save bar that shows unsaved changes and why a save stopped
+  - Every Save is the same full width Save Bar, with any other actions in a full width row above it
   - Sessions are media rows with the channel logo, a speed badge, and a No viewers countdown badge
   - Stress test rounds show Passed or Failed badges, and the recommendation sits in a box with an Apply button
   - Labels use Title Case
