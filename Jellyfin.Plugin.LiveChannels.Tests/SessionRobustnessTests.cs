@@ -104,11 +104,14 @@ public class SessionRobustnessTests : IClassFixture<MediaFixtures>
         await Task.Run(() =>
         {
             using var release = new ManualResetEventSlim();
-            var probe = new StorageProbe(TimeSpan.FromMilliseconds(300), _ =>
-            {
-                release.Wait();
-                return true;
-            });
+            var probe = new StorageProbe(
+                TimeSpan.FromMilliseconds(300),
+                _ =>
+                {
+                    release.Wait();
+                    return true;
+                },
+                new StorageProbe.Waiting());
 
             var watch = Stopwatch.StartNew();
             Assert.False(probe.Exists("/mnt/nfs/a.mkv"));
@@ -117,6 +120,46 @@ public class SessionRobustnessTests : IClassFixture<MediaFixtures>
             Assert.False(probe.Exists("/mnt/nfs/c.mkv"));
             Assert.InRange(watch.Elapsed, TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(5));
             release.Set();
+        });
+    }
+
+    /// <summary>
+    /// Storage that stays hung holds a bounded number of threads, however many probes ask.
+    /// True: once the limit of checks is waiting, a new probe answers "missing" at once without starting another.
+    /// False: every standby retry of every session would strand one more thread until the server slows to a halt.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task AHungMount_StrandsABoundedNumberOfThreads_AndRecoversWhenItAnswers()
+    {
+        await Task.Run(() =>
+        {
+            var waiting = new StorageProbe.Waiting();
+            using var release = new ManualResetEventSlim();
+            var started = 0;
+            bool Hang(string path)
+            {
+                Interlocked.Increment(ref started);
+                release.Wait();
+                return true;
+            }
+
+            for (var i = 0; i < 12; i++)
+            {
+                var probe = new StorageProbe(TimeSpan.FromMilliseconds(100), Hang, waiting);
+                Assert.False(probe.Exists("/mnt/nfs/a.mkv"));
+                Assert.True(probe.Hung);
+            }
+
+            // A busy thread pool can start a check late, so the count is read once all of them are running.
+            Assert.Equal(StorageProbe.MaxAbandonedChecks, waiting.Count);
+            Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref started) == StorageProbe.MaxAbandonedChecks, TimeSpan.FromSeconds(10)));
+            Thread.Sleep(200);
+            Assert.Equal(StorageProbe.MaxAbandonedChecks, Volatile.Read(ref started));
+
+            // The mount answers: the waiting checks finish, and a new probe checks for real again.
+            release.Set();
+            Assert.True(SpinWait.SpinUntil(() => waiting.Count == 0, TimeSpan.FromSeconds(10)));
+            Assert.True(new StorageProbe(TimeSpan.FromSeconds(5), _ => true, waiting).Exists("/mnt/nfs/a.mkv"));
         });
     }
 

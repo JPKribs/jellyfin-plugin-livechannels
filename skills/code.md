@@ -185,6 +185,8 @@ export function createBlockEditors(options) {
 * Read the clock once in a method and reuse the value. Two reads can straddle a second and disagree.
 * Take a `TimeProvider` or a clock argument wherever time decides an outcome, so a test can move it.
 * Register services in `PluginServiceRegistrator`.
+* Close in Jellyfin every live stream the plugin releases itself, through `CloseInJellyfinAsync`. Jellyfin keeps an opened stream until `IMediaSourceManager.CloseLiveStream` is called for it.
+* Bound anything that can wait on storage forever. A check on a hung mount never returns, so count the ones still waiting and stop starting more, as `StorageProbe` does.
 * Build every ffmpeg argument list in a `Utilities` class, such as `StreamArguments` or `BumperArguments`, so a test can run it.
 
 ## JavaScript Conventions
