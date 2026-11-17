@@ -90,6 +90,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     private readonly RecordingService _recordings;
     private readonly StressTestService _stress;
     private readonly ISessionManager _sessionManager;
+    private readonly IMediaSourceManager _mediaSources;
     private readonly ILogger<LiveChannelsTvService> _logger;
 
     private readonly IServerApplicationHost _appHost;
@@ -115,6 +116,10 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     // watchdog releases it. Reported or departed ids are pruned every sweep.
     private readonly ConcurrentDictionary<string, DateTime> _unreportedSince = new(StringComparer.Ordinal);
 
+    // The live stream handed to Jellyfin for each consumer id. Jellyfin keeps every stream it opens until it is
+    // told to close it, so a viewer the plugin releases itself is closed there through this.
+    private readonly ConcurrentDictionary<string, DirectLiveStream> _handed = new(StringComparer.Ordinal);
+
     private readonly object _openGate = new();
     private readonly Timer _reaper;
 
@@ -130,10 +135,11 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// <param name="recordings">The recording service, which fulfils timers by materializing their recordings.</param>
     /// <param name="stress">The stress test, cancelled when a real viewer tunes in.</param>
     /// <param name="sessionManager">The session manager, used by the watchdog to see which live streams clients are actually playing.</param>
+    /// <param name="mediaSources">The media source manager, told to close each live stream the plugin releases without a client close.</param>
     /// <param name="appHost">The application host, used to build the internal live stream endpoint URL each opened source points at.</param>
     /// <param name="appPaths">The application paths, used to default the stream directory under Jellyfin's cache.</param>
     /// <param name="logger">The logger.</param>
-    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, IntroService intros, LiveChannelsActivity activity, TimerService timers, RecordingService recordings, StressTestService stress, ISessionManager sessionManager, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
+    public LiveChannelsTvService(ChannelService channels, StreamSessionService streams, DefaultLogoService defaultLogo, IntroService intros, LiveChannelsActivity activity, TimerService timers, RecordingService recordings, StressTestService stress, ISessionManager sessionManager, IMediaSourceManager mediaSources, IServerApplicationHost appHost, IApplicationPaths appPaths, ILogger<LiveChannelsTvService> logger)
     {
         _channels = channels;
         _streams = streams;
@@ -144,6 +150,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         _recordings = recordings;
         _stress = stress;
         _sessionManager = sessionManager;
+        _mediaSources = mediaSources;
         _logger = logger;
 
         // Logos live in the assets folder of the plugin's stream root, not the shared system temp: a fixed path in
@@ -406,6 +413,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             () => CloseLiveStream(liveStreamId, CancellationToken.None),
             _logger,
             session.MarkData);
+        Hand(liveStreamId, live);
 
         _logger.LogInformation(
             "Live Channels: {Name}: handed to Jellyfin as {Path} (session {Session}, live id {Id})",
@@ -638,7 +646,8 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         // One viewer closed. Drop it from its session; while any other viewer is still watching, the session (and
         // its single encoder) keeps running for them. Only when the LAST viewer leaves does the session linger --
         // kept warm briefly so a viewer surfing straight back adopts it (an essentially instant re-tune) -- and
-        // then tear down if nobody returned.
+        // then tear down if nobody returned. Jellyfin has already let go of the stream, so nothing is closed there.
+        _handed.TryRemove(id, out _);
         if (ReleaseConsumer(id, out var session) && session is not null)
         {
             _ = LingerTeardownAsync(session, session.LingeringSinceUtc);
@@ -1156,7 +1165,43 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             {
                 _ = LingerTeardownAsync(session, session.LingeringSinceUtc);
             }
+
+            _ = CloseInJellyfinAsync(id);
         }
+    }
+
+    /// <summary>Remembers the live stream handed to Jellyfin for a consumer, so it can be closed there later.</summary>
+    /// <param name="consumerId">The consumer id the stream was opened under.</param>
+    /// <param name="stream">The stream handed to Jellyfin.</param>
+    internal void Hand(string consumerId, DirectLiveStream stream) => _handed[consumerId] = stream;
+
+    /// <summary>
+    /// Tells Jellyfin to close the live stream it holds for a consumer the plugin released without a client close.
+    /// Jellyfin keeps each opened stream in memory until it is closed, so an abandoned tune-in would stay there
+    /// for as long as the server runs. The close runs on its own, since Jellyfin closes a stream under its own
+    /// lock and calls back into <see cref="CloseLiveStream"/>, which finds the consumer already gone.
+    /// </summary>
+    /// <param name="consumerId">The consumer id the stream was opened under.</param>
+    /// <returns>The close sent to Jellyfin, or a completed task when Jellyfin holds nothing for the consumer.</returns>
+    internal Task CloseInJellyfinAsync(string consumerId)
+    {
+        if (!_handed.TryRemove(consumerId, out var stream) || string.IsNullOrEmpty(stream.MediaSource.LiveStreamId))
+        {
+            return Task.CompletedTask;
+        }
+
+        var jellyfinId = stream.MediaSource.LiveStreamId;
+        return Task.Run(async () =>
+        {
+            try
+            {
+                await _mediaSources.CloseLiveStream(jellyfinId).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Live Channels: could not close live stream {Id} in Jellyfin", jellyfinId);
+            }
+        });
     }
 
     // Every live-stream and media-source id Jellyfin's session manager currently reports as playing, or null when
@@ -1458,6 +1503,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             if (ReferenceEquals(kv.Value, session))
             {
                 _live.TryRemove(new KeyValuePair<string, LiveSession>(kv.Key, session));
+                _ = CloseInJellyfinAsync(kv.Key);
             }
         }
     }

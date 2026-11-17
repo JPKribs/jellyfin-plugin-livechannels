@@ -184,6 +184,7 @@ public sealed class StreamCleanupTests : IDisposable
             recordings,
             stress,
             Substitute.For<ISessionManager>(),
+            Substitute.For<IMediaSourceManager>(),
             Substitute.For<IServerApplicationHost>(),
             paths,
             NullLogger<LiveChannelsTvService>.Instance);
