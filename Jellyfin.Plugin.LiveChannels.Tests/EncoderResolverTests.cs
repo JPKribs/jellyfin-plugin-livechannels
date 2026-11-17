@@ -37,6 +37,8 @@ public class EncoderResolverTests
     [InlineData("amf", VideoCodec.Hevc, "hevc_amf")]
     [InlineData("qsv", VideoCodec.H264, "h264_qsv")]
     [InlineData("vaapi", VideoCodec.H264, "h264_vaapi")]
+    [InlineData("rkmpp", VideoCodec.H264, "h264_rkmpp")]
+    [InlineData("rkmpp", VideoCodec.Hevc, "hevc_rkmpp")]
     public void ResolveVideo_MapsHardwareAccel_ToEncoder(string accel, VideoCodec codec, string expected)
     {
         var profile = Resolver(accel).ResolveVideo(codec, allowHardware: true);
