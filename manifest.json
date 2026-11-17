@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "12.4.2.7",
+        "changelog": "\n## Fixed\n- A viewer who tuned in and left without closing the stream, such as by quitting the app while it buffered, stayed in Jellyfin's list of open live streams until the server restarted. Jellyfin is told to close the stream when the viewer is released\n- While a network share stayed unreachable, every standby retry left one more server thread waiting on it, which could slow the whole server. At most four wait at a time, and checks start again once the share answers\n\n## Developer\n- LiveChannelsTvService takes IMediaSourceManager and closes the stream of every viewer it releases itself through CloseInJellyfinAsync\n- StorageProbe counts the timed-out checks still waiting across every probe, and takes its own count in a test",
+        "targetAbi": "12.4.0.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v12.4.2.7/jellyfin-plugin-livechannels-12.4.2.7.zip",
+        "checksum": "60c3ed6bc5bce3b58424a23f129c36ad",
+        "timestamp": "2026-11-17T15:43:53Z"
+      },
+      {
         "version": "12.4.2.6",
         "changelog": "\n## Changed\n- On the Hardware Acceleration and Stress Test sections, each value sits right after its label instead of after a wide fixed gap\n\n## Developer\n- Uses JPKribs.Jellyfin.Base 2026.11.20, whose base-repeater-layout-card root class replaces the local stopgap rule on the Channels and Popular pages that kept Jellyfin's .card rule from moving picker lists off screen",
         "targetAbi": "12.4.0.0",
