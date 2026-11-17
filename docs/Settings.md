@@ -209,7 +209,7 @@ The Encoding section.
 
 ### Hardware Acceleration
 
-The **Hardware Acceleration** line shows which accelerator channel streams will use, read from Jellyfin's own Playback settings. Encoding follows it for every vendor. Hardware decoding is used with VideoToolbox, QSV, and VA-API (NVENC and AMF accelerate encoding only). On Linux with Intel hardware the whole pipeline runs on the GPU, including HDR tone mapping and subtitle burn in.
+The **Hardware Acceleration** line shows which accelerator channel streams will use, read from Jellyfin's own Playback settings. Encoding follows it for every vendor. Hardware decoding is used with VideoToolbox, QSV, and VA-API (NVENC, AMF, and RKMPP accelerate encoding only). On Linux with Intel hardware the whole pipeline runs on the GPU, including HDR tone mapping and subtitle burn in. RKMPP on Rockchip SoCs (RK3588/3588S) uses Jellyfin's RKMPP configuration.
 
 The Hardware Acceleration section on a server using Intel QuickSync.
 
