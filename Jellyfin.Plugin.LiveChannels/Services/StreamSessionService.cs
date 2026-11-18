@@ -350,7 +350,10 @@ public class StreamSessionService
             _ = _bumpers.EnsureBlackAsync(OutputFor(stats).Width, CancellationToken.None);
         }
 
-        var perItem = alreadyPerItem || hasHdr || hasVideoOnly || mixedFormats || timeOfDay || bumpers;
+        // An item can only be copied by a producer of its own, so a channel with one to copy streams per item.
+        var copies = CopiesVideo() && programs.Any(p => StreamArguments.CanCopyVideo(p, OutputFor(stats).VideoCodec, StreamArguments.OutputHeight(OutputFor(stats).Width)));
+
+        var perItem = alreadyPerItem || hasHdr || hasVideoOnly || mixedFormats || timeOfDay || bumpers || copies;
         var uniform = IsUniform(programs);
 
         // A fresh session bursts the full head start; a restart only tops up whatever lead it has lost, so the
@@ -1625,6 +1628,42 @@ public class StreamSessionService
             }
         }
 
+        // An item whose video is already in the channel's codec is copied instead of encoded, when nothing has to
+        // be drawn on it. One that produces nothing as a copy is encoded as usual.
+        var (copyWidth, _, copyCodec, copyAudio) = OutputFor(stats);
+        // A copy can only start on a keyframe, so one that starts inside the item starts on the keyframe before the
+        // point the schedule asks for. With no keyframe found the item is encoded.
+        var copyOffset = offset;
+        var copy = CopiesVideo() && subtitle is null && overlayFilter is null && !loopInput && StreamArguments.CanCopyVideo(program, copyCodec, StreamArguments.OutputHeight(copyWidth));
+        if (copy && offset > TimeSpan.Zero)
+        {
+            var keyframe = await KeyframeBeforeAsync(program.Path, offset).ConfigureAwait(false);
+            copy = keyframe is not null;
+            copyOffset = keyframe ?? offset;
+        }
+
+        if (copy)
+        {
+            var (copyEncoder, copyBitrate) = EncoderResolver.ResolveAudio(copyAudio);
+            // A copied item keeps its own frame order, so its first frames are decoded up to a few frames before
+            // they are shown and carry decode times that far ahead of its start. Whatever played before it (a
+            // card, or an encoded item, whose frames are in order) ends on a decode time right at the seam, so the
+            // copy starts a little later to keep the stream's decode times from running backwards there. It also
+            // ends a little later than measured, since its frames can last longer than the channel's own.
+            var copyStart = timeline + StreamArguments.CopyLead;
+            var copyArgs = StreamArguments.BuildCopy(program.Path, copyOffset, copyStart, copyEncoder, copyBitrate, program.DefaultAudioOrdinal, burstSeconds(), durationLimit);
+            stats?.AppendLog("copying the video of \"" + program.Title + "\"");
+            var copied = await RunFfmpegAsync(ffmpeg, copyArgs, program.Title, output, cancellationToken, stats, new SpeedTracker(copyStart.TotalSeconds)).ConfigureAwait(false);
+            if (copied.Total > 0 || cancellationToken.IsCancellationRequested)
+            {
+                var copyEnd = copied.LastOutSeconds > 0 ? copied.LastOutSeconds + StreamArguments.CopyTail.TotalSeconds : copied.LastOutSeconds;
+                var copyIntended = durationLimit ?? (TimeSpan.FromTicks(program.DurationTicks) - copyOffset);
+                return (copied.Total > 0, copyEnd, copied.Total > 0 ? CutShort(copied.ExitCode, cancellationToken.IsCancellationRequested, copyStart, copied.LastOutSeconds, copyIntended) : null);
+            }
+
+            _logger.LogWarning("Channel {Name}: \"{Title}\" could not be copied; encoding it", channel.Name, program.Title);
+        }
+
         var (args, hardwareDecode) = BuildArguments(program.Path, offset, timeline, subtitle, program.SourceHeight, subtitlePath, softwareDecode: softwareDecodeOnly || MustDecodeInSoftware(program, subtitle) || !_encoders.CanHardwareDecode(program), program.IsHdr, program.DefaultAudioOrdinal, burstSeconds(), durationLimit, subtitleFonts, SilenceFor(program, offset, durationLimit), program.SourceColorSpace, stats, overlayFilter, loopInput);
         var (total, lastOut, exitCode) = await RunFfmpegAsync(ffmpeg, args, program.Title, output, cancellationToken, stats, new SpeedTracker(timeline.TotalSeconds)).ConfigureAwait(false);
 
@@ -2008,6 +2047,30 @@ public class StreamSessionService
     /// <returns>The ffmpeg argument list and whether it hardware-decodes.</returns>
     public (List<string> Args, bool HardwareDecode) BuildStressArguments(string path, int sourceHeight, bool isHdr, TimeSpan offset, TimeSpan duration)
         => BuildArguments(path, offset, TimeSpan.Zero, null, sourceHeight, null, softwareDecode: false, isHdr, null, initialBurstSeconds: 0, duration);
+
+    // Finds the keyframe at or before a point in an item, or null when it cannot be found in time.
+    private async Task<TimeSpan?> KeyframeBeforeAsync(string path, TimeSpan offset)
+    {
+        var ffprobe = _encoder.ProbePath;
+        if (string.IsNullOrEmpty(ffprobe))
+        {
+            return null;
+        }
+
+        try
+        {
+            var (exit, output, _) = await IntroService.RunProcessAsync(ffprobe, StreamArguments.BuildKeyframeProbe(path, offset), captureOutput: true, TimeSpan.FromSeconds(8)).ConfigureAwait(false);
+            return exit == 0 ? StreamArguments.KeyframeBefore(output, offset) : null;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            _logger.LogDebug(ex, "Live Channels: could not find the keyframe before {Offset} in {Path}", offset, path);
+            return null;
+        }
+    }
+
+    // Whether items already in the channel's video codec are copied instead of encoded.
+    private static bool CopiesVideo() => Plugin.Instance?.ReadConfiguration(c => c.CopyMatchingVideo) ?? false;
 
     private (List<string> Args, bool HardwareDecode) BuildArguments(string path, TimeSpan offset, TimeSpan timeline, (int RelativeIndex, bool IsText)? forcedSubtitle, int sourceHeight, string? externalSubtitlePath, bool softwareDecode, bool isHdr, int? audioOrdinal, double initialBurstSeconds, TimeSpan? durationLimit = null, string? subtitleFontsDir = null, TimeSpan? silentAudio = null, string? colorSpace = null, SessionStats? stats = null, string? overlayFilter = null, bool loopInput = false)
     {

@@ -123,7 +123,7 @@ function channel(o) {
 
 window.__config = {
     TranscodeWidth: 1920, VideoCodec: 'H264', AudioCodec: 'Aac', TranscodeVideoBitrateKbps: 6000, MaxConcurrentSessions: 4, SessionTimeoutMinutes: 240,
-    StreamDirectory: '', DisableHardwareAcceleration: false, SubtitleFont: '', SubtitleFontScalePercent: 100, SubtitleTextColor: '#FFE14D',
+    StreamDirectory: '', DisableHardwareAcceleration: false, CopyMatchingVideo: false, SubtitleFont: '', SubtitleFontScalePercent: 100, SubtitleTextColor: '#FFE14D',
     SubtitleOutlineColor: '', SubtitleBorder: 'Default', SubtitleBold: false, DefaultSubtitleLanguage: 'eng',
     PopularChannel: channel({ Id: 'popular', Name: 'Popular', Number: 0, LogoStyle: 'Symbol', LogoSymbol: 'diversity_1', EpisodesPerBlock: 4,
         RatingBlocks: [block('', 'TV-14', false, null)], IncludeMusicVideos: false }),

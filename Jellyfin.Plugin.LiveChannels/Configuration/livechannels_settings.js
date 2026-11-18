@@ -109,6 +109,7 @@ export default function (view) {
         el('sessionTimeout').value = config.SessionTimeoutMinutes == null ? 0 : config.SessionTimeoutMinutes;
         el('streamDirectory').value = config.StreamDirectory || '';
         el('disableHwa').checked = !!config.DisableHardwareAcceleration;
+        el('copyVideo').checked = !!config.CopyMatchingVideo;
         el('subFont').value = config.SubtitleFont || '';
         scaleSlider.setValue(config.SubtitleFontScalePercent ? config.SubtitleFontScalePercent : 100);
         textColor.write(config.SubtitleTextColor);
@@ -162,6 +163,7 @@ export default function (view) {
             fresh.SessionTimeoutMinutes = isNaN(timeout) ? 0 : Math.max(0, timeout);
             fresh.StreamDirectory = (el('streamDirectory').value || '').trim();
             fresh.DisableHardwareAcceleration = el('disableHwa').checked;
+            fresh.CopyMatchingVideo = el('copyVideo').checked;
             var picked = langSelect ? langSelect.getValue() : [];
             fresh.DefaultSubtitleLanguage = (picked.length ? String(picked[0]) : '') || 'eng';
             fresh.SubtitleFont = (el('subFont').value || '').trim();

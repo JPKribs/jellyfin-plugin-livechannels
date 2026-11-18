@@ -67,6 +67,12 @@
                             <div id="accelHost"></div>
 
                             <label class="emby-checkbox-label">
+                                <input type="checkbox" is="emby-checkbox" id="copyVideo" />
+                                <span class="checkboxLabel">Copy Matching Video</span>
+                            </label>
+                            <div class="fieldDescription">Sends an item's video as it is, with no encoding, when it is already in the Video Codec, SDR, and no larger than the Resolution. A copied item keeps its own size, frame rate, and bitrate.</div>
+
+                            <label class="emby-checkbox-label">
                                 <input type="checkbox" is="emby-checkbox" id="disableHwa" />
                                 <span class="checkboxLabel">Disable Hardware Acceleration</span>
                             </label>

@@ -217,6 +217,7 @@ The Hardware Acceleration section on a server using Intel QuickSync.
 
 | Setting | What it does | Default |
 | --- | --- | --- |
+| **Copy Matching Video** | Sends an item's video as it is, with no decoding or encoding, when it is already in the **Video Codec**, SDR, upright, 4:2:0, and no taller than the **Resolution**. Its audio is still encoded to the **Audio Codec**. A copied item keeps its own size, frame rate, and bitrate, so the stream is no longer one fixed format, and a tune-in can open a few seconds early, on the keyframe before the scheduled point. An item with a burned-in subtitle is always encoded. | off |
 | **Disable Hardware Acceleration** | Forces software encoding and decoding, the one path guaranteed to work on any system, codec, and media type. Turn it on if channels fail to play with hardware acceleration. | off |
 
 ### Playback

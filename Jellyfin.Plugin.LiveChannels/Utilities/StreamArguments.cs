@@ -584,6 +584,164 @@ public static class StreamArguments
         => Math.Clamp(elapsed.TotalSeconds + headStartSeconds - timeline.TotalSeconds, 0, headStartSeconds);
 
     /// <summary>
+    /// How much later than the seam a copied item starts, so the decode times of its reordered first frames,
+    /// which run ahead of its start, stay after the last decode time of whatever played before it.
+    /// </summary>
+    public static readonly TimeSpan CopyLead = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// How much later than measured a copied item is taken to end, since its frames can last longer than the
+    /// channel's own frame, which is what an item's end is measured with.
+    /// </summary>
+    public static readonly TimeSpan CopyTail = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>
+    /// How far past a keyframe a copy's seek aims. ffmpeg seeks about an eighth of a second before the point it is
+    /// given, so aiming exactly at a keyframe lands on the one before it.
+    /// </summary>
+    public static readonly TimeSpan SeekPastKeyframe = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>How far back from a start point the keyframe before it is looked for.</summary>
+    public static readonly TimeSpan KeyframeSearch = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Builds the ffprobe arguments that list the video packets leading up to a point in an item, so the keyframe
+    /// before the point can be found.
+    /// </summary>
+    /// <param name="path">The media file path.</param>
+    /// <param name="offset">The point in the item.</param>
+    /// <returns>The ffprobe argument list.</returns>
+    public static List<string> BuildKeyframeProbe(string path, TimeSpan offset)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        var from = offset > KeyframeSearch ? offset - KeyframeSearch : TimeSpan.Zero;
+        return new List<string>
+        {
+            "-v", "error", "-select_streams", "v:0",
+            "-read_intervals", from.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture) + "%" + (offset.TotalSeconds + 0.001).ToString("F3", CultureInfo.InvariantCulture),
+            "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", path,
+        };
+    }
+
+    /// <summary>
+    /// Reads the last keyframe at or before a point from the output of <see cref="BuildKeyframeProbe"/>, rounded
+    /// down to the millisecond so a seek to it never lands past it.
+    /// </summary>
+    /// <param name="probeOutput">The ffprobe output: one <c>time,flags</c> line for each packet.</param>
+    /// <param name="offset">The point in the item.</param>
+    /// <returns>The keyframe's time, or <c>null</c> when none was listed.</returns>
+    public static TimeSpan? KeyframeBefore(string probeOutput, TimeSpan offset)
+    {
+        ArgumentNullException.ThrowIfNull(probeOutput);
+        double? best = null;
+        foreach (var line in probeOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = line.Split(',');
+            if (parts.Length < 2 || !parts[1].Contains('K', StringComparison.Ordinal)
+                || !double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds))
+            {
+                continue;
+            }
+
+            if (seconds >= 0 && seconds <= offset.TotalSeconds + 0.001 && (best is null || seconds > best))
+            {
+                best = seconds;
+            }
+        }
+
+        return best is { } found ? TimeSpan.FromMilliseconds(Math.Floor(found * 1000)) : null;
+    }
+
+    /// <summary>
+    /// Whether an item's video can go into the channel's stream as it is, with no decode or encode: it is already
+    /// in the channel's video codec, standard dynamic range, upright, 4:2:0, and no larger than the channel's size.
+    /// </summary>
+    /// <param name="program">The item.</param>
+    /// <param name="codec">The channel's video codec.</param>
+    /// <param name="outputHeight">The channel's output height.</param>
+    /// <returns>Whether the video is copied.</returns>
+    public static bool CanCopyVideo(ProgramEntry program, VideoCodec codec, int outputHeight)
+    {
+        ArgumentNullException.ThrowIfNull(program);
+        if (program.IsPlaceholder || program.IsHdr || program.IsVideoOnly || program.SourceRotation != 0
+            || program.SourceHeight <= 0 || program.SourceHeight > outputHeight)
+        {
+            return false;
+        }
+
+        // Only 4:2:0 is copied, and only when the pixel format is known: the stream's cards and encoded items
+        // are 4:2:0, and players commonly cannot decode anything else.
+        if (program.SourcePixelFormat is not { } pixels || !pixels.StartsWith("yuv420p", StringComparison.Ordinal) && !pixels.StartsWith("yuvj420p", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var depth = program.SourceBitDepth ?? 8;
+        return program.SourceVideoCodec?.Trim().ToLowerInvariant() switch
+        {
+            "h264" => codec == VideoCodec.H264 && depth <= 8,
+            "hevc" => codec == VideoCodec.Hevc && depth <= 10,
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// Builds the ffmpeg arguments that play one item with its video copied as it is and its audio encoded to the
+    /// channel's audio track. Nothing is decoded but the audio, so the item costs a small fraction of an encode.
+    /// </summary>
+    /// <param name="path">The media file path.</param>
+    /// <param name="offset">Where in the item to start, which has to be a keyframe (see <see cref="KeyframeBefore"/>): ffmpeg drops copied frames that sit before the point it is asked for, so from anywhere else the picture would not begin until the next keyframe, seconds after the sound.</param>
+    /// <param name="timeline">The channel timeline position the item starts at.</param>
+    /// <param name="audioEncoder">The channel's audio encoder.</param>
+    /// <param name="audioBitrate">The channel's audio bitrate in kbps.</param>
+    /// <param name="audioOrdinal">The audio track to map, among the item's audio streams.</param>
+    /// <param name="initialBurstSeconds">How much content to produce ahead of realtime before settling to realtime.</param>
+    /// <param name="durationLimit">How much content to read, or <c>null</c> for the rest of the item.</param>
+    /// <returns>The ffmpeg argument list.</returns>
+    public static List<string> BuildCopy(string path, TimeSpan offset, TimeSpan timeline, string audioEncoder, int audioBitrate, int? audioOrdinal, double initialBurstSeconds, TimeSpan? durationLimit = null)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(audioEncoder);
+
+        var args = new List<string> { "-hide_banner", "-loglevel", "error", "-progress", "pipe:2", "-fflags", "+genpts" };
+        if (offset > TimeSpan.Zero)
+        {
+            // ffmpeg seeks a little before the point it is given and then copies from the keyframe it lands on,
+            // stamping those frames as earlier than the point. So the seek aims just past the keyframe, which
+            // lands on it, the audio starts there with the picture instead of at the exact point, and the
+            // timeline offset below is moved on by the same amount so the keyframe sits at the item's start.
+            Add(args, "-noaccurate_seek", "-ss", (offset + SeekPastKeyframe).TotalSeconds.ToString("F3", CultureInfo.InvariantCulture));
+        }
+
+        if (durationLimit is { } limit && limit > TimeSpan.Zero)
+        {
+            Add(args, "-t", limit.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture));
+        }
+
+        Add(args, "-readrate", RealtimeReadRate);
+        if (initialBurstSeconds > MinBurstSeconds)
+        {
+            Add(args, "-readrate_initial_burst", initialBurstSeconds.ToString("0.###", CultureInfo.InvariantCulture));
+        }
+
+        Add(args, "-i", path, "-map", "0:v:0", "-map", AudioMap(audioOrdinal), "-c:v", "copy");
+
+        // The audio is encoded as every other item's is, so the stream keeps one audio track throughout.
+        Add(args, "-c:a", audioEncoder, "-b:a", audioBitrate.ToString(CultureInfo.InvariantCulture) + "k", "-ac", "2", "-ar", "48000",
+            "-af", "aresample=async=1:min_hard_comp=" + AudioResyncSeconds.ToString("0.000", CultureInfo.InvariantCulture),
+            "-max_muxing_queue_size", "1024");
+
+        var start = offset > TimeSpan.Zero ? timeline + SeekPastKeyframe : timeline;
+        if (start > TimeSpan.Zero)
+        {
+            Add(args, "-output_ts_offset", start.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture));
+        }
+
+        Add(args, "-mpegts_flags", "+initial_discontinuity", "-f", "mpegts", "-muxpreload", "0", "-muxdelay", "0", "pipe:1");
+        return args;
+    }
+
+    /// <summary>
     /// Builds the ffmpeg arguments for the HLS segmenter: it reads the producer's continuous MPEG-TS on stdin and
     /// repackages it (no re-encode) into a rolling window of small segments plus a live playlist, deleting
     /// segments as they age out so on-disk size stays bounded no matter how long the channel runs.

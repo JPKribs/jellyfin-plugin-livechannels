@@ -30,6 +30,9 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Gets or sets the audio codec.</summary>
     public AudioCodec AudioCodec { get; set; } = AudioCodec.Aac;
 
+    /// <summary>Gets or sets a value indicating whether an item whose video is already in the channel's video codec is sent with that video copied as it is instead of encoded. Off by default, since a copied item keeps its own size, frame rate, and bitrate.</summary>
+    public bool CopyMatchingVideo { get; set; }
+
     /// <summary>Gets or sets a value indicating whether to force software encoding and decoding for channel streams, ignoring Jellyfin's hardware acceleration. Slower, but universally compatible across systems, codecs, and media types.</summary>
     public bool DisableHardwareAcceleration { get; set; }
 
