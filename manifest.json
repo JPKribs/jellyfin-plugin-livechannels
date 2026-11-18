@@ -10,11 +10,11 @@
     "versions": [
       {
         "version": "12.4.3.0",
-        "changelog": "## Added\r\n- Copy Matching Video, a setting under Hardware Acceleration that sends an item's video as it is instead of encoding it when the video is already in the Video Codec, SDR, and no taller than the Resolution. It is off by default, since a copied item keeps its own size, frame rate, and bitrate\r\n- Hardware encoding on Rockchip devices through RKMPP, when Jellyfin's hardware acceleration is set to it - https://github.com/JPKribs/jellyfin-plugin-livechannels/pull/6\r\n\r\n## Developer\r\n- StreamArguments.CanCopyVideo decides whether an item is copied, and BuildCopy builds the run that copies its video and encodes its audio\r\n- A copy that starts inside an item starts on the keyframe before the point, found with ffprobe through StreamArguments.BuildKeyframeProbe and KeyframeBefore\r\n- A channel with an item to copy streams item by item\r\n- EncoderResolver maps the rkmpp acceleration to h264_rkmpp and hevc_rkmpp, which take nv12 frames from system memory",
+        "changelog": "\n## Added\n- Copy Matching Video, a setting under Hardware Acceleration that sends an item's video as it is instead of encoding it when the video is already in the Video Codec, SDR, and no taller than the Resolution. It is off by default, since a copied item keeps its own size, frame rate, and bitrate\n- Hardware encoding on Rockchip devices through RKMPP, when Jellyfin's hardware acceleration is set to it - https://github.com/JPKribs/jellyfin-plugin-livechannels/pull/6\n\n## Developer\n- StreamArguments.CanCopyVideo decides whether an item is copied, and BuildCopy builds the run that copies its video and encodes its audio\n- A copy that starts inside an item starts on the keyframe before the point, found with ffprobe through StreamArguments.BuildKeyframeProbe and KeyframeBefore\n- A channel with an item to copy streams item by item\n- EncoderResolver maps the rkmpp acceleration to h264_rkmpp and hevc_rkmpp, which take nv12 frames from system memory",
         "targetAbi": "12.4.0.0",
         "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v12.4.3.0/jellyfin-plugin-livechannels-12.4.3.0.zip",
-        "checksum": "8ad0b598f250e49c77c8cbc06ad7e73e",
-        "timestamp": "2026-11-18T00:18:32Z"
+        "checksum": "bf3d98c6fd4248a19788c630d534e419",
+        "timestamp": "2026-11-18T00:21:58Z"
       },
       {
         "version": "12.4.2.7",
