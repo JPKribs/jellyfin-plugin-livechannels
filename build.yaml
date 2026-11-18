@@ -17,7 +17,7 @@ artifacts:
 changelog:
   added:
   - Copy Matching Video, a setting under Hardware Acceleration that sends an item's video as it is instead of encoding it when the video is already in the Video Codec, SDR, and no taller than the Resolution. It is off by default, since a copied item keeps its own size, frame rate, and bitrate
-  - Hardware encoding on Rockchip devices through RKMPP, when Jellyfin's hardware acceleration is set to it
+  - Hardware encoding on Rockchip devices through RKMPP, when Jellyfin's hardware acceleration is set to it - https://github.com/JPKribs/jellyfin-plugin-livechannels/pull/6
   developer:
   - StreamArguments.CanCopyVideo decides whether an item is copied, and BuildCopy builds the run that copies its video and encodes its audio
   - A copy that starts inside an item starts on the keyframe before the point, found with ffprobe through StreamArguments.BuildKeyframeProbe and KeyframeBefore
