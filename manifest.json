@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "12.4.3.2",
+        "changelog": "\n## Developer\n- Raises every GitHub Action in the workflows to its latest major version, pinned to a commit digest\n- Builds the docs with Python 3.15 and mkdocs-material 9.8.2\n- Renovate brings every update in one pull request, with Base on its own, and leaves the packages Jellyfin ships to the Jellyfin version",
+        "targetAbi": "12.4.0.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v12.4.3.2/jellyfin-plugin-livechannels-12.4.3.2.zip",
+        "checksum": "621222424474672933c6d23f103a57fe",
+        "timestamp": "2026-11-19T22:03:29Z"
+      },
+      {
         "version": "12.4.3.1",
         "changelog": "\n## Developer\n- Uses JPKribs.Jellyfin.Base 2026.11.21, which keeps a scrolling Data Table's frame in view and an open card's body on the plain surface, with no local code to replace\n- Raises Microsoft.NET.Test.Sdk to 18.12.0",
         "targetAbi": "12.4.0.0",
