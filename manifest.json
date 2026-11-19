@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "12.4.3.1",
+        "changelog": "\n## Developer\n- Uses JPKribs.Jellyfin.Base 2026.11.21, which keeps a scrolling Data Table's frame in view and an open card's body on the plain surface, with no local code to replace\n- Raises Microsoft.NET.Test.Sdk to 18.12.0",
+        "targetAbi": "12.4.0.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v12.4.3.1/jellyfin-plugin-livechannels-12.4.3.1.zip",
+        "checksum": "3d3cc8fae3cca04a82790c09225be6d8",
+        "timestamp": "2026-11-19T21:01:07Z"
+      },
+      {
         "version": "12.4.3.0",
         "changelog": "\n## Added\n- Copy Matching Video, a setting under Hardware Acceleration that sends an item's video as it is instead of encoding it when the video is already in the Video Codec, SDR, and no taller than the Resolution. It is off by default, since a copied item keeps its own size, frame rate, and bitrate\n- Hardware encoding on Rockchip devices through RKMPP, when Jellyfin's hardware acceleration is set to it - https://github.com/JPKribs/jellyfin-plugin-livechannels/pull/6\n\n## Developer\n- StreamArguments.CanCopyVideo decides whether an item is copied, and BuildCopy builds the run that copies its video and encodes its audio\n- A copy that starts inside an item starts on the keyframe before the point, found with ffprobe through StreamArguments.BuildKeyframeProbe and KeyframeBefore\n- A channel with an item to copy streams item by item\n- EncoderResolver maps the rkmpp acceleration to h264_rkmpp and hevc_rkmpp, which take nv12 frames from system memory",
         "targetAbi": "12.4.0.0",
