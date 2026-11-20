@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "12.4.3.2"
+version: "12.4.4.0"
 targetAbi: "12.4.0.0"
 framework: "net10.0"
 overview: "Build looping TV channels from your library."
@@ -13,7 +13,15 @@ owner: "JPKribs"
 artifacts:
 - "Jellyfin.Plugin.LiveChannels.dll"
 changelog:
+  added:
+  - Translations. Every page, message, activity log entry and scheduled task shows its text in the viewer's language wherever Jellyfin has the words, and in US English elsewhere
+  changed:
+  - Every label, button, heading and option is in sentence case, as Jellyfin writes its own, such as Episodes per block and Show Up Next cards
+  - Messages the Settings tab gets back from the server, such as a stress test refusal, are in the page's language
+  - Activity log entries and scheduled task names are in the server's display language
   developer:
-  - Raises every GitHub Action in the workflows to its latest major version, pinned to a commit digest
-  - Builds the docs with Python 3.15 and mkdocs-material 9.8.2
-  - Renovate brings every update in one pull request, with Base on its own, and leaves the packages Jellyfin ships to the Jellyfin version
+  - Uses JPKribs.Jellyfin.Base 12.4.1, after 12.4.0. Base's components translate their own text, so the pages pass only text that differs from Base's
+  - The project is organized into Api, Configuration, Web, Assets, Models, Services, Tasks, Utilities and tools
+  - Strings live in Localization/en-us.json and Jellyfin strings declared in the csproj, served by GET livechannels/Translations with BaseTranslations.Serve
+  - Localization/casing.json lists the words the plugin keeps as written
+  - The livechannels routes read the page's language with BaseTranslations.RequestLanguage
