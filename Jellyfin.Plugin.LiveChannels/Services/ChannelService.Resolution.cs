@@ -17,7 +17,7 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 // ChannelService: resolving a channel's configured sources into the ordered, probed program loop.
 public partial class ChannelService
 {
-    // The item kinds a channel includes, from its Content Types toggles. Episodes are queried when either regular
+    // The item kinds a channel includes, from its Content types toggles. Episodes are queried when either regular
     // episodes or specials are wanted; the season-0 split between them is applied per item during the build.
     private static BaseItemKind[] BuildKinds(Channel channel)
     {

@@ -38,6 +38,15 @@ How this plugin shows its text in the viewer's language. Base builds the strings
 5. Build. Fix every `JPKT` error and warning.
 6. Run `TranslationKeysTests`, which checks every key the pages use has a string.
 
+## Casing
+
+Every string is in sentence case, mirroring Jellyfin, such as "Allow media playback". Base's own text is too.
+
+* Write a new string in sentence case. Keep a proper noun, format, or acronym as it is written.
+* `Localization/casing.json` lists the words this plugin keeps as written, such as "Live TV", "Popular Channel", and "ffmpeg". Add a word to the JSON array when a new string uses it. Base adds its own defaults, such as Jellyfin, TV, and URL, so leave those out.
+* A Jellyfin string keeps Jellyfin's casing. Add `Case="sentence"` or `Case="title"` to its `JellyfinString` only when it reads wrong beside its neighbors, as `HeaderSubtitleAppearance` does.
+* Text built at runtime is cased with `ToSentenceCase` or `ToTitleCase` in C# and `sentenceCase` or `titleCase` on a page. Each keeps the words in `casing.json` and changes English only.
+
 ## Add a Language
 
 Add `Localization/<code>.json`, such as `de.json` or `pt-br.json`, with only keys `en-us.json` has. A missing key falls back to the language's base and then to US English. Jellyfin's strings come in every language Jellyfin has, with no file.

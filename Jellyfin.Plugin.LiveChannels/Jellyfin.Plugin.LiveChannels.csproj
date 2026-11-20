@@ -34,6 +34,7 @@
     <JellyfinString Include="AnyLanguage" />
     <JellyfinString Include="Blacklist" />
     <JellyfinString Include="Bold" />
+    <JellyfinString Include="ChannelNumber" />
     <JellyfinString Include="Channels" />
     <JellyfinString Include="Custom" />
     <JellyfinString Include="Default" />
@@ -45,22 +46,27 @@
     <JellyfinString Include="Genre" />
     <JellyfinString Include="Guide" />
     <JellyfinString Include="HeaderError" />
-    <JellyfinString Include="HeaderSubtitleAppearance" />
+    <JellyfinString Include="HeaderSubtitleAppearance" Case="sentence" />
     <JellyfinString Include="HeaderYears" />
-    <JellyfinString Include="HomeVideos" Source="server" />
+    <JellyfinString Include="HomeVideos" Source="server" Case="sentence" />
+    <JellyfinString Include="LabelAccessEnd" />
+    <JellyfinString Include="LabelAccessStart" />
+    <JellyfinString Include="LabelAudioCodec" />
     <JellyfinString Include="LabelCollection" />
     <JellyfinString Include="LabelFailed" />
     <JellyfinString Include="LabelFont" />
     <JellyfinString Include="LabelMetadata" />
     <JellyfinString Include="LabelNumber" />
     <JellyfinString Include="LabelSize" />
+    <JellyfinString Include="LabelTextColor" />
     <JellyfinString Include="LabelTitle" />
+    <JellyfinString Include="LabelVideoCodec" />
     <JellyfinString Include="Logo" />
     <JellyfinString Include="MediaInfoResolution" />
     <JellyfinString Include="Movie" />
     <JellyfinString Include="Movies" />
-    <JellyfinString Include="MusicVideo" />
-    <JellyfinString Include="MusicVideos" />
+    <JellyfinString Include="MusicVideo" Case="sentence" />
+    <JellyfinString Include="MusicVideos" Case="sentence" />
     <JellyfinString Include="Name" />
     <JellyfinString Include="Never" />
     <JellyfinString Include="New" />
@@ -76,7 +82,7 @@
     <JellyfinString Include="Shuffle" />
     <JellyfinString Include="Sports" />
     <JellyfinString Include="Studios" />
-    <JellyfinString Include="TitleHardwareAcceleration" />
+    <JellyfinString Include="TitleHardwareAcceleration" Case="sentence" />
     <JellyfinString Include="TitlePlayback" />
     <JellyfinString Include="Unknown" />
     <JellyfinString Include="Upload" />

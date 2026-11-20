@@ -12,11 +12,11 @@ The agreed name for every concept in this plugin. The UI, the docs, messages, an
 | Term | Meaning | In Code | Not |
 | :--- | :--- | :--- | :--- |
 | Channel | A looping virtual TV channel built from the library and served in Live TV | `Channel` | Station, stream, feed |
-| Channel Number | A channel's place in the guide. 0 is the Popular Channel | `Channel.Number` | Position, slot |
+| Channel number | A channel's place in the guide. 0 is the Popular Channel | `Channel.Number` | Position, slot |
 | Enabled, Disabled | Whether a channel is served in Live TV. A disabled channel can be a draft. The count cards on the Channels tab total each | `Channel.Enabled` | Active, hidden |
 | Popular Channel | The built-in channel 0 that programs itself from what the server watches and adds | `PluginConfiguration.PopularChannel`, `ChannelService.Popular` | Trending channel, default channel |
 | Logo | The channel's image in the guide, uploaded through the logo Image Picker or generated | `LogoData`, `DefaultLogoService` | Icon, artwork |
-| Generated Logo Style | How a channel with no upload draws its logo, as **Number** or **Symbol** | `LogoStyle` | Logo type |
+| Generated logo style | How a channel with no upload draws its logo, as **Number** or **Symbol** | `LogoStyle` | Logo type |
 | Symbol | A Material Symbols name drawn as a generated logo | `LogoSymbol` | Glyph, emoji |
 | Import, Export | Moving every channel between servers as one JSON file | `livechannels-export` | Backup, restore |
 
@@ -32,10 +32,10 @@ The agreed name for every concept in this plugin. The UI, the docs, messages, an
 | Genre | Takes items carrying the included genres, less the excluded ones | `SelectionMode.Genre` | Tag |
 | Whitelist | Takes only the picked items: shows, movies, episodes, music videos, and home videos | `SelectionMode.Whitelist` | Allow list, include list |
 | Blacklist | Takes everything except the picked items | `SelectionMode.Blacklist` | Block list, exclude list |
-| Include Genres, Exclude Genres | A Genre selection's genre fields, offering the genres of every kind of item the library holds | `LibrarySource.Genres`, `ExcludeGenres` | Genre filter, tags |
-| Included Items, Excluded Items | The items a Whitelist or Blacklist picks, searched by name in the source's library | `LibrarySource.ItemIds` | Picks, selections |
+| Include genres, Exclude genres | A Genre selection's genre fields, offering the genres of every kind of item the library holds | `LibrarySource.Genres`, `ExcludeGenres` | Genre filter, tags |
+| Included items, Excluded items | The items a Whitelist or Blacklist picks, searched by name in the source's library | `LibrarySource.ItemIds` | Picks, selections |
 | Filters | The channel wide limits on ratings, years, scores, studios, and people | `ChannelService.Filters` | Rules, criteria |
-| Review Scores | The Minimum Community Rating and Minimum Critic Rating sliders | `MinCommunityRating`, `MinCriticRating` | Ratings filter, score cap |
+| Review scores | The Minimum community rating and Minimum critic rating sliders | `MinCommunityRating`, `MinCriticRating` | Ratings filter, score cap |
 | Content types | Which kinds of item air, such as **Episodes** and **Movies** | `Include*` | Media types |
 | Audio language | The audio track a channel requires and plays | `Channel.AudioLanguage` | Dub, track language |
 | Default language | The server wide language for audio and subtitles | `DefaultSubtitleLanguage` | Native language |
@@ -45,8 +45,8 @@ The agreed name for every concept in this plugin. The UI, the docs, messages, an
 | Term | Meaning | In Code | Not |
 | :--- | :--- | :--- | :--- |
 | Rating block | A limit on which age ratings air, all day or in a window of the day | `RatingBlock` | Rating rule, daypart |
-| Age Ratings | The list of rating blocks on a channel, beside its Placeholder Blocks | `Channel.RatingBlocks` | Parental controls |
-| Period | When a block applies, **All Day** or **Custom** | `RatingBlockPeriod` | Schedule, window type |
+| Age ratings | The list of rating blocks on a channel, beside its Placeholder blocks | `Channel.RatingBlocks` | Parental controls |
+| Period | When a block applies, **All day** or **Custom** | `RatingBlockPeriod` | Schedule, window type |
 | Transition window | How close to a window change an item must fit both windows | `TransitionWindowMinutes` | Grace period, buffer |
 | Placeholder block | A window of the day when the channel is off air and loops a card | `RatingBlock.IsPlaceholder` | Off air block, blackout |
 | Placeholder card | The 10 second card a placeholder block loops, with its title and message | `PlaceholderService` | Slate, filler |
@@ -65,7 +65,7 @@ The agreed name for every concept in this plugin. The UI, the docs, messages, an
 | Schedule | When each loop item airs, kept so the guide and the stream agree | `StreamSchedule`, `ChannelService.Schedule` | Timeline, EPG data |
 | Splice anchor | The point a rebuilt schedule continues from, so the program on air keeps its slot. Used in code, not the UI | Splice anchor | Resume point |
 | Guide | Jellyfin's Live TV program guide | `ChannelService.Guide` | EPG, listings |
-| Reset Schedule | Rebuilds every schedule, the guide, and the buffer cards | `POST livechannels/schedule/reset` | Clear cache, wipe |
+| Reset schedule | Rebuilds every schedule, the guide, and the buffer cards | `POST livechannels/schedule/reset` | Clear cache, wipe |
 
 ## Cards
 
@@ -90,11 +90,11 @@ The agreed name for every concept in this plugin. The UI, the docs, messages, an
 | Maximum concurrent streams | The most channels that may encode at once | `MaxConcurrentSessions` | Session cap, max sessions |
 | Stream time limit | Closes a stream open longer than this once nobody watches | `SessionTimeoutMinutes` | Timeout, idle limit |
 | Stress test | Measures how many streams the server can encode at once | `StressTestService` | Benchmark, load test |
-| Test Item | The movie or episode a stress test encodes. It is not saved | `POST livechannels/stresstest/{id}` | Sample, benchmark file |
-| Recommendation | The stress test's banner naming the last fully passing round, with **Apply** to fill in Maximum Concurrent Streams | `StressStatus.Recommended` | Suggestion, result |
+| Test item | The movie or episode a stress test encodes. It is not saved | `POST livechannels/stresstest/{id}` | Sample, benchmark file |
+| Recommendation | The stress test's banner naming the last fully passing round, with **Apply** to fill in Maximum concurrent streams | `StressStatus.Recommended` | Suggestion, result |
 | Failure report | The log file written when an encoder fails | `FailureReports` | Crash log, dump |
 | Subtitle burn in | Bakes a subtitle track into the picture, **Never**, **Forced only**, or **Always** | `SubtitleBurnInMode` | Hardcode, embed |
-| As Authored, Custom | A subtitle color left as each subtitle has it, or set to one picked color | `SubtitleTextColor`, `SubtitleOutlineColor` | Default, override |
+| As authored, Custom | A subtitle color left as each subtitle has it, or set to one picked color | `SubtitleTextColor`, `SubtitleOutlineColor` | Default, override |
 | Hardware acceleration | The accelerator from Jellyfin's Playback settings that encoding follows | `EncoderResolver` | GPU mode, HWA |
 
 ## Recording

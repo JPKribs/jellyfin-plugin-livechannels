@@ -40,7 +40,7 @@
                             <div class="checkboxContainer checkboxContainer-withDescription">
                                 <label class="emby-checkbox-label">
                                     <input type="checkbox" is="emby-checkbox" id="popularShowName" />
-                                    <span class="checkboxLabel" data-str="LabelShowChannelName">Show Channel Name on the Generated Logo</span>
+                                    <span class="checkboxLabel" data-str="LabelShowChannelName">Show channel name on the generated logo</span>
                                 </label>
                             </div>
                         </div>
@@ -49,13 +49,13 @@
                     <!-- Channel settings -->
                     <div class="base-collapsible-section">
                         <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="popularSectionSettings">
-                            <span class="base-collapsible-title" data-str="HeaderChannelSettings">Channel Settings</span>
+                            <span class="base-collapsible-title" data-str="HeaderChannelSettings">Channel settings</span>
                             <span class="base-collapsible-icon">&#9660;</span>
                         </button>
                         <div id="popularSectionSettings" class="base-collapsible-content collapsed">
                             <h3 class="base-subsection-title" data-str="TitlePlayback">Playback</h3>
                             <div class="selectContainer">
-                                <label class="selectLabel" for="popularSubtitle" data-str="LabelSubtitleBurnIn">Subtitle Burn In</label>
+                                <label class="selectLabel" for="popularSubtitle" data-str="LabelSubtitleBurnIn">Subtitle burn in</label>
                                 <select is="emby-select" id="popularSubtitle">
                                     <option value="Never" data-str="Never">Never</option>
                                     <option value="Forced" data-str="OptionForcedOnly">Forced only</option>
@@ -66,19 +66,19 @@
                             <div class="checkboxContainer checkboxContainer-withDescription">
                                 <label class="emby-checkbox-label">
                                     <input type="checkbox" is="emby-checkbox" id="popularShowBumpers" />
-                                    <span class="checkboxLabel" data-str="LabelShowUpNextCards">Show Up Next Cards</span>
+                                    <span class="checkboxLabel" data-str="LabelShowUpNextCards">Show Up Next cards</span>
                                 </label>
                                 <div class="fieldDescription" data-str="HelpShowUpNextCards">Plays a 10 second card before each item showing its artwork, title, episode and rating. The card is part of the item's time in the guide, so the item still starts on schedule.</div>
                             </div>
-                            <h3 class="base-subsection-title" data-str="HeaderAgeRatings">Age Ratings</h3>
+                            <h3 class="base-subsection-title" data-str="HeaderAgeRatings">Age ratings</h3>
                             <div id="popularRatingBlocks"></div>
                             <div class="fieldDescription" data-str="HelpPopularRatingBlocks">Limit which ratings air, optionally by time of day. No blocks means anything airs. On overlap, the lowest min and max win. The top titles are picked from what the rating allows.</div>
-                            <h3 class="base-subsection-title" data-str="HeaderPlaceholderBlocks">Placeholder Blocks</h3>
+                            <h3 class="base-subsection-title" data-str="HeaderPlaceholderBlocks">Placeholder blocks</h3>
                             <div id="popularPlaceholderBlocks"></div>
-                            <div class="fieldDescription" data-str="HelpPlaceholderBlocks">A placeholder block takes the channel off air for its window. The guide shows one program by the block's Guide Name and the channel loops a card with your message. Whatever is airing when the window opens is cut there, and the loop goes on when it ends.</div>
+                            <div class="fieldDescription" data-str="HelpPlaceholderBlocks">A placeholder block takes the channel off air for its window. The guide shows one program by the block's guide name and the channel loops a card with your message. Whatever is airing when the window opens is cut there, and the loop goes on when it ends.</div>
                             <div class="fieldDescription" data-str="HelpPlaceholderCustom">The Custom style plays an image, GIF, or video from a path on the server. A GIF or video loops cleanly when it is exactly 10 seconds and ends where it starts, and its sound is not played. In the message, {time} becomes the time the channel resumes and {contentName} what it resumes with. Leave the title or message empty to leave it off.</div>
                             <div class="inputContainer">
-                                <label for="popularTransitionWindow" data-str="LabelTransitionWindow">Transition Window (Minutes)</label>
+                                <label for="popularTransitionWindow" data-str="LabelTransitionWindow">Transition window (minutes)</label>
                                 <input is="emby-input" type="number" id="popularTransitionWindow" min="0" max="1440" step="1" autocomplete="off" placeholder="0" />
                                 <div class="fieldDescription" data-str="HelpTransitionWindow">Items starting this close to a window change must fit both windows. Set it to your longest content. 0 turns it off.</div>
                             </div>
@@ -94,12 +94,12 @@
                             </div>
                             <h3 class="base-subsection-title" data-str="Episodes">Episodes</h3>
                             <div class="inputContainer">
-                                <label for="popularEpisodesPerBlock" data-str="LabelEpisodesPerBlock">Episodes per Block</label>
+                                <label for="popularEpisodesPerBlock" data-str="LabelEpisodesPerBlock">Episodes per block</label>
                                 <input is="emby-input" type="number" id="popularEpisodesPerBlock" min="1" step="1" autocomplete="off" />
                                 <div class="fieldDescription" data-str="HelpEpisodesPerBlock">Consecutive episodes per series before moving on. 1 disables grouping.</div>
                             </div>
                             <div class="selectContainer">
-                                <label class="selectLabel" for="popularEpisodeOrder" data-str="LabelEpisodeOrder">Episode Order</label>
+                                <label class="selectLabel" for="popularEpisodeOrder" data-str="LabelEpisodeOrder">Episode order</label>
                                 <select is="emby-select" id="popularEpisodeOrder">
                                     <option value="air" data-str="OptionAirOrder">Air order</option>
                                     <option value="random" data-str="OptionRandom">Random</option>
@@ -108,11 +108,11 @@
                             <div class="checkboxContainer checkboxContainer-withDescription">
                                 <label class="emby-checkbox-label">
                                     <input type="checkbox" is="emby-checkbox" id="popularKeepMultiPart" />
-                                    <span class="checkboxLabel" data-str="LabelKeepMultipart">Keep Multipart Episodes Together</span>
+                                    <span class="checkboxLabel" data-str="LabelKeepMultipart">Keep multipart episodes together</span>
                                 </label>
                                 <div class="fieldDescription" data-str="HelpKeepMultipart">Keeps two part episodes together across a block boundary.</div>
                             </div>
-                            <h3 class="base-subsection-title" data-str="HeaderContentTypes">Content Types</h3>
+                            <h3 class="base-subsection-title" data-str="HeaderContentTypes">Content types</h3>
                             <div class="checkboxContainer">
                                 <label class="emby-checkbox-label">
                                     <input type="checkbox" is="emby-checkbox" id="popularIncludeEpisodes" />
@@ -135,7 +135,7 @@
                             </div>
                             <h3 class="base-subsection-title" data-str="HeaderLoop">Loop</h3>
                             <div class="selectContainer">
-                                <label class="selectLabel" for="popularLoopMode" data-str="LabelLoopOrder">Loop Order</label>
+                                <label class="selectLabel" for="popularLoopMode" data-str="LabelLoopOrder">Loop order</label>
                                 <select is="emby-select" id="popularLoopMode">
                                     <option value="Shuffle" data-str="Shuffle">Shuffle</option>
                                     <option value="Alphabetical" data-str="OptionAlphabetical">Alphabetical</option>

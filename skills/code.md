@@ -143,7 +143,7 @@ public static (int Index, TimeSpan Offset) CurrentProgram(IReadOnlyList<ProgramE
 
 ```js
 // createBlockEditors
-// Builds the Rating Blocks and Placeholder Blocks card lists for one channel. Both lists save into the one
+// Builds the Age ratings and Placeholder blocks card lists for one channel. Both lists save into the one
 // RatingBlocks array, rating blocks first.
 //
 // Inputs

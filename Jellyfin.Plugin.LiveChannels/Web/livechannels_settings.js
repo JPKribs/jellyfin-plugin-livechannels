@@ -20,10 +20,10 @@ export default function (view) {
 
     var cultures = [];         // cached [{ value: ISO code, label: name }] for the language choices
     var langSelect = null;     // Chip Select, single, for the default subtitle language
-    var accelList = null;      // the Hardware Acceleration Definition List
+    var accelList = null;      // the Hardware acceleration Definition List
     var scaleSlider = null;    // the subtitle Size Slider
-    var textColor = null;      // the subtitle Text Color field
-    var outlineColor = null;   // the subtitle Outline Color field
+    var textColor = null;      // the subtitle Text color field
+    var outlineColor = null;   // the subtitle Outline color field
     var saveBar = null;        // the Save Bar
     var stressRounds = null;   // the stress test rounds Definition List
     var stressSummary = null;
@@ -37,14 +37,14 @@ export default function (view) {
     }
 
     // colorField
-    // Builds a subtitle Color Picker inside an Inherit Field, where As Authored keeps each subtitle's own color.
+    // Builds a subtitle Color Picker inside an Inherit Field, where As authored keeps each subtitle's own color.
     //
     // Inputs
     // fallback [string]: The color an override starts from.
     // label [string]: The field's name.
     //
     // Output
-    // [object]: { element, read(), write(stored) }, where a blank stored value means As Authored.
+    // [object]: { element, read(), write(stored) }, where a blank stored value means As authored.
     function colorField(fallback, label) {
         var picker = createColorPicker({ value: fallback, label: label, onChange: markDirty });
         var inherit = createInheritField({
@@ -74,7 +74,7 @@ export default function (view) {
         if (saveBar) return;
         accelList = createDefinitionList({ items: [{ label: t.tr('TitleHardwareAcceleration'), value: t.tr('MessageChecking'), mono: true }] });
         scaleSlider = createSliderField({ min: 50, max: 300, step: 5, value: 100, suffix: '%', label: t.tr('LabelSize') });
-        textColor = colorField('#FFFFFF', t.tr('LabelTextColorTitle'));
+        textColor = colorField('#FFFFFF', t.tr('LabelTextColor'));
         outlineColor = colorField('#000000', t.tr('LabelOutlineColor'));
         saveBar = createSaveBar(withText({ fill: true, onSave: saveSettings }, saveBarText(t)));
         stressRounds = createDefinitionList({ items: [] });
@@ -225,7 +225,7 @@ export default function (view) {
     var stressPicker = null;
 
     // ensureStressPicker
-    // Creates the stress test Media Picker once and mounts it in the Stress Test section.
+    // Creates the stress test Media Picker once and mounts it in the Stress test section.
     function ensureStressPicker() {
         if (stressPicker) { return; }
         stressPicker = createMediaPicker({

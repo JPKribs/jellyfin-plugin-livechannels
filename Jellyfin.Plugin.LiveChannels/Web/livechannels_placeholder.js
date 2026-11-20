@@ -194,7 +194,7 @@ function textLimit(t) {
 }
 
 // createBlockEditors
-// Builds the Rating Blocks and Placeholder Blocks card lists for one channel. Both lists save into the one
+// Builds the Age ratings and Placeholder blocks card lists for one channel. Both lists save into the one
 // RatingBlocks array, rating blocks first.
 //
 // Inputs
@@ -232,8 +232,8 @@ export function createBlockEditors(options) {
             { key: 'IncludeUnrated', label: t.tr('LabelIncludeUnrated'), type: 'toggle' },
             { key: 'IsKids', label: t.tr('LabelTagAsKids'), type: 'toggle' },
             { key: 'Period', label: t.tr('LabelPeriod'), type: 'select', options: [{ value: 'AllDay', label: t.tr('OptionAllDay') }, { value: 'Custom', label: t.tr('Custom') }] },
-            { key: 'StartMinutes', label: t.tr('LabelStartTime'), type: 'time', visible: customPeriod },
-            { key: 'EndMinutes', label: t.tr('LabelEndTime'), type: 'time', visible: customPeriod }
+            { key: 'StartMinutes', label: t.tr('LabelAccessStart'), type: 'time', visible: customPeriod },
+            { key: 'EndMinutes', label: t.tr('LabelAccessEnd'), type: 'time', visible: customPeriod }
         ],
         newItem: function () { return toRatingItem({}); },
         onChange: changed
@@ -245,8 +245,8 @@ export function createBlockEditors(options) {
         addText: t.tr('ButtonAddPlaceholderBlock'),
         emptyText: t.tr('EmptyPlaceholderBlocks'),
         fields: [
-            { key: 'StartMinutes', label: t.tr('LabelStartTime'), type: 'time' },
-            { key: 'EndMinutes', label: t.tr('LabelEndTime'), type: 'time' },
+            { key: 'StartMinutes', label: t.tr('LabelAccessStart'), type: 'time' },
+            { key: 'EndMinutes', label: t.tr('LabelAccessEnd'), type: 'time' },
             { key: 'PlaceholderName', label: t.tr('LabelGuideName'), placeholder: DEFAULT_NAME, validate: limit },
             { key: 'PlaceholderStyle', label: t.tr('LabelStyle'), type: 'select', options: PLACEHOLDER_STYLES.map(function (o) { return { value: o.value, label: t.tr(o.key) }; }) },
             {

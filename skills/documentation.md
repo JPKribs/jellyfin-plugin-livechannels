@@ -53,6 +53,7 @@ Remove compatibility notes for Jellyfin versions the plugin no longer supports. 
 ### UI Names
 
 * Write a label exactly as the page shows it, in bold. **Transition window (minutes)**.
+* Labels are in sentence case, mirroring Jellyfin, as [style.md](style.md#casing) says. A heading stays in Title Case, and a label keeps its own case in the body.
 * Write a path through the UI with `>` between the steps, in bold. **Dashboard > Plugins > Live Channels > Settings**.
 * Write a tab as its label, in bold. **Channels**, **Popular**, **Sessions**, **Settings**.
 * Quote activity log names and on-screen messages in double quotes. "No channels are streaming right now."

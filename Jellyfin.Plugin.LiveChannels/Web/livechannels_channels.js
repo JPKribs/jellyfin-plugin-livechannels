@@ -40,8 +40,8 @@ export default function (view) {
     var collections = [];      // [{ Id, Name }] box sets, for collection sources
     var ratings = ratingInfo([]);
     var logoPicker = null;     // the logo Image Picker
-    var communitySlider = null;// Minimum Community Rating Slider
-    var criticSlider = null;   // Minimum Critic Rating Slider
+    var communitySlider = null;// Minimum community rating Slider
+    var criticSlider = null;   // Minimum critic rating Slider
     var sourceList = null;     // the source card Repeater
     var sourceParts = new Map(); // a source card's custom control element to { key, handle, library }
     var genreCache = {};       // library id to a promise of its genre names

@@ -34,22 +34,24 @@ These rules apply to every string a user can see. That includes HTML, JS, C# mes
 
 ### Casing
 
-| Text | Case | Example |
-| :--- | :--- | :--- |
-| Tab | Title Case, one word | Channels |
-| Section and collapsible title | Title Case | Channel Settings |
-| Field label | Title Case | Episodes per Block |
-| Checkbox label | Title Case | Show Up Next Cards |
-| Button | Title Case, verb first | Add Source |
-| Dialog title | Title Case | Delete Channel |
-| Badge and status chip | Title Case | Enabled |
-| Column header | Title Case | Started |
-| Activity log name | Title Case | Channel Stopped for News |
-| Description, message, placeholder sentence | Sentence case | Plays a 10 second card before each item. |
+Every string is in sentence case, mirroring Jellyfin, such as "Allow media playback". Only the first word and proper nouns take a capital.
 
-Title Case capitalizes every word except short articles, conjunctions, and prepositions in the middle, such as "a", "and", "of", "to", and "in". Keep acronyms as written, such as "ffmpeg", "GIF", "kbps", and "MB".
+| Text | Example |
+| :--- | :--- |
+| Tab | Channels |
+| Section and collapsible title | Channel settings |
+| Field label | Episodes per block |
+| Checkbox label | Show Up Next cards |
+| Button, verb first | Add source |
+| Dialog title | Delete channel |
+| Badge and status chip | Keeping up |
+| Column header | Started |
+| Activity log name | Channel stopped for News |
+| Description, message, placeholder sentence | Plays a 10 second card before each item. |
 
-Some labels and options on the pages are still in sentence case, such as **Solid box**. Put a label in Title Case when you change it, and change the docs in the same commit.
+* Write product names, features with a proper name, formats, and acronyms as they are written, such as "Live TV", "Popular Channel", "Up Next", "ffmpeg", "GIF", and "kbps". Each one is in `Localization/casing.json`. See [translations.md](translations.md#casing).
+* A Jellyfin string keeps Jellyfin's casing. Add `Case="sentence"` only when it reads wrong beside its neighbors.
+* Scheduled task names follow Jellyfin's own tasks, which are in title case, such as **Generate Buffer Cards**.
 
 ### Words to Use
 
@@ -66,7 +68,7 @@ Pick the word on the left every time.
 | Cancel | Close, No | Closes without keeping changes |
 | Add | New, Create | Puts a new entry into a list on the page |
 | New | Add, Create | Starts a new record in a record picker |
-| Run Now | Start, Trigger | Starts a scheduled task right away |
+| Run now | Start, Trigger | Starts a scheduled task right away |
 | Kill | Stop, End | Stops a session at once, even with viewers |
 | Select | Pick, Choose, Tick, Click | Any instruction to make a choice |
 | Turn on, Turn off | Enable, Disable, Tick, Untick | An instruction about a checkbox or toggle |
@@ -78,9 +80,9 @@ The control names its own result. **Remove** on a source takes it out of the cha
 ### Labels
 
 * Two to four words. Name the thing the field holds, not the action.
-* Put a unit at the end in lowercase parentheses, such as **Transition Window (minutes)** or **Video Bitrate (kbps)**. Use symbols for standard units, such as `MB` and `kbps`.
+* Put a unit at the end in lowercase parentheses, such as **Transition window (minutes)** or **Video bitrate (kbps)**. Use symbols for standard units, such as `MB` and `kbps`.
 * No colons, periods, or question marks.
-* A checkbox label names the feature it turns on, never "Enable X". Write **Show Up Next Cards**, not **Enable Up Next Cards**. The one exception is the master switch at the top of a page, which reads **Enable** followed by its name, such as **Enable the Popular Channel**.
+* A checkbox label names the feature it turns on, never "Enable X". Write **Show Up Next cards**, not **Enable Up Next cards**. The one exception is the master switch at the top of a page, which reads **Enable** followed by its name, such as **Enable the Popular Channel**.
 
 ### Descriptions
 
@@ -113,10 +115,10 @@ A placeholder shows an example of a valid value. It is never the only place an i
 
 ### Buttons
 
-* A verb, or a verb and a noun. **Save**, **Add Source**, **Run Now**.
-* Name the object when the page has more than one of that action. **Add Rating Block** and **Add Placeholder Block** share the Filters section.
+* A verb, or a verb and a noun. **Save**, **Add source**, **Run now**.
+* Name the object when the page has more than one of that action. **Add rating block** and **Add placeholder block** share the Filters section.
 * A Save is always **Save**, with no noun.
-* An icon only button carries a `title` of one to three words, such as `Remove`, `Move Up`, or `Retry`. Never a sentence.
+* An icon only button carries a `title` of one to three words, such as `Remove`, `Move up`, or `Retry`. Never a sentence.
 * A button that runs for a while shows progress in place. See [Progress](#progress).
 
 ### Messages
@@ -145,14 +147,14 @@ A confirm asks one question and states the consequence.
 
 ```js
 confirmDialog('Delete channel "News"? This cannot be undone.', {
-    title: 'Delete Channel',
+    title: 'Delete channel',
     confirmText: 'Delete',
     destructive: true
 });
 ```
 
 * The message is a question, then one sentence on the consequence. "Delete 3 items? This cannot be undone."
-* The title is the action in Title Case, such as **Delete Channel**. Never leave the default **Confirm**.
+* The title is the action in sentence case, such as **Delete channel**. Never leave the default **Confirm**.
 * The confirm button repeats the action verb, such as **Remove** or **Delete**. Never **OK** or **Yes**.
 * Set `destructive: true` for anything that loses data.
 * Never "Are you sure you want to". Ask the question directly.
@@ -174,7 +176,7 @@ Use `shared.emptySection(text)` for a region and `shared.emptySection(text, { in
 
 Write entries through `LiveChannelsActivity`, which uses `ActivityLogger`, `ActivitySummary`, and `ActivityText` from Base.
 
-* The name is short and Title Case.
+* The name is short and in sentence case.
 * The overview is one sentence with no closing period, as Base writes it.
 * Use the same verb the UI uses for the action.
 
@@ -211,12 +213,12 @@ A color means the same thing on every page and in every plugin.
 
 | Color | Means | States |
 | :--- | :--- | :--- |
-| Green | Done and healthy | Enabled, Keeping Up |
-| Red | Failed, or about to lose data | Falling Behind, Failed |
-| Orange | Waiting, or needs attention soon | Slightly Behind, Stopping |
+| Green | Done and healthy | Enabled, Keeping up |
+| Red | Failed, or about to lose data | Falling behind, Failed |
+| Orange | Waiting, or needs attention soon | Slightly behind, Stopping |
 | Purple | Working right now | Running |
 | Blue | Informational | Info |
-| Gray | Off or not applicable | Disabled, Waiting for a Reading |
+| Gray | Off or not applicable | Disabled, Waiting for a reading |
 
 * Map a status to a color through `BADGE_STATES`. Never keep a second map in the plugin.
 * Disabled is gray when it means off. Red is only for failure.
@@ -252,7 +254,7 @@ Every config page uses Jellyfin's page shell.
 ### Tabs
 
 * One registered page per tab, wired with `createConfigPage` and `setTabs`.
-* Tab names are one Title Case word.
+* Tab names are one word.
 * The tab list is `tabList` in `livechannels_placeholder.js`, which every page script passes to `createConfigPage` with its own `tabIndex`.
 * Order tabs from what is used most to what is set once. Live Channels is **Channels**, **Popular**, **Sessions**, **Settings**.
 
@@ -279,7 +281,7 @@ Every save looks the same.
 * Every save is Base's `createSaveBar` with `fill: true`, and its button reads **Save**.
 * One Save Bar per thing that saves. A page with one save has one bar at the bottom of what it saves, and a section that saves on its own has one bar at the bottom of its content.
 * The Save Bar is the last element of what it saves. Nothing sits beside it or below it in that section.
-* Other actions that belong with the save, such as Reset to Defaults, Clear, Test, Run Now, or Refresh, go in one `base-button-row` directly above the Save Bar. A select that belongs with them stays a normal select in that row. Base spaces that row. Its buttons have no margin of their own, so their edges line up with the Save Bar's, the row sits one `--base-gap-narrow` above the Save Bar, and its buttons use the same font weight as Save. A plugin adds no margin, gap, or weight of its own. The Save Bar's element goes directly after the row, never inside a wrapper, since Base spaces them as siblings.
+* Other actions that belong with the save, such as Reset to defaults, Clear, Test, Run now, or Refresh, go in one `base-button-row` directly above the Save Bar. A select that belongs with them stays a normal select in that row. Base spaces that row. Its buttons have no margin of their own, so their edges line up with the Save Bar's, the row sits one `--base-gap-narrow` above the Save Bar, and its buttons use the same font weight as Save. A plugin adds no margin, gap, or weight of its own. The Save Bar's element goes directly after the row, never inside a wrapper, since Base spaces them as siblings.
 * The Save Bar shows the outcome. Never add a status span or a hand placed Save button beside it, and never position a Save Bar with plugin CSS.
 * No divider line sits above a Save Bar.
 * Wire `setDirty` from the page's change tracking, and have `onSave` return the save promise. The channel editor tracks changes with `createChangeTracker` and asks before discarding edits.
@@ -326,7 +328,7 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 | A secret | `bindSecretField`, `readSecretField`, and `clearSecretField` |
 | A template with `{name}` tokens | `placeholderHint` and `bindPlaceholders` |
 | One number on a range, such as a score or a size in percent | `createSliderField` |
-| A color | `createColorPicker`, inside `createInheritField` when it can also follow the authored value, such as **As Authored** and **Custom** |
+| A color | `createColorPicker`, inside `createInheritField` when it can also follow the authored value, such as **As authored** and **Custom** |
 | A code, path, or link to copy | `createCopyField` |
 | An image upload, such as a logo | `createImagePicker` |
 | Code or JSON, read only | `base-code-block` |
@@ -417,7 +419,7 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 | One number with a label | `createStatCard` |
 
 * Pick the chart by the question it answers. A single used of total bar is a Usage Meter, never a Bar Chart.
-* Name each slice with a glossary term in Title Case.
+* Name each slice with a glossary term in sentence case.
 * Take colors from Base's series colors. Set a color only when it carries a [meaning](#meaning).
 * Give every chart a `label`, and an `emptyText` sentence for when it has nothing to draw.
 * Scope a chart to what the page shows. A chart beside the channel picker counts that channel only.
@@ -439,7 +441,7 @@ grep -o "export function create[A-Za-z]*" ~/.nuget/packages/jpkribs.jellyfin.bas
 | A dialog already in the page markup | `bindDialog` |
 
 * Build dialogs in JS with `openDialog` and its wrappers. Use `bindDialog` only when the markup is large and static.
-* A dialog title is Title Case and names what the dialog does.
+* A dialog title is in sentence case and names what the dialog does.
 * Buttons read, from left to right, the destructive action, then **Cancel**, then the primary action.
 
 ## Layout
@@ -488,7 +490,7 @@ Run every new or changed string through this list.
 * [ ] No colon at the end of a label, and none in a sentence unless it introduces a list.
 * [ ] One sentence, or two when the second is the fix or the consequence.
 * [ ] Sentences end with a period. Labels, buttons, and titles do not.
-* [ ] Title Case for labels, buttons, titles, tabs, and badges. Sentence case for sentences.
+* [ ] Sentence case for every string, with the words in `casing.json` kept as written.
 * [ ] No "please", "successfully", exclamation marks, ALL CAPS, "(s)", or contractions.
 * [ ] The word matches [Words to Use](#words-to-use).
 * [ ] Base's typings were searched before any markup was built by hand.
