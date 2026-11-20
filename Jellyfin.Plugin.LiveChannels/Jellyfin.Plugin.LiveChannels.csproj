@@ -30,6 +30,68 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Jellyfin's own strings the pages and the server use, in every language Jellyfin has -->
+    <JellyfinString Include="AnyLanguage" />
+    <JellyfinString Include="Blacklist" />
+    <JellyfinString Include="Bold" />
+    <JellyfinString Include="ButtonCancel" />
+    <JellyfinString Include="ButtonRemove" />
+    <JellyfinString Include="Channels" />
+    <JellyfinString Include="Custom" />
+    <JellyfinString Include="Default" />
+    <JellyfinString Include="Delete" />
+    <JellyfinString Include="Disabled" />
+    <JellyfinString Include="Episode" />
+    <JellyfinString Include="Episodes" />
+    <JellyfinString Include="Filters" />
+    <JellyfinString Include="Genre" />
+    <JellyfinString Include="Guide" />
+    <JellyfinString Include="HeaderError" />
+    <JellyfinString Include="HeaderSubtitleAppearance" />
+    <JellyfinString Include="HeaderYears" />
+    <JellyfinString Include="HomeVideos" Source="server" />
+    <JellyfinString Include="LabelCollection" />
+    <JellyfinString Include="LabelFailed" />
+    <JellyfinString Include="LabelFont" />
+    <JellyfinString Include="LabelMetadata" />
+    <JellyfinString Include="LabelNumber" />
+    <JellyfinString Include="LabelSize" />
+    <JellyfinString Include="LabelTitle" />
+    <JellyfinString Include="Logo" />
+    <JellyfinString Include="MediaInfoResolution" />
+    <JellyfinString Include="Movie" />
+    <JellyfinString Include="Movies" />
+    <JellyfinString Include="MusicVideo" />
+    <JellyfinString Include="MusicVideos" />
+    <JellyfinString Include="Name" />
+    <JellyfinString Include="Never" />
+    <JellyfinString Include="New" />
+    <JellyfinString Include="News" />
+    <JellyfinString Include="None" />
+    <JellyfinString Include="OptionRandom" />
+    <JellyfinString Include="OptionSpecialEpisode" />
+    <JellyfinString Include="People" />
+    <JellyfinString Include="Refresh" />
+    <JellyfinString Include="Reset" />
+    <JellyfinString Include="Save" />
+    <JellyfinString Include="Settings" />
+    <JellyfinString Include="Shows" />
+    <JellyfinString Include="Shuffle" />
+    <JellyfinString Include="Sports" />
+    <JellyfinString Include="Studios" />
+    <JellyfinString Include="TitleHardwareAcceleration" />
+    <JellyfinString Include="TitlePlayback" />
+    <JellyfinString Include="Unknown" />
+    <JellyfinString Include="Upload" />
+    <JellyfinString Include="Whitelist" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Local strings whose English matches a Jellyfin string with another meaning, here a scheduled task category -->
+    <JellyfinTextMatch Include="LabelLibrary" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Admin dashboard page -->
     <EmbeddedResource Include="Web\livechannels_channels.html" />
     <EmbeddedResource Include="Web\livechannels_channels.js" />

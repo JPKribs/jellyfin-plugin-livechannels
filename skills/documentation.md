@@ -185,7 +185,7 @@ Use `##` for README headings. Keep the README under 40 lines.
 | `livetv.html` | Jellyfin's Live TV channel grid with the channels' generated logos |
 | `shoot.mjs` | Opens each subject, sets it up, and writes every PNG to `docs/screenshots/` |
 
-Run it from the kit's folder. Set `BASEVER` to the Base version the plugin references, `JELLYFIN_WEB` to a jellyfin-web folder other than the macOS app's, `PLAYWRIGHT_CORE` to playwright-core's `index.mjs`, and `CHROMIUM` to a Chromium binary when the defaults do not fit.
+Run it from the kit's folder. Set `BASEVER` to the Base version the plugin references, `JELLYFIN_WEB` to a jellyfin-web folder other than the macOS app's, `PLAYWRIGHT_CORE` to playwright-core's `index.mjs`, and `CHROMIUM` to a Chromium binary when the defaults do not fit. The kit serves the pages their US English strings from `Localization/en-us.json` and the Jellyfin strings the project declares.
 
 ```bash
 python3 -I server.py 8831 &

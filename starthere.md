@@ -17,6 +17,7 @@ Each guide in [skills](skills/) covers one kind of work. Read the guide that mat
 | [skills/review.md](skills/review.md) | Call any change done. |
 | [skills/release.md](skills/release.md) | Cut a release. |
 | [skills/branches.md](skills/branches.md) | Pick a branch, sync the two, and promote unstable. |
+| [skills/translations.md](skills/translations.md) | Add or change a string a person reads. |
 
 A task that touches several areas needs every matching guide. A new channel setting, for example, needs the glossary, style, code, testing, documentation, and review guides.
 
@@ -63,6 +64,7 @@ Explain what you would change, why, and what it risks. Wait for an answer before
 | :--- | :--- |
 | `Jellyfin.Plugin.LiveChannels/` | The plugin source. |
 | `Jellyfin.Plugin.LiveChannels/Api/` | `LiveChannelsController`, the `livechannels` routes the pages call. |
+| `Jellyfin.Plugin.LiveChannels/Localization/` | The plugin's own strings, one file per language, with `en-us.json` holding every key. |
 | `Jellyfin.Plugin.LiveChannels/Configuration/` | `PluginConfiguration`. |
 | `Jellyfin.Plugin.LiveChannels/Web/` | The dashboard pages, as HTML and JS. |
 | `Jellyfin.Plugin.LiveChannels/Services/` | The Live TV service, schedules, streams, sessions, cards, and recording. |

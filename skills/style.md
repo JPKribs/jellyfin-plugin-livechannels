@@ -253,7 +253,7 @@ Every config page uses Jellyfin's page shell.
 
 * One registered page per tab, wired with `createConfigPage` and `setTabs`.
 * Tab names are one Title Case word.
-* Each page script holds the same `TABS` list and its own `tabIndex`. Change all four together, or move the list to one shared module first.
+* The tab list is `tabList` in `livechannels_placeholder.js`, which every page script passes to `createConfigPage` with its own `tabIndex`.
 * Order tabs from what is used most to what is set once. Live Channels is **Channels**, **Popular**, **Sessions**, **Settings**.
 
 ### Sections

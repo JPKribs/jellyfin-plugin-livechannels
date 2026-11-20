@@ -11,6 +11,7 @@ How to write, comment, and test code in this plugin. It covers C#, JavaScript, H
 | `Api/` | `LiveChannelsController`. | `.Api` |
 | `Configuration/` | `PluginConfiguration` only. No web files. | `.Configuration` |
 | `Web/` | Every page, script, and style served to the browser, named `livechannels_<page>`. | embedded |
+| `Localization/` | The plugin's own strings, one file per language. Base checks them and builds them in. See [translations.md](translations.md). | n/a |
 | `Assets/` | The logo, the fonts in `Assets/Fonts/`, and the Material Symbols font and codepoints. | n/a |
 | `Models/` | Channel settings, enums, and records. | `.Models` |
 | `Services/` | The Live TV service, streams, sessions, cards, recording, and the stress test. | `.Services` |
@@ -156,7 +157,8 @@ export function createBlockEditors(options) {
 * Comment every top level function, every function assigned to `shared`, and every exported function.
 * Do not comment the methods inside a returned handle. List them in the Output line instead.
 * Open each file with a header naming the file and saying what it holds in one sentence. Use no `// ====` banners.
-* Each page script imports Base by the relative path `./configurationpage?name=livechannels_jpkribs_shared.js`. `livechannels_placeholder.js` holds the rating and placeholder block Repeaters the Channels and Popular pages share, each card field showing only for the values its Repeater `visible(item)` allows.
+* Each page script imports Base by the relative path `./configurationpage?name=livechannels_jpkribs_shared.js`. `livechannels_placeholder.js` holds the rating and placeholder block Repeaters the Channels and Popular pages share, each card field showing only for the values its Repeater `visible(item)` allows, and the tab list and Base component text every page takes from its strings.
+* Every word a page shows comes from a key, per [translations.md](translations.md).
 * A new script or page goes in `Web/`, is an `EmbeddedResource` in the csproj, and is a page in `Plugin.GetPages`.
 
 ### HTML
@@ -208,7 +210,7 @@ export function createBlockEditors(options) {
 
 ## JavaScript Conventions
 
-* Each config page is an ES module whose default export calls Base's `createConfigPage` with the `TABS` list and its own `tabIndex`.
+* Each config page is an ES module whose default export calls Base's `createConfigPage` with the shared `tabList` and its own `tabIndex`.
 * Keep one handle for each Base component a page draws. Call `destroy` before drawing it again, and `setValue` when only its numbers change.
 * Drop an answer that arrives after the page moved on. Remember the picked key before the request and compare it when the answer lands.
 * Use `const` and `let`, never `var`. Arrow functions are fine for callbacks.
@@ -218,7 +220,7 @@ export function createBlockEditors(options) {
 
 ## Security
 
-* Guard every route in `LiveChannelsController` with `[Authorize(Policy = "RequiresElevation")]`, which the controller carries.
+* Guard every route in `LiveChannelsController` with `[Authorize(Policy = "RequiresElevation")]`, which the controller carries. The one exception is `Translations`, which serves the page strings with `[AllowAnonymous]`, since they are not secret.
 * Never put a token in a URL. The session logo is fetched with `shared.fetchObjectUrl`, which sends the token in a header, since Jellyfin refuses an `api_key` query.
 * Log text from a request, a channel, or a file through a named template. A new log line that holds such text passes it through `FormatUtilities.SanitizeForLog`.
 * Escape every user value placed in an ffmpeg filter or `drawtext`, or write it to a file the filter reads, as the card text does.

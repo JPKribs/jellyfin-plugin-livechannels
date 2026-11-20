@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Services;
 using JPKribs.Jellyfin.Base;
+using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Model.Tasks;
 
 namespace Jellyfin.Plugin.LiveChannels.Tasks;
@@ -23,24 +24,27 @@ public sealed class GenerateBufferCardsTask : PluginScheduledTask
     public const string TaskKey = "LiveChannelsGenerateBufferCards";
 
     private readonly LiveChannelsTvService _service;
+    private readonly IServerConfigurationManager _config;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="GenerateBufferCardsTask"/> class.
     /// </summary>
     /// <param name="service">The Live TV service, which knows the channels and their logos.</param>
-    public GenerateBufferCardsTask(LiveChannelsTvService service)
+    /// <param name="config">The server configuration, whose display language the name and description use.</param>
+    public GenerateBufferCardsTask(LiveChannelsTvService service, IServerConfigurationManager config)
     {
         _service = service;
+        _config = config;
     }
 
     /// <inheritdoc />
-    public override string Name => "Generate Buffer Cards";
+    public override string Name => BaseTranslations.Get(TranslationKeys.TaskGenerateBufferCards, BaseTranslations.ServerLanguage(_config));
 
     /// <inheritdoc />
     public override string Key => TaskKey;
 
     /// <inheritdoc />
-    public override string Description => "Renders the tune-in card, the shared Up Next layer and the placeholder cards of every enabled Live Channels channel that does not have current ones, so tuning in never waits on a render, an Up Next card only adds the item, and a placeholder only adds its message.";
+    public override string Description => BaseTranslations.Get(TranslationKeys.TaskGenerateBufferCardsDescription, BaseTranslations.ServerLanguage(_config));
 
     /// <inheritdoc />
     public override string Category => "Live TV";

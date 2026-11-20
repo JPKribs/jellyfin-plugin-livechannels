@@ -8,51 +8,49 @@
                 <div class="verticalSection verticalSection-extrabottompadding">
 
                     <div class="sectionTitleContainer flex align-items-center">
-                        <h1 class="sectionTitle">Settings</h1>
+                        <h1 class="sectionTitle" data-str="Settings">Settings</h1>
                     </div>
 
-                    <div class="fieldDescription">
-                        Output and playback options that apply to every channel, including the Popular one. Set the resolution, codecs, and bitrate, then open a section to adjust hardware, playback, and session limits.
-                    </div>
+                    <div class="fieldDescription" data-str="SettingsIntro">Output and playback options that apply to every channel, including the Popular one. Set the resolution, codecs, and bitrate, then open a section to adjust hardware, playback, and session limits.</div>
 
                     <div class="base-collapsible-section">
                         <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionEncoding">
-                            <span class="base-collapsible-title">Encoding</span>
+                            <span class="base-collapsible-title" data-str="HeaderEncoding">Encoding</span>
                             <span class="base-collapsible-icon">&#9660;</span>
                         </button>
                         <div id="sectionEncoding" class="base-collapsible-content collapsed">
                             <div class="selectContainer">
-                                <label class="selectLabel" for="resolution">Resolution</label>
+                                <label class="selectLabel" for="resolution" data-str="MediaInfoResolution">Resolution</label>
                                 <select is="emby-select" id="resolution">
                                     <option value="1280">720p</option>
                                     <option value="1920">1080p</option>
                                     <option value="2560">1440p</option>
                                     <option value="3840">4K</option>
                                 </select>
-                                <div class="fieldDescription">Every item is scaled to this one fixed size.</div>
+                                <div class="fieldDescription" data-str="HelpResolution">Every item is scaled to this one fixed size.</div>
                             </div>
 
                             <div class="selectContainer">
-                                <label class="selectLabel" for="videoCodec">Video Codec</label>
+                                <label class="selectLabel" for="videoCodec" data-str="LabelVideoCodecTitle">Video Codec</label>
                                 <select is="emby-select" id="videoCodec">
                                     <option value="H264">H.264</option>
                                     <option value="Hevc">HEVC / H.265</option>
                                 </select>
-                                <div class="fieldDescription">HEVC is smaller but less compatible. The encoder follows your Jellyfin hardware acceleration.</div>
+                                <div class="fieldDescription" data-str="HelpVideoCodec">HEVC is smaller but less compatible. The encoder follows your Jellyfin hardware acceleration.</div>
                             </div>
 
                             <div class="selectContainer">
-                                <label class="selectLabel" for="audioCodec">Audio Codec</label>
+                                <label class="selectLabel" for="audioCodec" data-str="LabelAudioCodecTitle">Audio Codec</label>
                                 <select is="emby-select" id="audioCodec">
                                     <option value="Aac">AAC</option>
                                     <option value="Ac3">AC3</option>
                                     <option value="Eac3">E-AC3</option>
                                 </select>
-                                <div class="fieldDescription">AC3 and E-AC3 are Dolby Digital. AAC is universal.</div>
+                                <div class="fieldDescription" data-str="HelpAudioCodec">AC3 and E-AC3 are Dolby Digital. AAC is universal.</div>
                             </div>
 
                             <div class="inputContainer">
-                                <label for="videoBitrate">Video Bitrate (kbps)</label>
+                                <label for="videoBitrate" data-str="LabelVideoBitrateKbps">Video Bitrate (kbps)</label>
                                 <input is="emby-input" type="number" id="videoBitrate" min="100" max="200000" step="100" autocomplete="off" />
                             </div>
                         </div>
@@ -60,7 +58,7 @@
 
                     <div class="base-collapsible-section">
                         <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionHardware">
-                            <span class="base-collapsible-title">Hardware Acceleration</span>
+                            <span class="base-collapsible-title" data-str="TitleHardwareAcceleration">Hardware Acceleration</span>
                             <span class="base-collapsible-icon">&#9660;</span>
                         </button>
                         <div id="sectionHardware" class="base-collapsible-content collapsed">
@@ -68,103 +66,103 @@
 
                             <label class="emby-checkbox-label">
                                 <input type="checkbox" is="emby-checkbox" id="copyVideo" />
-                                <span class="checkboxLabel">Copy Matching Video</span>
+                                <span class="checkboxLabel" data-str="LabelCopyMatchingVideo">Copy Matching Video</span>
                             </label>
-                            <div class="fieldDescription">Sends an item's video as it is, with no encoding, when it is already in the Video Codec, SDR, and no larger than the Resolution. A copied item keeps its own size, frame rate, and bitrate.</div>
+                            <div class="fieldDescription" data-str="HelpCopyMatchingVideo">Sends an item's video as it is, with no encoding, when it is already in the Video Codec, SDR, and no larger than the Resolution. A copied item keeps its own size, frame rate, and bitrate.</div>
 
                             <label class="emby-checkbox-label">
                                 <input type="checkbox" is="emby-checkbox" id="disableHwa" />
-                                <span class="checkboxLabel">Disable Hardware Acceleration</span>
+                                <span class="checkboxLabel" data-str="LabelDisableHardwareAcceleration">Disable Hardware Acceleration</span>
                             </label>
-                            <div class="fieldDescription">Forces software encoding and decoding. Turn this on if channels fail to play with hardware acceleration.</div>
+                            <div class="fieldDescription" data-str="HelpDisableHardwareAcceleration">Forces software encoding and decoding. Turn this on if channels fail to play with hardware acceleration.</div>
                         </div>
                     </div>
 
                     <div class="base-collapsible-section">
                         <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionPlayback">
-                            <span class="base-collapsible-title">Playback</span>
+                            <span class="base-collapsible-title" data-str="TitlePlayback">Playback</span>
                             <span class="base-collapsible-icon">&#9660;</span>
                         </button>
                         <div id="sectionPlayback" class="base-collapsible-content collapsed">
                             <div class="selectContainer">
-                                <label class="selectLabel">Default Language</label>
+                                <label class="selectLabel" data-str="LabelDefaultLanguage">Default Language</label>
                                 <div id="subLanguageHost"></div>
-                                <div class="fieldDescription">Your native language. A channel set to Forced only burns in subtitles when its audio is in another language, so foreign content stays followable.</div>
+                                <div class="fieldDescription" data-str="HelpDefaultLanguage">Your native language. A channel set to Forced only burns in subtitles when its audio is in another language, so foreign content stays followable.</div>
                             </div>
                         </div>
                     </div>
 
                     <div class="base-collapsible-section">
                         <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionSubtitles">
-                            <span class="base-collapsible-title">Subtitle Appearance</span>
+                            <span class="base-collapsible-title" data-str="HeaderSubtitleAppearance">Subtitle Appearance</span>
                             <span class="base-collapsible-icon">&#9660;</span>
                         </button>
                         <div id="sectionSubtitles" class="base-collapsible-content collapsed">
-                            <div class="fieldDescription">How burned-in subtitles look on every channel. Leave everything untouched to render each subtitle as it was authored, with its own bold, italic, and color tags.</div>
+                            <div class="fieldDescription" data-str="HelpSubtitleAppearance">How burned-in subtitles look on every channel. Leave everything untouched to render each subtitle as it was authored, with its own bold, italic, and color tags.</div>
 
                             <div class="inputContainer">
-                                <label for="subFont">Font</label>
-                                <input is="emby-input" type="text" id="subFont" autocomplete="off" placeholder="Leave blank to use the subtitle's own font" />
-                                <div class="fieldDescription">A font family installed on the server, such as Arial.</div>
+                                <label for="subFont" data-str="LabelFont">Font</label>
+                                <input is="emby-input" type="text" id="subFont" autocomplete="off" placeholder="Leave blank to use the subtitle's own font" data-str-placeholder="PlaceholderSubtitleFont" />
+                                <div class="fieldDescription" data-str="HelpSubtitleFont">A font family installed on the server, such as Arial.</div>
                             </div>
 
                             <div class="selectContainer">
-                                <label class="selectLabel">Size</label>
+                                <label class="selectLabel" data-str="LabelSize">Size</label>
                                 <div id="subScaleHost"></div>
-                                <div class="fieldDescription">A percentage of normal. 100 keeps the size the subtitle was authored at.</div>
+                                <div class="fieldDescription" data-str="HelpSubtitleSize">A percentage of normal. 100 keeps the size the subtitle was authored at.</div>
                             </div>
 
                             <div class="selectContainer">
-                                <label class="selectLabel">Text Color</label>
+                                <label class="selectLabel" data-str="LabelTextColorTitle">Text Color</label>
                                 <div id="subTextColorHost"></div>
-                                <div class="fieldDescription">As Authored keeps each subtitle's own color.</div>
+                                <div class="fieldDescription" data-str="HelpTextColor">As Authored keeps each subtitle's own color.</div>
                             </div>
 
                             <div class="selectContainer">
-                                <label class="selectLabel">Outline Color</label>
+                                <label class="selectLabel" data-str="LabelOutlineColor">Outline Color</label>
                                 <div id="subOutlineColorHost"></div>
-                                <div class="fieldDescription">Used for the outline, or for the box behind the text.</div>
+                                <div class="fieldDescription" data-str="HelpOutlineColor">Used for the outline, or for the box behind the text.</div>
                             </div>
 
                             <div class="selectContainer">
-                                <label class="selectLabel" for="subBorder">Background</label>
+                                <label class="selectLabel" for="subBorder" data-str="LabelBackground">Background</label>
                                 <select is="emby-select" id="subBorder">
-                                    <option value="Default">As Authored</option>
-                                    <option value="Outline">Outline</option>
-                                    <option value="Box">Solid box</option>
+                                    <option value="Default" data-str="OptionAsAuthored">As Authored</option>
+                                    <option value="Outline" data-str="OptionOutline">Outline</option>
+                                    <option value="Box" data-str="OptionSolidBox">Solid box</option>
                                 </select>
-                                <div class="fieldDescription">A solid box is the most readable over bright scenes.</div>
+                                <div class="fieldDescription" data-str="HelpBackground">A solid box is the most readable over bright scenes.</div>
                             </div>
 
                             <label class="emby-checkbox-label">
                                 <input type="checkbox" is="emby-checkbox" id="subBold" />
-                                <span class="checkboxLabel">Bold</span>
+                                <span class="checkboxLabel" data-str="Bold">Bold</span>
                             </label>
                         </div>
                     </div>
 
                     <div class="base-collapsible-section">
                         <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionSessions">
-                            <span class="base-collapsible-title">Sessions</span>
+                            <span class="base-collapsible-title" data-str="HeaderSessions">Sessions</span>
                             <span class="base-collapsible-icon">&#9660;</span>
                         </button>
                         <div id="sectionSessions" class="base-collapsible-content collapsed">
                             <div class="inputContainer">
-                                <label for="maxSessions">Maximum Concurrent Streams</label>
+                                <label for="maxSessions" data-str="LabelMaxConcurrentStreams">Maximum Concurrent Streams</label>
                                 <input is="emby-input" type="number" id="maxSessions" min="0" step="1" autocomplete="off" />
-                                <div class="fieldDescription">Most channels that may encode at once. The oldest is closed to make room, and 0 means no limit.</div>
+                                <div class="fieldDescription" data-str="HelpMaxConcurrentStreams">Most channels that may encode at once. The oldest is closed to make room, and 0 means no limit.</div>
                             </div>
 
                             <div class="inputContainer">
-                                <label for="sessionTimeout">Stream Time Limit (Minutes)</label>
+                                <label for="sessionTimeout" data-str="LabelStreamTimeLimit">Stream Time Limit (Minutes)</label>
                                 <input is="emby-input" type="number" id="sessionTimeout" min="0" step="5" autocomplete="off" />
-                                <div class="fieldDescription">Closes a stream open longer than this once no one is watching it. 0 turns it off.</div>
+                                <div class="fieldDescription" data-str="HelpStreamTimeLimit">Closes a stream open longer than this once no one is watching it. 0 turns it off.</div>
                             </div>
 
                             <div class="inputContainer">
-                                <label for="streamDirectory">Stream File Location</label>
-                                <input is="emby-input" type="text" id="streamDirectory" autocomplete="off" placeholder="Leave blank for the Jellyfin cache" />
-                                <div class="fieldDescription">Where playlists and segments are written while playing, taking effect on restart. Blank uses Jellyfin's cache. Pick a new or empty folder. The plugin cleans up old stream files inside this folder automatically, so it refuses one that already contains other content.</div>
+                                <label for="streamDirectory" data-str="LabelStreamFileLocation">Stream File Location</label>
+                                <input is="emby-input" type="text" id="streamDirectory" autocomplete="off" placeholder="Leave blank for the Jellyfin cache" data-str-placeholder="PlaceholderStreamFileLocation" />
+                                <div class="fieldDescription" data-str="HelpStreamFileLocation">Where playlists and segments are written while playing, taking effect on restart. Blank uses Jellyfin's cache. Pick a new or empty folder. The plugin cleans up old stream files inside this folder automatically, so it refuses one that already contains other content.</div>
                             </div>
                         </div>
                     </div>
@@ -172,24 +170,24 @@
                     <div id="settingsSaveBar"></div>
 
                     <div class="sectionTitleContainer flex align-items-center">
-                        <h1 class="sectionTitle">Troubleshooting</h1>
+                        <h1 class="sectionTitle" data-str="HeaderTroubleshooting">Troubleshooting</h1>
                     </div>
 
                     <div class="base-collapsible-section">
                         <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionStress">
-                            <span class="base-collapsible-title">Stress Test</span>
+                            <span class="base-collapsible-title" data-str="HeaderStressTest">Stress Test</span>
                             <span class="base-collapsible-icon">&#9660;</span>
                         </button>
                         <div id="sectionStress" class="base-collapsible-content collapsed">
-                            <div class="fieldDescription">Finds how many streams this server can encode at once using the real channel pipeline. Each round encodes a minute of the test item with one more stream than the last, until a stream drops below 30 fps. That count is your Maximum Concurrent Streams. It runs for a few minutes, loads the server heavily, and needs all channel streams stopped first.</div>
+                            <div class="fieldDescription" data-str="HelpStressTest">Finds how many streams this server can encode at once using the real channel pipeline. Each round encodes a minute of the test item with one more stream than the last, until a stream drops below 30 fps. That count is your Maximum Concurrent Streams. It runs for a few minutes, loads the server heavily, and needs all channel streams stopped first.</div>
                             <div class="selectContainer">
-                                <label class="selectLabel">Test Item</label>
+                                <label class="selectLabel" data-str="LabelTestItem">Test Item</label>
                                 <div id="stressItemHost"></div>
-                                <div class="fieldDescription">Search for one movie or episode to test with. Something demanding like 4K or HDR gives the most honest number. This choice is not saved.</div>
+                                <div class="fieldDescription" data-str="HelpTestItem">Search for one movie or episode to test with. Something demanding like 4K or HDR gives the most honest number. This choice is not saved.</div>
                             </div>
                             <div class="base-button-row">
-                                <button is="emby-button" type="button" id="stressRun" class="raised base-button primary"><span>Run Stress Test</span></button>
-                                <button is="emby-button" type="button" id="stressCancel" class="raised base-button destructive hidden"><span>Cancel Test</span></button>
+                                <button is="emby-button" type="button" id="stressRun" class="raised base-button primary"><span data-str="ButtonRunStressTest">Run Stress Test</span></button>
+                                <button is="emby-button" type="button" id="stressCancel" class="raised base-button destructive hidden"><span data-str="ButtonCancelTest">Cancel Test</span></button>
                             </div>
                             <span id="stressStatus" class="base-status-text"></span>
                             <div id="stressRounds"></div>
@@ -199,13 +197,13 @@
 
                     <div class="base-collapsible-section">
                         <button type="button" class="base-collapsible-header collapsed" aria-expanded="false" data-target="sectionReset">
-                            <span class="base-collapsible-title">Reset</span>
+                            <span class="base-collapsible-title" data-str="Reset">Reset</span>
                             <span class="base-collapsible-icon">&#9660;</span>
                         </button>
                         <div id="sectionReset" class="base-collapsible-content collapsed">
-                            <div class="fieldDescription">Rebuilds every channel schedule, the guide, and every channel's buffer cards from your current settings. Use it to clear a stale schedule, like after changing a channel's genres or filters.</div>
+                            <div class="fieldDescription" data-str="HelpResetSchedule">Rebuilds every channel schedule, the guide, and every channel's buffer cards from your current settings. Use it to clear a stale schedule, like after changing a channel's genres or filters.</div>
                             <button is="emby-button" type="button" id="btnResetSchedule" class="raised base-button destructive fill">
-                                <span>Reset Schedule</span>
+                                <span data-str="ButtonResetSchedule">Reset Schedule</span>
                             </button>
                             <span id="resetStatus" class="base-status-text"></span>
                         </div>

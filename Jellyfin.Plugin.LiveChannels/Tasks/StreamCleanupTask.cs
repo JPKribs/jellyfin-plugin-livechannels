@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Services;
 using JPKribs.Jellyfin.Base;
+using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Model.Tasks;
 
 namespace Jellyfin.Plugin.LiveChannels.Tasks;
@@ -18,24 +19,27 @@ namespace Jellyfin.Plugin.LiveChannels.Tasks;
 public sealed class StreamCleanupTask : PluginScheduledTask
 {
     private readonly LiveChannelsTvService _service;
+    private readonly IServerConfigurationManager _config;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StreamCleanupTask"/> class.
     /// </summary>
     /// <param name="service">The Live TV service that owns the stream files and knows which are still active.</param>
-    public StreamCleanupTask(LiveChannelsTvService service)
+    /// <param name="config">The server configuration, whose display language the name and description use.</param>
+    public StreamCleanupTask(LiveChannelsTvService service, IServerConfigurationManager config)
     {
         _service = service;
+        _config = config;
     }
 
     /// <inheritdoc />
-    public override string Name => "Clean Channels Directory";
+    public override string Name => BaseTranslations.Get(TranslationKeys.TaskCleanChannelsDirectory, BaseTranslations.ServerLanguage(_config));
 
     /// <inheritdoc />
     public override string Key => "LiveChannelsStreamCleanup";
 
     /// <inheritdoc />
-    public override string Description => "Removes leftover Live Channels stream directories that are no longer tied to an active channel, in case one got stuck or was not cleared on close.";
+    public override string Description => BaseTranslations.Get(TranslationKeys.TaskCleanChannelsDirectoryDescription, BaseTranslations.ServerLanguage(_config));
 
     /// <inheritdoc />
     public override string Category => "Live TV";

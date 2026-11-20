@@ -1,29 +1,30 @@
-import { createConfigPage, createList, createLogViewer, createMediaCard, openDialog } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { createConfigPage, createList, createLogViewer, createMediaCard, createTranslations, loadTranslations, openDialog } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { TRANSLATIONS_URL, tabList } from './configurationpage?name=livechannels_placeholder.js';
 
 export default function (view) {
     'use strict';
 
     var PLUGIN_ID = 'ac6940fb-aac6-4de8-b622-55a662e23658';
-    var TABS = [
-        { href: 'configurationpage?name=livechannels_channels', name: 'Channels' },
-        { href: 'configurationpage?name=livechannels_popular', name: 'Popular' },
-        { href: 'configurationpage?name=livechannels_sessions', name: 'Sessions' },
-        { href: 'configurationpage?name=livechannels_settings', name: 'Settings' }
-    ];
+    // The page's strings, empty until load reads them, so the markup keeps its English until then.
+    var t = createTranslations({});
 
     var page = createConfigPage(view, {
         pluginId: PLUGIN_ID,
         tabsKey: 'livechannels',
         tabIndex: 2,
-        tabs: TABS,
-        bind: bind,
+        tabs: function () { return tabList(t); },
         load: function () {
-            // A fresh poller per show: the page stops it on viewhide.
-            page.createPoller(loadSessions, 5000).start();
+            loadTranslations(TRANSLATIONS_URL).then(function (loaded) {
+                t = loaded;
+                t.apply(view);
+                ensureList();
+                // A fresh poller per show: the page stops it on viewhide.
+                page.createPoller(loadSessions, 5000).start();
+            });
         }
     });
     var Shared = page.shared;
-    var sessionList = createList({ layout: 'rows', render: function (s) { return sessionCard(s); }, emptyText: 'No channels are streaming right now.', label: 'Sessions' });
+    var sessionList = null;
 
     function el(id) { return view.querySelector('#' + id); }
 
@@ -53,11 +54,11 @@ export default function (view) {
     // Output
     // [object]: { status, detail } for the Media Card.
     function speedStatus(speed) {
-        if (typeof speed !== 'number' || speed <= 0) return { status: { label: 'Waiting', color: 'gray' }, detail: 'Waiting for a reading' };
-        var text = speed.toFixed(2) + 'x';
-        if (speed >= 1.0) return { status: { label: text, color: 'green' }, detail: 'Keeping up' };
-        if (speed >= 0.95) return { status: { label: text, color: 'orange' }, detail: 'Slightly behind' };
-        return { status: { label: text, color: 'red' }, detail: 'Falling behind' };
+        if (typeof speed !== 'number' || speed <= 0) return { status: { label: t.tr('StatusWaiting'), color: 'gray' }, detail: t.tr('StatusWaitingForReading') };
+        var text = t.format('ValueSpeed', speed.toFixed(2));
+        if (speed >= 1.0) return { status: { label: text, color: 'green' }, detail: t.tr('StatusKeepingUp') };
+        if (speed >= 0.95) return { status: { label: text, color: 'orange' }, detail: t.tr('StatusSlightlyBehind') };
+        return { status: { label: text, color: 'red' }, detail: t.tr('StatusFallingBehind') };
     }
 
     // Session id to a promise of its logo's object URL. The logo is served by our controller, and from Jellyfin
@@ -98,13 +99,21 @@ export default function (view) {
             icon: 'live_tv',
             image: function () { return logoUrl(s.Id); },
             title: s.Name || '',
-            titleSuffix: 'Channel ' + s.Number,
-            subtitle: 'Started ' + formatStarted(s.StartedUtc) + ', streaming for ' + formatElapsed(s.StartedUtc),
+            titleSuffix: t.format('ValueChannelNumber', s.Number),
+            subtitle: t.format('ValueSessionStarted', formatStarted(s.StartedUtc), formatElapsed(s.StartedUtc)),
             status: speed.status,
             detail: speed.detail,
-            badges: winding ? [{ label: 'No viewers. Stopping in ~' + s.StopsInSeconds + 's', color: 'orange' }] : [],
+            badges: winding ? [{ label: t.format('StatusStoppingIn', s.StopsInSeconds), color: 'orange' }] : [],
             onClick: function () { openLog(s.Id, s.Name); }
         });
+    }
+
+    // ensureList
+    // Creates the session list once, with the page's strings, and mounts it.
+    function ensureList() {
+        if (sessionList) return;
+        sessionList = createList({ layout: 'rows', render: function (s) { return sessionCard(s); }, emptyText: t.tr('EmptySessions'), label: t.tr('HeaderSessions') });
+        el('sessionList').appendChild(sessionList.element);
     }
 
     function render(sessions) {
@@ -116,17 +125,17 @@ export default function (view) {
 
     function loadSessions() {
         return ApiClient.getJSON(ApiClient.getUrl('livechannels/sessions')).then(render).catch(function () {
-            Shared.setStatus('sessionsStatus', 'Could not load sessions.', true);
+            Shared.setStatus('sessionsStatus', t.tr('ErrorCouldNotLoadSessions'), true);
         });
     }
 
     function killSession(id) {
-        Shared.setStatus('sessionsStatus', 'Stopping…', false);
+        Shared.setStatus('sessionsStatus', t.tr('MessageStopping'), false);
         return ApiClient.ajax({ type: 'DELETE', url: ApiClient.getUrl('livechannels/sessions/' + encodeURIComponent(id)) }).then(function () {
             Shared.setStatus('sessionsStatus', '', false);
             return loadSessions();
         }).catch(function () {
-            Shared.setStatus('sessionsStatus', 'Could not stop that stream.', true);
+            Shared.setStatus('sessionsStatus', t.tr('ErrorCouldNotStopStream'), true);
         });
     }
 
@@ -147,9 +156,9 @@ export default function (view) {
         return ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('livechannels/sessions/' + encodeURIComponent(_logSessionId) + '/log') })
             .then(function (r) { return r && typeof r.text === 'function' ? r.text() : Promise.resolve(String(r || '')); })
             .then(function (text) {
-                viewer.setValue(text ? text.split('\n') : ['No log yet. The session is still starting.']);
+                viewer.setValue(text ? text.split('\n') : [t.tr('MessageNoLogYet')]);
             }).catch(function () {
-                viewer.setValue([{ text: 'Could not load the log. The session may have just closed.', level: 'error' }]);
+                viewer.setValue([{ text: t.tr('ErrorCouldNotLoadLog'), level: 'error' }]);
             });
     }
 
@@ -161,20 +170,31 @@ export default function (view) {
     // name [string]: The channel name, used as the title.
     function openLog(id, name) {
         _logSessionId = id;
-        logViewer = createLogViewer({ maxLines: 20000, autoScroll: false, emptyText: 'Loading…', height: '55vh', label: 'ffmpeg log' });
+        logViewer = createLogViewer({
+            maxLines: 20000,
+            autoScroll: false,
+            emptyText: t.tr('MessageLoading'),
+            height: '55vh',
+            label: t.tr('LabelFfmpegLog'),
+            autoScrollText: t.tr('LabelAutoScroll'),
+            clearText: t.tr('ButtonClear'),
+            copyText: t.tr('ButtonCopyAll'),
+            copiedText: t.tr('MessageCopied'),
+            failedText: t.tr('ErrorCopyFailed')
+        });
         openDialog({
-            title: name || 'Session',
+            title: name || t.tr('LabelSession'),
             body: logViewer.element,
             size: 'large',
             // The log closes when the page hides, so its Escape and focus handlers do not outlive the page.
             page: page,
             buttons: [
-                { text: 'Kill', className: 'base-button destructive', action: function (close) {
+                { text: t.tr('ButtonKill'), className: 'base-button destructive', action: function (close) {
                     var target = _logSessionId;
                     close();
                     if (target) { killSession(target); }
                 } },
-                { text: 'Refresh', className: 'base-button primary', action: function () { loadLog(); } }
+                { text: t.tr('Refresh'), className: 'base-button primary', action: function () { loadLog(); } }
             ],
             onClose: function () {
                 _logSessionId = null;
@@ -182,10 +202,6 @@ export default function (view) {
             }
         });
         loadLog();
-    }
-
-    function bind() {
-        el('sessionList').appendChild(sessionList.element);
     }
 
     // Release every blob object URL when the page is torn down; nothing else revokes the last set.

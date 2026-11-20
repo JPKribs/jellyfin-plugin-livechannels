@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Linq;
 using Jellyfin.Plugin.LiveChannels.Models;
+using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Model.Configuration;
@@ -221,12 +222,12 @@ public class EncoderResolver
     /// <summary>
     /// Describes the hardware acceleration that will be used, for display in the settings UI.
     /// </summary>
-    /// <returns>A friendly label and whether it is hardware-accelerated.</returns>
+    /// <returns>A friendly label and whether it is hardware-accelerated. A software label is a translation key.</returns>
     public (string Label, bool IsHardware) DescribeAcceleration()
     {
         if (Plugin.Instance?.ReadConfiguration(c => c.DisableHardwareAcceleration) ?? false)
         {
-            return ("Software (hardware acceleration disabled below)", false);
+            return (TranslationKeys.AccelerationSoftwareDisabled, false);
         }
 
         return Detect(ReadOptions()) switch
@@ -237,7 +238,7 @@ public class EncoderResolver
             "qsv" => ("QSV (Intel Quick Sync)", true),
             "vaapi" => ("VAAPI", true),
             "rkmpp" => ("RKMPP (Rockchip)", true),
-            _ => ("Software (no hardware acceleration configured in Jellyfin)", false)
+            _ => (TranslationKeys.AccelerationSoftwareNone, false)
         };
     }
 

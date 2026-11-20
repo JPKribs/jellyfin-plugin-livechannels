@@ -1,21 +1,18 @@
-import { createBanner, createChipSelect, createColorPicker, createConfigPage, createDefinitionList, createInheritField, createMediaPicker, createSaveBar, createSliderField } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { createBanner, createChipSelect, createColorPicker, createConfigPage, createDefinitionList, createInheritField, createMediaPicker, createSaveBar, createSliderField, createTranslations, loadTranslations } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { TRANSLATIONS_URL, pickerText, readError, saveBarText, tabList, withText } from './configurationpage?name=livechannels_placeholder.js';
 
 export default function (view) {
     'use strict';
 
     var PLUGIN_ID = 'ac6940fb-aac6-4de8-b622-55a662e23658';
-    var TABS = [
-        { href: 'configurationpage?name=livechannels_channels', name: 'Channels' },
-        { href: 'configurationpage?name=livechannels_popular', name: 'Popular' },
-        { href: 'configurationpage?name=livechannels_sessions', name: 'Sessions' },
-        { href: 'configurationpage?name=livechannels_settings', name: 'Settings' }
-    ];
+    // The page's strings, empty until load reads them, so the markup keeps its English until then.
+    var t = createTranslations({});
 
     var page = createConfigPage(view, {
         pluginId: PLUGIN_ID,
         tabsKey: 'livechannels',
         tabIndex: 3,
-        tabs: TABS,
+        tabs: function () { return tabList(t); },
         bind: bind,
         load: load
     });
@@ -23,12 +20,12 @@ export default function (view) {
 
     var cultures = [];         // cached [{ value: ISO code, label: name }] for the language choices
     var langSelect = null;     // Chip Select, single, for the default subtitle language
-    var accelList = createDefinitionList({ items: [{ label: 'Hardware Acceleration', value: 'Checking…', mono: true }] });
-    var scaleSlider = createSliderField({ min: 50, max: 300, step: 5, value: 100, suffix: '%', label: 'Size' });
-    var textColor = colorField('#FFFFFF', 'Text Color');
-    var outlineColor = colorField('#000000', 'Outline Color');
-    var saveBar = createSaveBar({ fill: true, savedText: 'Saved. Refreshing Live TV…', onSave: saveSettings });
-    var stressRounds = createDefinitionList({ items: [] });
+    var accelList = null;      // the Hardware Acceleration Definition List
+    var scaleSlider = null;    // the subtitle Size Slider
+    var textColor = null;      // the subtitle Text Color field
+    var outlineColor = null;   // the subtitle Outline Color field
+    var saveBar = null;        // the Save Bar
+    var stressRounds = null;   // the stress test rounds Definition List
     var stressSummary = null;
 
     function el(id) { return view.querySelector('#' + id); }
@@ -49,14 +46,14 @@ export default function (view) {
     // Output
     // [object]: { element, read(), write(stored) }, where a blank stored value means As Authored.
     function colorField(fallback, label) {
-        var picker = createColorPicker({ value: fallback, label: label, onChange: function () { saveBar.setDirty(true); } });
+        var picker = createColorPicker({ value: fallback, label: label, pickLabel: t.tr('LabelPickColor'), invalidText: t.tr('ErrorInvalidColor'), onChange: markDirty });
         var inherit = createInheritField({
             field: picker,
             inheritedValue: fallback,
-            inheritText: 'As Authored',
-            overrideText: 'Custom',
+            inheritText: t.tr('OptionAsAuthored'),
+            overrideText: t.tr('Custom'),
             label: label,
-            onChange: function () { saveBar.setDirty(true); }
+            onChange: markDirty
         });
         return {
             element: inherit.element,
@@ -65,11 +62,36 @@ export default function (view) {
         };
     }
 
+    // markDirty
+    // Shows the Save Bar's unsaved line.
+    function markDirty() {
+        if (saveBar) saveBar.setDirty(true);
+    }
+
+    // ensureParts
+    // Creates the page's Base components once, with the page's strings, and mounts them.
+    function ensureParts() {
+        if (saveBar) return;
+        accelList = createDefinitionList({ items: [{ label: t.tr('TitleHardwareAcceleration'), value: t.tr('MessageChecking'), mono: true }] });
+        scaleSlider = createSliderField({ min: 50, max: 300, step: 5, value: 100, suffix: '%', label: t.tr('LabelSize') });
+        textColor = colorField('#FFFFFF', t.tr('LabelTextColorTitle'));
+        outlineColor = colorField('#000000', t.tr('LabelOutlineColor'));
+        saveBar = createSaveBar(withText({ fill: true, onSave: saveSettings }, saveBarText(t)));
+        stressRounds = createDefinitionList({ items: [] });
+        el('accelHost').appendChild(accelList.element);
+        el('subScaleHost').appendChild(scaleSlider.element);
+        el('subTextColorHost').appendChild(textColor.element);
+        el('subOutlineColorHost').appendChild(outlineColor.element);
+        el('settingsSaveBar').appendChild(saveBar.element);
+        el('stressRounds').appendChild(stressRounds.element);
+        Shared.setVisible(stressRounds.element, false);
+    }
+
     // ensureLangSelect
     // Creates the language Chip Select once and mounts it in the Playback section, or refreshes its choices.
     function ensureLangSelect() {
         if (!langSelect) {
-            langSelect = createChipSelect({ placeholder: 'Search languages', options: cultures, single: true, onChange: function () { saveBar.setDirty(true); } });
+            langSelect = createChipSelect(withText({ placeholder: t.tr('PlaceholderSearchLanguages'), options: cultures, single: true, onChange: markDirty }, pickerText(t)));
             el('subLanguageHost').appendChild(langSelect.element);
         } else {
             langSelect.setOptions(cultures);
@@ -96,8 +118,8 @@ export default function (view) {
 
     function renderAcceleration() {
         ApiClient.getJSON(ApiClient.getUrl('livechannels/encoders')).then(function (info) {
-            accelList.setItems([{ label: 'Hardware Acceleration', value: (info && info.acceleration) || 'Unknown', mono: true }]);
-        }).catch(function () { accelList.setItems([{ label: 'Hardware Acceleration', value: 'Unknown', mono: true }]); });
+            accelList.setItems([{ label: t.tr('TitleHardwareAcceleration'), value: (info && info.acceleration) || t.tr('Unknown'), mono: true }]);
+        }).catch(function () { accelList.setItems([{ label: t.tr('TitleHardwareAcceleration'), value: t.tr('Unknown'), mono: true }]); });
     }
 
     function loadSettings(config) {
@@ -179,9 +201,7 @@ export default function (view) {
             refreshGuide();
         }, function (err) {
             // The server rejects a color it cannot parse, so show what it said rather than a bare failure.
-            var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
-            return read.then(function (t) { return t ? t.replace(/^"|"$/g, '') : 'Could not save the settings.'; }, function () { return 'Could not save the settings.'; })
-                .then(function (message) { throw new Error(message); });
+            return readError(err, t.tr('ErrorCouldNotSaveSettings')).then(function (message) { throw new Error(message); });
         });
     }
 
@@ -189,11 +209,11 @@ export default function (view) {
     // Jellyfin's Refresh Guide task and its own Generate Buffer Cards task, so a stale schedule (for example one
     // still showing a now-excluded genre) and stale cards are both recreated fresh.
     function resetSchedule() {
-        Shared.setStatus('resetStatus', 'Rebuilding schedules, guide and tune-in cards…', false);
+        Shared.setStatus('resetStatus', t.tr('MessageRebuilding'), false);
         ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('livechannels/schedule/reset') }).then(function () {
-            Shared.setStatus('resetStatus', 'Done. The guide and tune-in cards are rebuilding in the background.', false);
+            Shared.setStatus('resetStatus', t.tr('MessageRebuildStarted'), false);
         }).catch(function () {
-            Shared.setStatus('resetStatus', 'Could not start the rebuild. Try again in a moment.', true);
+            Shared.setStatus('resetStatus', t.tr('ErrorCouldNotRebuild'), true);
         });
     }
 
@@ -208,7 +228,14 @@ export default function (view) {
     // Creates the stress test Media Picker once and mounts it in the Stress Test section.
     function ensureStressPicker() {
         if (stressPicker) { return; }
-        stressPicker = createMediaPicker({ single: true, itemTypes: ['Movie', 'Episode'], placeholder: 'Search movies and episodes', emptyText: 'No test item selected.' });
+        stressPicker = createMediaPicker(withText({
+            single: true,
+            itemTypes: ['Movie', 'Episode'],
+            typeLabels: { Movie: t.tr('Movie'), Episode: t.tr('Episode') },
+            placeholder: t.tr('PlaceholderSearchMoviesEpisodes'),
+            emptyText: t.tr('EmptyTestItem'),
+            removeText: t.format('LabelRemoveValue', '{value}')
+        }, pickerText(t)));
         el('stressItemHost').appendChild(stressPicker.element);
     }
 
@@ -220,12 +247,12 @@ export default function (view) {
     function renderStress(s) {
         var items = (s.Rounds || []).map(function (r) {
             return {
-                label: r.Streams + ' Stream' + (r.Streams === 1 ? '' : 's'),
-                value: { text: 'Slowest ' + r.MinFps + ' fps', badge: r.Passed ? { label: 'Passed', color: 'green' } : { label: 'Failed', color: 'red' } }
+                label: streamCount(r.Streams),
+                value: { text: t.format('ValueSlowestFps', r.MinFps), badge: r.Passed ? { label: t.tr('StatusPassed'), color: 'green' } : { label: t.tr('LabelFailed'), color: 'red' } }
             };
         });
         if (s.Running && s.CurrentStreams > 0) {
-            items.push({ label: s.CurrentStreams + ' Stream' + (s.CurrentStreams === 1 ? '' : 's'), value: { text: 'Testing…', badge: { label: 'Running', color: 'blue' } } });
+            items.push({ label: streamCount(s.CurrentStreams), value: { text: t.tr('MessageTesting'), badge: { label: t.tr('StatusRunning'), color: 'blue' } } });
         }
         stressRounds.setItems(items);
         Shared.setVisible(stressRounds.element, items.length > 0);
@@ -237,15 +264,15 @@ export default function (view) {
             var good = finished && s.Recommended > 0;
             stressSummary = createBanner({
                 kind: s.Error ? 'error' : (good ? 'success' : 'warn'),
-                title: finished ? (good ? 'Recommended Maximum Concurrent Streams: ' + s.Recommended : 'Even one stream could not hold realtime with this item.') : '',
-                text: s.Error ? s.Error : (good ? '' : 'Lower the resolution or bitrate.'),
+                title: finished ? (good ? t.format('MessageRecommendedStreams', s.Recommended) : t.tr('MessageNoStreamKeepsUp')) : '',
+                text: s.Error ? s.Error : (good ? '' : t.tr('MessageLowerResolution')),
                 dismissible: false,
                 actions: good ? [{
-                    text: 'Apply',
+                    text: t.tr('ButtonApply'),
                     onClick: function () {
                         el('maxSessions').value = s.Recommended;
-                        saveBar.setDirty(true);
-                        Shared.setStatus('stressStatus', 'Set to ' + s.Recommended + '. Select Save to keep it.', false);
+                        markDirty();
+                        Shared.setStatus('stressStatus', t.format('MessageSetToSave', s.Recommended), false);
                     }
                 }] : null
             });
@@ -253,6 +280,18 @@ export default function (view) {
         }
         Shared.setVisible('stressCancel', s.Running);
         el('stressRun').disabled = !!s.Running;
+    }
+
+    // streamCount
+    // Names a stress test round by its number of streams.
+    //
+    // Inputs
+    // count [number]: How many streams the round runs.
+    //
+    // Output
+    // [string]: The label, such as 3 Streams.
+    function streamCount(count) {
+        return count === 1 ? t.tr('LabelOneStream') : t.format('LabelStreams', count);
     }
 
     function pollStress() {
@@ -276,8 +315,8 @@ export default function (view) {
     function stressRun() {
         var picked = stressPicker ? stressPicker.getValue() : [];
         var id = picked.length ? picked[0].Id : '';
-        if (!id) { Shared.setStatus('stressStatus', 'Select a test item.', true); return; }
-        Shared.setStatus('stressStatus', 'Starting…', false);
+        if (!id) { Shared.setStatus('stressStatus', t.tr('ErrorSelectTestItem'), true); return; }
+        Shared.setStatus('stressStatus', t.tr('MessageStarting'), false);
         stressRounds.setItems([]);
         Shared.setVisible(stressRounds.element, false);
         el('stressSummary').innerHTML = '';
@@ -285,32 +324,22 @@ export default function (view) {
             Shared.setStatus('stressStatus', '', false);
             startStressPolling();
         }).catch(function (err) {
-            var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
-            read.then(function (t) {
-                Shared.setStatus('stressStatus', t ? t.replace(/^"|"$/g, '') : 'Could not start the test. Stop running streams first.', true);
-            }, function () {
-                Shared.setStatus('stressStatus', 'Could not start the test. Stop running streams first.', true);
+            readError(err, t.tr('ErrorCouldNotStartTest')).then(function (message) {
+                Shared.setStatus('stressStatus', message, true);
             });
         });
     }
 
     function stressCancel() {
         ApiClient.ajax({ type: 'DELETE', url: ApiClient.getUrl('livechannels/stresstest') }).then(pollStress).catch(function () {
-            Shared.setStatus('stressStatus', 'Could not cancel the test.', true);
+            Shared.setStatus('stressStatus', t.tr('ErrorCouldNotCancelTest'), true);
         });
     }
 
     function bind() {
-        el('accelHost').appendChild(accelList.element);
-        el('subScaleHost').appendChild(scaleSlider.element);
-        el('subTextColorHost').appendChild(textColor.element);
-        el('subOutlineColorHost').appendChild(outlineColor.element);
-        el('settingsSaveBar').appendChild(saveBar.element);
-        el('stressRounds').appendChild(stressRounds.element);
-        Shared.setVisible(stressRounds.element, false);
         // Any edit shows the Save Bar's unsaved line.
-        el('LiveChannelsSettingsForm').addEventListener('input', function (e) { if (!e.target.closest('#sectionStress')) saveBar.setDirty(true); });
-        el('LiveChannelsSettingsForm').addEventListener('change', function (e) { if (!e.target.closest('#sectionStress')) saveBar.setDirty(true); });
+        el('LiveChannelsSettingsForm').addEventListener('input', function (e) { if (!e.target.closest('#sectionStress')) markDirty(); });
+        el('LiveChannelsSettingsForm').addEventListener('change', function (e) { if (!e.target.closest('#sectionStress')) markDirty(); });
         el('btnResetSchedule').addEventListener('click', resetSchedule);
         el('stressRun').addEventListener('click', stressRun);
         el('stressCancel').addEventListener('click', stressCancel);
@@ -319,14 +348,17 @@ export default function (view) {
     function load() {
         Shared.initCollapsibles();
         // Populate the language options before applying the saved value to the dropdown.
-        loadLanguages().then(function () {
+        Promise.all([loadLanguages(), loadTranslations(TRANSLATIONS_URL)]).then(function (results) {
+            t = results[1];
+            t.apply(view);
+            ensureParts();
+            // A stress test may already be running (started earlier, page revisited): resume its display. The
+            // poll stops itself on the first response when no test is running.
+            ensureStressPicker();
+            startStressPolling();
             return Shared.getConfig().then(loadSettings);
         }).catch(function () {
-            saveBar.setState('failed', 'Could not load the settings. Reload the page to try again.');
+            if (saveBar) saveBar.setState('failed', t.tr('ErrorCouldNotLoadSettings'));
         });
-        // A stress test may already be running (started earlier, page revisited): resume its display. The
-        // poll stops itself on the first response when no test is running.
-        ensureStressPicker();
-        startStressPolling();
     }
 }

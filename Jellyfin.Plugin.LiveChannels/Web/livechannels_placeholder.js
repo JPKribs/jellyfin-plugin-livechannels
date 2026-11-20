@@ -1,26 +1,127 @@
 // livechannels_placeholder.js
-// The rating and placeholder block editors that the Channels and Popular pages share, and the card helpers the
-// Channels page uses for its sources.
+// The rating and placeholder block editors that the Channels and Popular pages share, the card helpers the
+// Channels page uses for its sources, and the translated text every page gives Base's components.
 
 import { createRepeater } from './configurationpage?name=livechannels_jpkribs_shared.js';
 
-export var PLACEHOLDER_STYLES = [
-    { value: 'Default', label: 'Default' },
-    { value: 'Static', label: 'Static' },
-    { value: 'Error', label: 'Error' },
-    { value: 'Ocean', label: 'Ocean' },
-    { value: 'NightSky', label: 'Night Sky' },
-    { value: 'LavaLamp', label: 'Lava Lamp' },
-    { value: 'Rain', label: 'Rain' },
-    { value: 'Embers', label: 'Embers' },
-    { value: 'Aurora', label: 'Aurora' },
-    { value: 'Custom', label: 'Custom' }
+// The address each page loads its strings from, for loadTranslations.
+export var TRANSLATIONS_URL = 'livechannels/Translations';
+
+// The placeholder card styles, each with the key of its name.
+var PLACEHOLDER_STYLES = [
+    { value: 'Default', key: 'Default' },
+    { value: 'Static', key: 'OptionStyleStatic' },
+    { value: 'Error', key: 'HeaderError' },
+    { value: 'Ocean', key: 'OptionStyleOcean' },
+    { value: 'NightSky', key: 'OptionStyleNightSky' },
+    { value: 'LavaLamp', key: 'OptionStyleLavaLamp' },
+    { value: 'Rain', key: 'OptionStyleRain' },
+    { value: 'Embers', key: 'OptionStyleEmbers' },
+    { value: 'Aurora', key: 'OptionStyleAurora' },
+    { value: 'Custom', key: 'Custom' }
 ];
 
 export var DEFAULT_NAME = '-';
-export var DEFAULT_TITLE = 'Thank you for watching!';
-export var DEFAULT_BODY = 'We will resume at {time} with {contentName}.';
 var MAX_TEXT = 200;
+
+// tabList
+// Names the four tabs every page shows, in the viewer's language once the strings have loaded.
+//
+// Inputs
+// t [object]: The translations handle.
+//
+// Output
+// [object[]]: { href, name } for each tab.
+export function tabList(t) {
+    return [
+        { href: 'configurationpage?name=livechannels_channels', name: t.tr('Channels', 'Channels') },
+        { href: 'configurationpage?name=livechannels_popular', name: t.tr('TabPopular', 'Popular') },
+        { href: 'configurationpage?name=livechannels_sessions', name: t.tr('HeaderSessions', 'Sessions') },
+        { href: 'configurationpage?name=livechannels_settings', name: t.tr('Settings', 'Settings') }
+    ];
+}
+
+// saveBarText
+// Gives a Save Bar its text in the viewer's language.
+//
+// Inputs
+// t [object]: The translations handle.
+//
+// Output
+// [object]: The Save Bar text options.
+export function saveBarText(t) {
+    return {
+        saveText: t.tr('Save'),
+        pendingText: t.tr('MessageUnsavedChanges'),
+        savingText: t.tr('MessageSaving'),
+        savedText: t.tr('MessageSavedRefreshing'),
+        failedText: t.tr('ErrorCouldNotSave'),
+        invalidText: t.tr('ErrorFixMarkedFields')
+    };
+}
+
+// pickerText
+// Gives a Chip Select or Media Picker its search and remove text in the viewer's language.
+//
+// Inputs
+// t [object]: The translations handle.
+//
+// Output
+// [object]: The text options both components take.
+export function pickerText(t) {
+    return {
+        noResultsText: t.tr('MessageNoMatches'),
+        errorText: t.tr('ErrorCouldNotSearch'),
+        clearLabel: t.tr('ButtonClear'),
+        removeText: t.tr('ButtonRemove')
+    };
+}
+
+// withText
+// Copies a component's options and adds text options to them.
+//
+// Inputs
+// options [object]: The component's own options.
+// text [object]: The text options to add.
+//
+// Output
+// [object]: The combined options.
+export function withText(options, text) {
+    var out = {};
+    Object.keys(text).forEach(function (k) { out[k] = text[k]; });
+    Object.keys(options).forEach(function (k) { out[k] = options[k]; });
+    return out;
+}
+
+// repeaterText
+// Gives a Repeater its button labels in the viewer's language.
+//
+// Inputs
+// t [object]: The translations handle.
+//
+// Output
+// [object]: The Repeater text options.
+export function repeaterText(t) {
+    return {
+        removeText: t.format('LabelRemoveValue', '{value}'),
+        upText: t.format('LabelMoveValueUp', '{value}'),
+        downText: t.format('LabelMoveValueDown', '{value}')
+    };
+}
+
+// readError
+// Reads the reason a failed request gives, such as a configuration save the server refused.
+//
+// Inputs
+// err [object]: The failed request.
+// fallback [string]: The text when the server gives no reason.
+//
+// Output
+// [Promise<string>]: The reason.
+export function readError(err, fallback) {
+    var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
+    return read.then(function (text) { return text ? text.replace(/^"|"$/g, '') : fallback; }, function () { return fallback; });
+}
 
 // pad2
 // Pads a number under 10 with a leading zero.
@@ -117,15 +218,17 @@ export function ratingInfo(ratings) {
 }
 
 // textLimit
-// Checks a text field against the longest text the server keeps.
+// Builds the check of a text field against the longest text the server keeps.
 //
 // Inputs
-// value [string]: The text.
+// t [object]: The translations handle.
 //
 // Output
-// [string]: The error sentence, or nothing when it fits.
-function textLimit(value) {
-    return (value || '').length > MAX_TEXT ? 'Use ' + MAX_TEXT + ' characters or fewer.' : '';
+// [function]: Checks a value and gives the error sentence, or nothing when it fits.
+function textLimit(t) {
+    return function (value) {
+        return (value || '').length > MAX_TEXT ? t.format('ErrorTextTooLong', MAX_TEXT) : '';
+    };
 }
 
 // createBlockEditors
@@ -133,12 +236,16 @@ function textLimit(value) {
 // RatingBlocks array, rating blocks first.
 //
 // Inputs
-// options [object]: { ratings, onChange }, where ratings comes from loadRatings.
+// options [object]: { ratings, t, onChange }, where ratings comes from loadRatings and t is the translations handle.
 //
 // Output
 // [object]: { ratingElement, placeholderElement, setValue(blocks), getValue(), isValid() }.
 export function createBlockEditors(options) {
     var ratings = options.ratings;
+    var t = options.t;
+    var defaultTitle = t.tr('PlaceholderDefaultTitle');
+    var defaultBody = t.tr('PlaceholderDefaultMessage');
+    var limit = textLimit(t);
 
     function changed() {
         if (options.onChange) options.onChange();
@@ -146,50 +253,50 @@ export function createBlockEditors(options) {
 
     function customPeriod(item) { return item.Period === 'Custom'; }
 
-    var ratingList = createRepeater({
+    var ratingList = createRepeater(withText({
         layout: 'card',
-        titleText: 'Rating Block {index}',
-        addText: 'Add Rating Block',
-        emptyText: 'No rating blocks yet. Any rating airs at any time.',
+        titleText: t.format('TitleRatingBlock', '{index}'),
+        addText: t.tr('ButtonAddRatingBlock'),
+        emptyText: t.tr('EmptyRatingBlocks'),
         fields: [
-            { key: 'MinOfficialRating', label: 'Minimum Age Rating', type: 'select', options: [{ value: '', label: 'No Minimum' }].concat(ratings.choices) },
+            { key: 'MinOfficialRating', label: t.tr('LabelMinAgeRating'), type: 'select', options: [{ value: '', label: t.tr('OptionNoMinimum') }].concat(ratings.choices) },
             {
-                key: 'MaxOfficialRating', label: 'Maximum Age Rating', type: 'select', options: [{ value: '', label: 'No Limit' }].concat(ratings.choices),
+                key: 'MaxOfficialRating', label: t.tr('LabelMaxAgeRating'), type: 'select', options: [{ value: '', label: t.tr('OptionNoLimit') }].concat(ratings.choices),
                 validate: function (value, item) {
                     var mn = ratings.valueOf(item.MinOfficialRating), mx = ratings.valueOf(value);
-                    return mn !== null && mx !== null && mn > mx ? 'Pick a maximum at or above the minimum.' : '';
+                    return mn !== null && mx !== null && mn > mx ? t.tr('ErrorMaxBelowMin') : '';
                 }
             },
-            { key: 'IncludeUnrated', label: 'Include Unrated', type: 'toggle' },
-            { key: 'IsKids', label: 'Tag As Kids', type: 'toggle' },
-            { key: 'Period', label: 'Period', type: 'select', options: [{ value: 'AllDay', label: 'All Day' }, { value: 'Custom', label: 'Custom' }] },
-            { key: 'StartMinutes', label: 'Start Time', type: 'time', visible: customPeriod },
-            { key: 'EndMinutes', label: 'End Time', type: 'time', visible: customPeriod }
+            { key: 'IncludeUnrated', label: t.tr('LabelIncludeUnrated'), type: 'toggle' },
+            { key: 'IsKids', label: t.tr('LabelTagAsKids'), type: 'toggle' },
+            { key: 'Period', label: t.tr('LabelPeriod'), type: 'select', options: [{ value: 'AllDay', label: t.tr('OptionAllDay') }, { value: 'Custom', label: t.tr('Custom') }] },
+            { key: 'StartMinutes', label: t.tr('LabelStartTime'), type: 'time', visible: customPeriod },
+            { key: 'EndMinutes', label: t.tr('LabelEndTime'), type: 'time', visible: customPeriod }
         ],
         newItem: function () { return toRatingItem({}); },
         onChange: changed
-    });
+    }, repeaterText(t)));
 
-    var placeholderList = createRepeater({
+    var placeholderList = createRepeater(withText({
         layout: 'card',
-        titleText: 'Placeholder Block {index}',
-        addText: 'Add Placeholder Block',
-        emptyText: 'No placeholder blocks yet.',
+        titleText: t.format('TitlePlaceholderBlock', '{index}'),
+        addText: t.tr('ButtonAddPlaceholderBlock'),
+        emptyText: t.tr('EmptyPlaceholderBlocks'),
         fields: [
-            { key: 'StartMinutes', label: 'Start Time', type: 'time' },
-            { key: 'EndMinutes', label: 'End Time', type: 'time' },
-            { key: 'PlaceholderName', label: 'Guide Name', placeholder: DEFAULT_NAME, validate: textLimit },
-            { key: 'PlaceholderStyle', label: 'Style', type: 'select', options: PLACEHOLDER_STYLES },
+            { key: 'StartMinutes', label: t.tr('LabelStartTime'), type: 'time' },
+            { key: 'EndMinutes', label: t.tr('LabelEndTime'), type: 'time' },
+            { key: 'PlaceholderName', label: t.tr('LabelGuideName'), placeholder: DEFAULT_NAME, validate: limit },
+            { key: 'PlaceholderStyle', label: t.tr('LabelStyle'), type: 'select', options: PLACEHOLDER_STYLES.map(function (o) { return { value: o.value, label: t.tr(o.key) }; }) },
             {
-                key: 'PlaceholderMediaPath', label: 'Image, GIF or Video', placeholder: '/path/on/the/server/card.mp4',
+                key: 'PlaceholderMediaPath', label: t.tr('LabelPlaceholderMedia'), placeholder: '/path/on/the/server/card.mp4',
                 visible: function (item) { return item.PlaceholderStyle === 'Custom'; }
             },
-            { key: 'PlaceholderTitle', label: 'Title', validate: textLimit },
-            { key: 'PlaceholderBody', label: 'Message', validate: textLimit }
+            { key: 'PlaceholderTitle', label: t.tr('LabelTitle'), validate: limit },
+            { key: 'PlaceholderBody', label: t.tr('LabelMessage'), validate: limit }
         ],
         newItem: function () { return toPlaceholderItem({}); },
         onChange: changed
-    });
+    }, repeaterText(t)));
 
     function toRatingItem(b) {
         return {
@@ -210,8 +317,8 @@ export function createBlockEditors(options) {
             PlaceholderName: b.PlaceholderName == null ? DEFAULT_NAME : b.PlaceholderName,
             PlaceholderStyle: b.PlaceholderStyle || 'Default',
             PlaceholderMediaPath: b.PlaceholderMediaPath || '',
-            PlaceholderTitle: b.PlaceholderTitle == null ? DEFAULT_TITLE : b.PlaceholderTitle,
-            PlaceholderBody: b.PlaceholderBody == null ? DEFAULT_BODY : b.PlaceholderBody
+            PlaceholderTitle: b.PlaceholderTitle == null ? defaultTitle : b.PlaceholderTitle,
+            PlaceholderBody: b.PlaceholderBody == null ? defaultBody : b.PlaceholderBody
         };
     }
 

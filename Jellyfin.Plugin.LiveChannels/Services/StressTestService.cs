@@ -7,6 +7,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.LiveChannels.Models;
+using JPKribs.Jellyfin.Base;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Model.Entities;
@@ -91,25 +92,25 @@ public sealed class StressTestService : IDisposable
     }
 
     /// <summary>
-    /// Starts a stress test against the given library item. Returns an error message when it cannot start
+    /// Starts a stress test against the given library item. Returns the translation key of why it cannot start
     /// (already running, unknown item, unreadable file), or <c>null</c> when the test is off and running.
     /// </summary>
     /// <param name="itemId">The library item to encode.</param>
-    /// <returns>An error message, or <c>null</c> on success.</returns>
+    /// <returns>The key of the reason, or <c>null</c> on success.</returns>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA3003:Review code for file path injection vulnerabilities", Justification = "The admin-supplied id only SELECTS a library item; the path checked and encoded is the item's own path from Jellyfin's library database, never request-derived text.")]
     public string? TryStart(Guid itemId)
     {
         var ffmpeg = _encoder.EncoderPath;
         if (string.IsNullOrEmpty(ffmpeg))
         {
-            return "No ffmpeg encoder is configured.";
+            return TranslationKeys.ErrorNoEncoder;
         }
 
         var item = _library.GetItemById(itemId);
         var path = item?.Path;
         if (item is null || string.IsNullOrEmpty(path) || !File.Exists(path))
         {
-            return "That item's media file could not be found.";
+            return TranslationKeys.ErrorTestItemMissing;
         }
 
         MediaStream? video;
@@ -128,7 +129,7 @@ public sealed class StressTestService : IDisposable
         var runtime = item.RunTimeTicks is long ticks ? TimeSpan.FromTicks(ticks) : TimeSpan.Zero;
         if (runtime < SliceLength + TimeSpan.FromSeconds(30))
         {
-            return "Pick an item longer than 90 seconds (this one is too short, or its length is unknown).";
+            return TranslationKeys.ErrorTestItemTooShort;
         }
 
         CancellationToken token;
@@ -136,7 +137,7 @@ public sealed class StressTestService : IDisposable
         {
             if (_running)
             {
-                return "A stress test is already running.";
+                return TranslationKeys.ErrorTestRunning;
             }
 
             _running = true;
@@ -186,7 +187,7 @@ public sealed class StressTestService : IDisposable
                 return false;
             }
 
-            _error = "Cancelled: a viewer tuned in to a channel, so the encoder is no longer idle.";
+            _error = TranslationKeys.ErrorTestCancelledForViewer;
             try
             {
                 _cts?.Cancel();
@@ -264,7 +265,7 @@ public sealed class StressTestService : IDisposable
             _logger.LogWarning(ex, "Live Channels: stress test failed");
             lock (_lock)
             {
-                _error = "The test failed: " + ex.Message;
+                _error = TranslationKeys.ErrorTestFailed;
             }
         }
         finally

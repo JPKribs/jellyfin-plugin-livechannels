@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using Jellyfin.Plugin.LiveChannels.Configuration;
 using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Utilities;
+using JPKribs.Jellyfin.Base;
 
 namespace Jellyfin.Plugin.LiveChannels.Services;
 
@@ -23,7 +23,7 @@ public static class ConfigurationValidator
     /// </summary>
     /// <param name="config">The incoming configuration.</param>
     /// <exception cref="ArgumentException">When an enabled channel is missing a number or sources, a number is duplicated, or a logo is invalid.</exception>
-    public static void Validate(PluginConfiguration config) => Validate(config, null);
+    public static void Validate(PluginConfiguration config) => Validate(config, null, null);
 
     /// <summary>
     /// Validates a configuration about to replace <paramref name="stored"/> (see the overload without it). A logo
@@ -32,13 +32,14 @@ public static class ConfigurationValidator
     /// </summary>
     /// <param name="config">The configuration to validate (normalized in place).</param>
     /// <param name="stored">The configuration currently in effect, or <c>null</c>.</param>
+    /// <param name="language">The language of the refusal, or <c>null</c> for US English.</param>
     /// <exception cref="ArgumentException">As for <see cref="Validate(PluginConfiguration)"/>.</exception>
-    public static void Validate(PluginConfiguration config, PluginConfiguration? stored)
+    public static void Validate(PluginConfiguration config, PluginConfiguration? stored, string? language = null)
     {
         ArgumentNullException.ThrowIfNull(config);
 
         Normalize(config);
-        ValidatePlayback(config);
+        ValidatePlayback(config, language);
         var storedLogos = new HashSet<string>(StringComparer.Ordinal);
         if (stored is not null)
         {
@@ -51,23 +52,23 @@ public static class ConfigurationValidator
             }
         }
 
-        void ValidateLogo(Channel channel) => ConfigurationValidator.ValidateLogo(channel, storedLogos.Contains(channel.LogoData ?? string.Empty));
+        void ValidateLogo(Channel channel) => ConfigurationValidator.ValidateLogo(channel, storedLogos.Contains(channel.LogoData ?? string.Empty), language);
 
         // The Popular channel takes the same per-channel checks as every configured channel (its number and
         // sources are fixed by the plugin, so only its editable surface is validated).
         if (config.PopularChannel is { } popular)
         {
             ValidateLogo(popular);
-            ValidateRatingBlocks(popular);
-            ValidateChannelLimits(popular);
+            ValidateRatingBlocks(popular, language);
+            ValidateChannelLimits(popular, language);
         }
 
         var numbers = new HashSet<int>();
         foreach (var channel in config.Channels)
         {
             ValidateLogo(channel);
-            ValidateRatingBlocks(channel);
-            ValidateChannelLimits(channel);
+            ValidateRatingBlocks(channel, language);
+            ValidateChannelLimits(channel, language);
 
             // Serving rules apply only to enabled channels; a disabled channel can be an incomplete draft.
             if (!channel.Enabled)
@@ -77,18 +78,18 @@ public static class ConfigurationValidator
 
             if (channel.Number <= 0)
             {
-                throw new ArgumentException("Enabled channel needs a channel number: " + Describe(channel));
+                throw Reject(language, TranslationKeys.ErrorChannelNeedsNumber, Describe(channel, language));
             }
 
             if (channel.Sources.Count == 0)
             {
-                throw new ArgumentException("Enabled channel has no library sources: " + Describe(channel));
+                throw Reject(language, TranslationKeys.ErrorChannelNoSources, Describe(channel, language));
             }
 
             // Two enabled channels with the same number collide in the Live TV guide, so reject duplicates.
             if (!numbers.Add(channel.Number))
             {
-                throw new ArgumentException("Duplicate channel number: " + channel.Number);
+                throw Reject(language, TranslationKeys.ErrorDuplicateChannelNumber, channel.Number);
             }
         }
     }
@@ -169,55 +170,50 @@ public static class ConfigurationValidator
     // Playback settings that apply to every channel. A value out of range would either be silently clamped or
     // silently ignored at stream time, so it is rejected here instead: a saved setting that does nothing is worse
     // than a save that says why.
-    private static void ValidatePlayback(PluginConfiguration config)
+    private static void ValidatePlayback(PluginConfiguration config, string? language)
     {
         // The output shape. The dashboard only offers sane values, but an API client can send anything, and a
         // zero or negative width reaches the ffmpeg scale filter and fails every subsequent stream at encode
         // time with nothing in the save to explain why.
         if (config.TranscodeWidth is < 320 or > 3840)
         {
-            throw new ArgumentException("Resolution width must be between 320 and 3840 pixels.");
+            throw Reject(language, TranslationKeys.ErrorResolutionWidth);
         }
 
         if (config.TranscodeVideoBitrateKbps is < 100 or > 200000)
         {
-            throw new ArgumentException("Video bitrate must be between 100 and 200000 kbps.");
+            throw Reject(language, TranslationKeys.ErrorVideoBitrate);
         }
 
         if (config.MaxConcurrentSessions < 0)
         {
-            throw new ArgumentException("Maximum concurrent streams cannot be negative. Use 0 for no limit.");
+            throw Reject(language, TranslationKeys.ErrorMaxStreamsNegative);
         }
 
         if (config.SessionTimeoutMinutes < 0)
         {
-            throw new ArgumentException("Stream time limit cannot be negative. Use 0 to turn it off.");
+            throw Reject(language, TranslationKeys.ErrorStreamTimeLimitNegative);
         }
 
-        ValidateStreamDirectory(config.StreamDirectory);
+        ValidateStreamDirectory(config.StreamDirectory, language);
 
         // Zero means "never set" (a configuration saved before subtitle styling existed), which renders at the
         // subtitle's own size.
         if (config.SubtitleFontScalePercent != 0
             && config.SubtitleFontScalePercent is < SubtitleStyle.MinScalePercent or > SubtitleStyle.MaxScalePercent)
         {
-            throw new ArgumentException(
-                "Subtitle size must be between "
-                + SubtitleStyle.MinScalePercent.ToString(CultureInfo.InvariantCulture)
-                + "% and "
-                + SubtitleStyle.MaxScalePercent.ToString(CultureInfo.InvariantCulture)
-                + "%.");
+            throw Reject(language, TranslationKeys.ErrorSubtitleSize, SubtitleStyle.MinScalePercent, SubtitleStyle.MaxScalePercent);
         }
 
-        ValidateColor(config.SubtitleTextColor, "Subtitle text colour");
-        ValidateColor(config.SubtitleOutlineColor, "Subtitle outline colour");
+        ValidateColor(config.SubtitleTextColor, TranslationKeys.ErrorSubtitleTextColor, language);
+        ValidateColor(config.SubtitleOutlineColor, TranslationKeys.ErrorSubtitleOutlineColor, language);
     }
 
-    private static void ValidateColor(string? value, string label)
+    private static void ValidateColor(string? value, string key, string? language)
     {
         if (!string.IsNullOrWhiteSpace(value) && !SubtitleStyle.TryConvertColor(value, out _))
         {
-            throw new ArgumentException(label + " must be a hex colour like #FFFFFF.");
+            throw Reject(language, key);
         }
     }
 
@@ -225,7 +221,7 @@ public static class ConfigurationValidator
     // directories out of it. A configured path must therefore never point into existing data, so only a new,
     // empty, or already-plugin-owned directory is accepted, and the refusal happens here at save time, where
     // the admin can still pick a different folder.
-    private static void ValidateStreamDirectory(string? configured)
+    private static void ValidateStreamDirectory(string? configured, string? language)
     {
         if (string.IsNullOrWhiteSpace(configured))
         {
@@ -235,7 +231,7 @@ public static class ConfigurationValidator
         var path = configured.Trim();
         if (!Path.IsPathRooted(path))
         {
-            throw new ArgumentException("Stream file location must be an absolute path.");
+            throw Reject(language, TranslationKeys.ErrorStreamLocationNotAbsolute);
         }
 
         bool foreign;
@@ -258,8 +254,7 @@ public static class ConfigurationValidator
 
         if (foreign)
         {
-            throw new ArgumentException(
-                "Stream file location must be a new or empty directory. The plugin cleans up old stream files inside its folder, so it refuses a directory that already contains other content: " + path);
+            throw Reject(language, TranslationKeys.ErrorStreamLocationNotEmpty, path);
         }
     }
 
@@ -282,32 +277,32 @@ public static class ConfigurationValidator
 
     // Per-channel numeric limits the dashboard clamps in the browser; enforced here for every other client so
     // an out-of-range value is rejected with a reason instead of silently misbehaving at schedule time.
-    private static void ValidateChannelLimits(Channel channel)
+    private static void ValidateChannelLimits(Channel channel, string? language)
     {
         if (channel.TransitionWindowMinutes is < 0 or > MaxTransitionWindowMinutes)
         {
-            throw new ArgumentException("Transition window must be between 0 and 1440 minutes: " + Describe(channel));
+            throw Reject(language, TranslationKeys.ErrorTransitionWindow, Describe(channel, language));
         }
 
         if (channel.EpisodesPerBlock < 1)
         {
-            throw new ArgumentException("Episodes per block must be at least 1: " + Describe(channel));
+            throw Reject(language, TranslationKeys.ErrorEpisodesPerBlock, Describe(channel, language));
         }
 
         if (channel.MinCommunityRating is < 0 or > 10)
         {
-            throw new ArgumentException("Minimum community rating must be between 0 and 10: " + Describe(channel));
+            throw Reject(language, TranslationKeys.ErrorMinCommunityRating, Describe(channel, language));
         }
 
         if (channel.MinCriticRating is < 0 or > 100)
         {
-            throw new ArgumentException("Minimum critic rating must be between 0 and 100: " + Describe(channel));
+            throw Reject(language, TranslationKeys.ErrorMinCriticRating, Describe(channel, language));
         }
     }
 
     // A custom rating-block window must sit within the day and cover a real span; an all-day block ignores its
     // times. A zero-length custom window would silently never apply, so it is rejected as a mistake.
-    private static void ValidateRatingBlocks(Channel channel)
+    private static void ValidateRatingBlocks(Channel channel, string? language)
     {
         foreach (var block in channel.RatingBlocks)
         {
@@ -318,16 +313,16 @@ public static class ConfigurationValidator
 
             if (block.StartMinutes is < 0 or > 1439 || block.EndMinutes is < 0 or > 1439)
             {
-                throw new ArgumentException("Rating block time must be between 00:00 and 23:59: " + Describe(channel));
+                throw Reject(language, TranslationKeys.ErrorRatingBlockTime, Describe(channel, language));
             }
 
             if (block.StartMinutes == block.EndMinutes)
             {
-                throw new ArgumentException("Custom rating block needs different start and end times: " + Describe(channel));
+                throw Reject(language, TranslationKeys.ErrorRatingBlockSameTimes, Describe(channel, language));
             }
         }
 
-        ValidatePlaceholders(channel);
+        ValidatePlaceholders(channel, language);
     }
 
     /// <summary>The longest placeholder name, title or body accepted, in characters.</summary>
@@ -336,31 +331,31 @@ public static class ConfigurationValidator
     // A placeholder block takes the channel off air for its window, so it needs a window (all day would take the
     // channel off air for good), its windows must not overlap one another, its texts stay short enough to fit the
     // card, and a custom one names its picture or video.
-    private static void ValidatePlaceholders(Channel channel)
+    private static void ValidatePlaceholders(Channel channel, string? language)
     {
         var placeholders = channel.RatingBlocks.Where(b => b.IsPlaceholder).ToList();
         foreach (var block in placeholders)
         {
             if (block.Period != RatingBlockPeriod.Custom)
             {
-                throw new ArgumentException("Placeholder block needs start and end times: " + Describe(channel));
+                throw Reject(language, TranslationKeys.ErrorPlaceholderNeedsTimes, Describe(channel, language));
             }
 
             if (block.PlaceholderName.Length > MaxPlaceholderText || block.PlaceholderTitle.Length > MaxPlaceholderText || block.PlaceholderBody.Length > MaxPlaceholderText)
             {
-                throw new ArgumentException("Placeholder name, title and message must be at most " + MaxPlaceholderText + " characters: " + Describe(channel));
+                throw Reject(language, TranslationKeys.ErrorPlaceholderTextTooLong, MaxPlaceholderText, Describe(channel, language));
             }
 
             if (!Enum.IsDefined(block.PlaceholderStyle))
             {
-                throw new ArgumentException("Placeholder style is not recognised: " + Describe(channel));
+                throw Reject(language, TranslationKeys.ErrorPlaceholderStyle, Describe(channel, language));
             }
 
             // Only that a file is named: one that is missing (a share offline) falls back to the default look when
             // the cards render, and must not block saving anything else.
             if (block.PlaceholderStyle == PlaceholderStyle.Custom && string.IsNullOrWhiteSpace(block.PlaceholderMediaPath))
             {
-                throw new ArgumentException("Custom placeholder needs the path of an image, GIF or video on the server: " + Describe(channel));
+                throw Reject(language, TranslationKeys.ErrorPlaceholderNeedsPath, Describe(channel, language));
             }
         }
 
@@ -370,7 +365,7 @@ public static class ConfigurationValidator
             {
                 if (Overlap(placeholders[i], placeholders[j]))
                 {
-                    throw new ArgumentException("Placeholder blocks must not overlap: " + Describe(channel));
+                    throw Reject(language, TranslationKeys.ErrorPlaceholdersOverlap, Describe(channel, language));
                 }
             }
         }
@@ -382,10 +377,14 @@ public static class ConfigurationValidator
         => RatingSchedule.Spans(a.StartMinutes, a.EndMinutes)
             .Any(x => RatingSchedule.Spans(b.StartMinutes, b.EndMinutes).Any(y => x.From < y.To && y.From < x.To));
 
-    private static string Describe(Channel channel)
-        => string.IsNullOrWhiteSpace(channel.Name) ? "channel " + channel.Number : channel.Name;
+    private static string Describe(Channel channel, string? language)
+        => string.IsNullOrWhiteSpace(channel.Name) ? BaseTranslations.Format(TranslationKeys.ValueChannelNumber, language, channel.Number) : channel.Name;
 
-    private static void ValidateLogo(Channel channel, bool unchanged)
+    // The refusal a save shows, in the language it is shown in.
+    private static ArgumentException Reject(string? language, string key, params object?[] args)
+        => new(BaseTranslations.Format(key, language, args));
+
+    private static void ValidateLogo(Channel channel, bool unchanged, string? language)
     {
         if (string.IsNullOrEmpty(channel.LogoData))
         {
@@ -396,7 +395,7 @@ public static class ConfigurationValidator
         // Base64 expands by ~4/3, so the encoded form of the limit is that many characters.
         if (channel.LogoData.Length > (((MaxLogoBytes / 3) + 1) * 4))
         {
-            throw new ArgumentException("Channel logo exceeds the 4 MB limit: " + channel.Name);
+            throw Reject(language, TranslationKeys.ErrorLogoTooLarge, channel.Name);
         }
 
         byte[] bytes;
@@ -406,12 +405,12 @@ public static class ConfigurationValidator
         }
         catch (FormatException)
         {
-            throw new ArgumentException("Channel logo is not valid Base64: " + channel.Name);
+            throw Reject(language, TranslationKeys.ErrorLogoNotBase64, channel.Name);
         }
 
         if (bytes.Length > MaxLogoBytes)
         {
-            throw new ArgumentException("Channel logo exceeds the 4 MB limit: " + channel.Name);
+            throw Reject(language, TranslationKeys.ErrorLogoTooLarge, channel.Name);
         }
 
         // The logo is handed to ffmpeg (the tune-in card) and served to clients, so it must be an image in fact,
@@ -424,7 +423,7 @@ public static class ConfigurationValidator
         }
         else if (!unchanged)
         {
-            throw new ArgumentException("Channel logo is not a PNG, JPEG, WebP or GIF image: " + channel.Name);
+            throw Reject(language, TranslationKeys.ErrorLogoNotImage, channel.Name);
         }
     }
 

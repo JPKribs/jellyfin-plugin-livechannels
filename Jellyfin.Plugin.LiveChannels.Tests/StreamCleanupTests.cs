@@ -112,7 +112,7 @@ public sealed class StreamCleanupTests : IDisposable
         var paths = Substitute.For<IApplicationPaths>();
         paths.CachePath.Returns(_cache);
         paths.DataPath.Returns(Path.Combine(_cache, "data"));
-        var controller = new Jellyfin.Plugin.LiveChannels.Api.LiveChannelsController(null!, service, null!, tasks, paths);
+        var controller = new Jellyfin.Plugin.LiveChannels.Api.LiveChannelsController(null!, service, null!, tasks, paths, ServerConfig());
 
         Assert.IsType<Microsoft.AspNetCore.Mvc.NoContentResult>(controller.ResetSchedule());
 
@@ -129,7 +129,7 @@ public sealed class StreamCleanupTests : IDisposable
     public void GenerateBufferCards_IsALiveTvTaskThatRunsAtStartUp()
     {
         using var service = Create();
-        var task = new GenerateBufferCardsTask(service);
+        var task = new GenerateBufferCardsTask(service, ServerConfig());
         Assert.Equal("Generate Buffer Cards", task.Name);
         Assert.Equal("Live TV", task.Category);
         Assert.Equal(GenerateBufferCardsTask.TaskKey, task.Key);
@@ -143,6 +143,13 @@ public sealed class StreamCleanupTests : IDisposable
         var worker = Substitute.For<IScheduledTaskWorker>();
         worker.ScheduledTask.Returns(task);
         return worker;
+    }
+
+    private static IServerConfigurationManager ServerConfig()
+    {
+        var config = Substitute.For<IServerConfigurationManager>();
+        config.Configuration.Returns(new ServerConfiguration());
+        return config;
     }
 
     private LiveChannelsTvService Create()

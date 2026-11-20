@@ -1,22 +1,18 @@
-import { createChipSelect, createConfigPage, createImagePicker, createMediaPicker, createRepeater, createSaveBar, createSliderField, confirmDialog, downloadJson, pickJsonFile } from './configurationpage?name=livechannels_jpkribs_shared.js';
-import { createBlockEditors, loadRatings, migrateRatingBlocks, ratingInfo } from './configurationpage?name=livechannels_placeholder.js';
+import { createChipSelect, createConfigPage, createImagePicker, createMediaPicker, createRepeater, createSaveBar, createSliderField, createTranslations, confirmDialog, downloadJson, loadTranslations, pickJsonFile } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { TRANSLATIONS_URL, createBlockEditors, loadRatings, migrateRatingBlocks, pickerText, ratingInfo, readError, repeaterText, saveBarText, tabList, withText } from './configurationpage?name=livechannels_placeholder.js';
 
 export default function (view) {
     'use strict';
 
     var PLUGIN_ID = 'ac6940fb-aac6-4de8-b622-55a662e23658';
-    var TABS = [
-        { href: 'configurationpage?name=livechannels_channels', name: 'Channels' },
-        { href: 'configurationpage?name=livechannels_popular', name: 'Popular' },
-        { href: 'configurationpage?name=livechannels_sessions', name: 'Sessions' },
-        { href: 'configurationpage?name=livechannels_settings', name: 'Settings' }
-    ];
+    // The page's strings, empty until load reads them, so the markup keeps its English until then.
+    var t = createTranslations({});
 
     var page = createConfigPage(view, {
         pluginId: PLUGIN_ID,
         tabsKey: 'livechannels',
         tabIndex: 0,
-        tabs: TABS,
+        tabs: function () { return tabList(t); },
         bind: bind,
         load: load
     });
@@ -105,8 +101,8 @@ export default function (view) {
         var enabled = 0, disabled = 0;
         channels.forEach(function (ch) { if (ch.Enabled === false) disabled++; else enabled++; });
         Shared.renderCards('channelCounts', [
-            { label: 'Enabled', count: enabled, color: 'green' },
-            { label: 'Disabled', count: disabled, color: 'gray' }
+            { label: t.tr('Enabled'), count: enabled, color: 'green' },
+            { label: t.tr('Disabled'), count: disabled, color: 'gray' }
         ]);
     }
 
@@ -123,7 +119,9 @@ export default function (view) {
             })
             .map(function (entry) {
                 var ch = entry.ch;
-                var label = (ch.Number ? ch.Number + '. ' : '') + (ch.Name || 'new channel') + (ch.Enabled === false ? ', disabled' : '');
+                var name = ch.Name || t.tr('OptionNewChannel');
+                var label = ch.Enabled === false ? t.format('OptionChannelDisabled', name) : name;
+                if (ch.Number) label = ch.Enabled === false ? t.format('OptionChannelNumberedDisabled', ch.Number, name) : t.format('OptionChannelNumbered', ch.Number, name);
                 return '<option value="' + entry.i + '">' + Shared.escapeHtml(label) + '</option>';
             }).join('');
 
@@ -147,7 +145,7 @@ export default function (view) {
         var btn = el('btnEnable');
         btn.classList.toggle('primary', enabled);
         btn.classList.toggle('secondary', !enabled);
-        el('enableLabel').textContent = enabled ? 'Enabled' : 'Disabled';
+        el('enableLabel').textContent = enabled ? t.tr('Enabled') : t.tr('Disabled');
         btn.querySelector('.material-icons').textContent = enabled ? 'visibility' : 'visibility_off';
     }
 
@@ -308,7 +306,7 @@ export default function (view) {
 
     function libraryName(id) {
         var lib = libraries.filter(function (l) { return l.Id === id; })[0];
-        return lib ? lib.Name : 'Library';
+        return lib ? lib.Name : t.tr('LabelLibrary');
     }
 
     function collectionName(id) {
@@ -385,7 +383,7 @@ export default function (view) {
     // Renders a genre Chip Select for a source card.
     function genreField(key, placeholder) {
         return function (value, change) {
-            var chip = createChipSelect({ placeholder: placeholder, value: value || [], noResultsText: 'No genres in this library match.', onChange: function () { change(); } });
+            var chip = createChipSelect(withText({ placeholder: placeholder, value: value || [], noResultsText: t.tr('MessageNoGenresMatch'), onChange: function () { change(); } }, pickerText(t)));
             return sourcePart(key, chip,
                 function () { return chip.getValue().map(String); },
                 function (v) { chip.setValue(v || []); });
@@ -396,16 +394,16 @@ export default function (view) {
     // Renders the Media Picker a Whitelist or Blacklist source picks its items with, searching the card's library.
     function itemsField(value, change) {
         var part = null;
-        var picker = createMediaPicker({
+        var picker = createMediaPicker(withText({
             value: value || [],
             itemTypes: ['Series', 'Movie', 'Episode', 'MusicVideo', 'Video'],
-            placeholder: 'Search this library',
-            emptyText: 'No items picked.',
-            typeLabels: { Series: 'Show', MusicVideo: 'Music Video', Video: 'Home Video' },
+            placeholder: t.tr('PlaceholderSearchLibrary'),
+            emptyText: t.tr('EmptyPickedItems'),
+            typeLabels: { Series: t.tr('OptionShow'), Movie: t.tr('Movie'), Episode: t.tr('Episode'), MusicVideo: t.tr('MusicVideo'), Video: t.tr('OptionHomeVideo') },
             maxHeight: 360,
             searchFn: function (query) { return searchSourceItems(part ? part.entry.library : '', query); },
             onChange: function () { change(); }
-        });
+        }, withText({ removeText: t.format('LabelRemoveValue', '{value}') }, pickerText(t))));
         part = sourcePart('Items', picker,
             function () { return picker.getValue(); },
             function (v) { picker.setValue(v || []); });
@@ -507,11 +505,11 @@ export default function (view) {
     // rating Sliders, the source cards, the block cards, and the Save Bar.
     function ensureEditorParts() {
         if (!studioPicker) {
-            studioPicker = createChipSelect({ placeholder: 'Search studios', searchFn: searchStudios, onChange: markDirty });
+            studioPicker = createChipSelect(withText({ placeholder: t.tr('PlaceholderSearchStudios'), searchFn: searchStudios, onChange: markDirty }, pickerText(t)));
             el('studioHost').appendChild(studioPicker.element);
-            peoplePicker = createChipSelect({ placeholder: 'Search people', searchFn: searchPeople, onChange: markDirty });
+            peoplePicker = createChipSelect(withText({ placeholder: t.tr('PlaceholderSearchPeople'), searchFn: searchPeople, onChange: markDirty }, pickerText(t)));
             el('peopleHost').appendChild(peoplePicker.element);
-            audioLangPicker = createChipSelect({ placeholder: 'Any language', options: cultures, single: true, onChange: markDirty });
+            audioLangPicker = createChipSelect(withText({ placeholder: t.tr('AnyLanguage'), options: cultures, single: true, onChange: markDirty }, pickerText(t)));
             el('audioLanguageHost').appendChild(audioLangPicker.element);
         } else {
             audioLangPicker.setOptions(cultures);
@@ -519,64 +517,69 @@ export default function (view) {
         if (logoPicker) return;
 
         logoPicker = createImagePicker({
-            label: 'Logo',
-            description: 'Upload a custom square logo for this channel. With no upload, the preview shows the generated logo.',
+            label: t.tr('Logo'),
+            description: t.tr('HelpLogoUpload'),
             maxBytes: MAX_LOGO_BYTES,
             crop: true,
             maxSize: 512,
-            chooseText: 'Upload',
+            chooseText: t.tr('Upload'),
+            replaceText: t.tr('ButtonReplace'),
+            removeText: t.tr('ButtonRemove'),
+            emptyText: t.tr('EmptyImage'),
+            tooLargeText: t.format('ErrorImageTooLarge', '{value}'),
+            wrongTypeText: t.tr('ErrorNotAnImage'),
+            readErrorText: t.tr('ErrorCouldNotReadFile'),
             onChange: onLogoPicked
         });
         el('logoPickerHost').appendChild(logoPicker.element);
 
-        communitySlider = createSliderField({ min: 0, max: 10, step: 0.1, label: 'Minimum Community Rating', onChange: markDirty });
+        communitySlider = createSliderField({ min: 0, max: 10, step: 0.1, label: t.tr('LabelMinCommunityRating'), onChange: markDirty });
         el('minCommunityRatingHost').appendChild(communitySlider.element);
-        criticSlider = createSliderField({ min: 0, max: 100, step: 1, label: 'Minimum Critic Rating', onChange: markDirty });
+        criticSlider = createSliderField({ min: 0, max: 100, step: 1, label: t.tr('LabelMinCriticRating'), onChange: markDirty });
         el('minCriticRatingHost').appendChild(criticSlider.element);
 
-        sourceList = createRepeater({
+        sourceList = createRepeater(withText({
             layout: 'card',
-            titleText: '{Kind} Source',
-            addText: 'Add Source',
-            emptyText: 'No sources yet.',
+            titleText: t.tr('TitleKindSource'),
+            addText: t.tr('ButtonAddSource'),
+            emptyText: t.tr('EmptySources'),
             fields: [
-                { key: 'Kind', label: 'Source Type', type: 'select', options: [{ value: 'Library', label: 'Library' }, { value: 'Collection', label: 'Collection' }] },
+                { key: 'Kind', label: t.tr('LabelSourceType'), type: 'select', options: [{ value: 'Library', label: t.tr('LabelLibrary') }, { value: 'Collection', label: t.tr('LabelCollection') }] },
                 {
-                    key: 'LibraryId', label: 'Library', type: 'select', placeholder: 'Select a library', visible: isLibrary,
+                    key: 'LibraryId', label: t.tr('LabelLibrary'), type: 'select', placeholder: t.tr('PlaceholderSelectLibrary'), visible: isLibrary,
                     options: libraries.map(function (l) { return { value: l.Id, label: l.Name }; }),
-                    validate: function (value, item) { return item.Kind !== 'Collection' && !value ? 'Select a library.' : ''; }
+                    validate: function (value, item) { return item.Kind !== 'Collection' && !value ? t.tr('ErrorSelectLibrary') : ''; }
                 },
                 {
-                    key: 'CollectionId', label: 'Collection', type: 'select', placeholder: 'Select a collection', visible: function (item) { return !isLibrary(item); },
+                    key: 'CollectionId', label: t.tr('LabelCollection'), type: 'select', placeholder: t.tr('PlaceholderSelectCollection'), visible: function (item) { return !isLibrary(item); },
                     options: collections.map(function (c) { return { value: c.Id, label: c.Name }; }),
-                    validate: function (value, item) { return item.Kind === 'Collection' && !value ? 'Select a collection.' : ''; }
+                    validate: function (value, item) { return item.Kind === 'Collection' && !value ? t.tr('ErrorSelectCollection') : ''; }
                 },
                 {
-                    key: 'Selection', label: 'Selection', type: 'select', visible: isLibrary, options: [
-                        { value: 'AllContent', label: 'All Content' }, { value: 'Genre', label: 'Genre' },
-                        { value: 'Whitelist', label: 'Whitelist' }, { value: 'Blacklist', label: 'Blacklist' }]
+                    key: 'Selection', label: t.tr('LabelSelection'), type: 'select', visible: isLibrary, options: [
+                        { value: 'AllContent', label: t.tr('OptionAllContent') }, { value: 'Genre', label: t.tr('Genre') },
+                        { value: 'Whitelist', label: t.tr('Whitelist') }, { value: 'Blacklist', label: t.tr('Blacklist') }]
                 },
-                { key: 'Genres', label: 'Include Genres', type: 'custom', visible: isGenre, render: genreField('Genres', 'Add a genre') },
-                { key: 'MatchAllGenres', label: 'Match All Genres', type: 'toggle', visible: isGenre },
-                { key: 'ExcludeGenres', label: 'Exclude Genres', type: 'custom', visible: isGenre, render: genreField('ExcludeGenres', 'Add a genre to exclude') },
+                { key: 'Genres', label: t.tr('LabelIncludeGenres'), type: 'custom', visible: isGenre, render: genreField('Genres', t.tr('PlaceholderAddGenre')) },
+                { key: 'MatchAllGenres', label: t.tr('LabelMatchAllGenres'), type: 'toggle', visible: isGenre },
+                { key: 'ExcludeGenres', label: t.tr('LabelExcludeGenres'), type: 'custom', visible: isGenre, render: genreField('ExcludeGenres', t.tr('PlaceholderExcludeGenre')) },
                 {
-                    key: 'Items', label: 'Included Items', type: 'custom', visible: isPicked, render: itemsField,
-                    labelFor: function (item) { return item.Selection === 'Blacklist' ? 'Excluded Items' : 'Included Items'; }
+                    key: 'Items', label: t.tr('LabelIncludedItems'), type: 'custom', visible: isPicked, render: itemsField,
+                    labelFor: function (item) { return item.Selection === 'Blacklist' ? t.tr('LabelExcludedItems') : t.tr('LabelIncludedItems'); }
                 }
             ],
             onChange: function () { syncSources(); markDirty(); }
-        });
+        }, repeaterText(t)));
         el('librarySources').appendChild(sourceList.element);
 
-        blockEditors = createBlockEditors({ ratings: ratings, onChange: markDirty });
+        blockEditors = createBlockEditors({ ratings: ratings, t: t, onChange: markDirty });
         el('ratingBlocks').appendChild(blockEditors.ratingElement);
         el('placeholderBlocks').appendChild(blockEditors.placeholderElement);
 
-        saveBar = createSaveBar({
+        saveBar = createSaveBar(withText({
             fill: true,
-            savedText: 'Saved. Refreshing Live TV…',
             onSave: saveChannel
-        });
+        }, saveBarText(t)));
         el('channelSaveBar').appendChild(saveBar.element);
     }
 
@@ -651,8 +654,8 @@ export default function (view) {
     // Confirms discarding unsaved editor changes before an action that would lose them. Resolves to true to proceed.
     function confirmDiscard() {
         if (!editorDirty()) return Promise.resolve(true);
-        var name = (el('channelName').value || '').trim() || 'this channel';
-        return confirmDialog('Discard unsaved changes to "' + name + '"?', { title: 'Discard Changes', confirmText: 'Discard', destructive: true });
+        var name = (el('channelName').value || '').trim();
+        return confirmDialog(name ? t.format('ConfirmDiscardChannel', name) : t.tr('ConfirmDiscardNewChannel'), { title: t.tr('HeaderDiscardChanges'), confirmText: t.tr('ButtonDiscard'), cancelText: t.tr('ButtonCancel'), destructive: true });
     }
 
     function loadEditor() {
@@ -764,15 +767,15 @@ export default function (view) {
         if (currentIndex < 0 || !editing) return Promise.resolve();
         var ch = editing;
         readEditorInto(ch);
-        if (!ch.Name) return Promise.reject(new Error('A name is required.'));
-        if (!ch.Sources.length) return Promise.reject(new Error('Add at least one source.'));
-        if (!sourceList.isValid() || !blockEditors.isValid()) return Promise.reject(new Error('Fix the fields marked in red.'));
+        if (!ch.Name) return Promise.reject(new Error(t.tr('ErrorNameRequired')));
+        if (!ch.Sources.length) return Promise.reject(new Error(t.tr('ErrorAddSource')));
+        if (!sourceList.isValid() || !blockEditors.isValid()) return Promise.reject(new Error(t.tr('ErrorFixMarkedFields')));
 
         // The copy is complete and valid: persist a working set with it in place, and adopt that set only once
         // the server accepts it, so a rejected save leaves the stored channels (and the editor) as they were.
         var candidate = channels.slice();
         candidate[currentIndex] = JSON.parse(JSON.stringify(ch));
-        return persist(candidate, 'Could not save the channel.');
+        return persist(candidate, t.tr('ErrorCouldNotSaveChannel'));
     }
 
     function stripInternal(list) {
@@ -808,7 +811,7 @@ export default function (view) {
     function persist(candidate, errMessage, newIndex) {
         return Shared.getConfig().then(function (fresh) {
             if (JSON.stringify(fresh.Channels || []) !== serverChannels) {
-                var conflict = new Error('Channels were changed somewhere else since this page loaded. Reload the page, then make the change again.');
+                var conflict = new Error(t.tr('ErrorChannelsChangedElsewhere'));
                 conflict.conflict = true;
                 throw conflict;
             }
@@ -824,9 +827,7 @@ export default function (view) {
         }, function (err) {
             if (err && err.conflict) throw err;
             // Surface the server's validation message (like the settings page does) instead of a bare failure.
-            var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
-            return read.then(function (t) { return t ? t.replace(/^"|"$/g, '') : errMessage; }, function () { return errMessage; })
-                .then(function (message) { throw new Error(message); });
+            return readError(err, errMessage).then(function (message) { throw new Error(message); });
         });
     }
 
@@ -854,7 +855,7 @@ export default function (view) {
         };
         var name = 'live-channels-' + new Date().toISOString().slice(0, 10) + '.json';
         downloadJson(name, payload);
-        Shared.setStatus('ioStatus', 'Exported ' + channels.length + ' channel' + (channels.length === 1 ? '' : 's') + ' to ' + name + '.', false);
+        Shared.setStatus('ioStatus', channels.length === 1 ? t.format('MessageExportedOne', name) : t.format('MessageExportedMany', channels.length, name), false);
     }
 
     // Finds the index of the first channel in `list` with the given number, or -1.
@@ -866,19 +867,19 @@ export default function (view) {
     function importChannels(parsed) {
         var incoming = Array.isArray(parsed) ? parsed
             : (parsed && Array.isArray(parsed.channels) ? parsed.channels : null);
-        if (!incoming) { Shared.setStatus('ioStatus', 'Could not import. The file holds no channels.', true); return; }
+        if (!incoming) { Shared.setStatus('ioStatus', t.tr('ErrorImportNoChannels'), true); return; }
 
         // Validate the shape before touching the working set, so a bad file changes nothing.
         var clean = [];
         for (var i = 0; i < incoming.length; i++) {
             var ch = incoming[i];
             if (!ch || typeof ch !== 'object' || typeof ch.Name !== 'string' || !Array.isArray(ch.Sources)) {
-                Shared.setStatus('ioStatus', 'Could not import. The file is not a Live Channels export.', true);
+                Shared.setStatus('ioStatus', t.tr('ErrorImportNotExport'), true);
                 return;
             }
             clean.push(ch);
         }
-        if (!clean.length) { Shared.setStatus('ioStatus', 'No channels to import.', true); return; }
+        if (!clean.length) { Shared.setStatus('ioStatus', t.tr('MessageNoChannelsToImport'), true); return; }
 
         // Merge into a copy of the working set; it replaces `channels` only once the save succeeds.
         var candidate = channels.slice();
@@ -904,8 +905,8 @@ export default function (view) {
 
         // Resolve item names for any hand-picked sources so the editor reads cleanly, then save + refresh Live TV.
         hydrateItemNames(candidate).then(function () {
-            var message = 'Imported ' + clean.length + ' channel' + (clean.length === 1 ? '' : 's') + ' (' + added + ' added, ' + replaced + ' replaced). Refreshing Live TV…';
-            persist(candidate, 'Could not save the imported channels.', candidate.length ? 0 : -1).then(function () {
+            var message = clean.length === 1 ? t.format('MessageImportedOne', added, replaced) : t.format('MessageImportedMany', clean.length, added, replaced);
+            persist(candidate, t.tr('ErrorCouldNotSaveImport'), candidate.length ? 0 : -1).then(function () {
                 Shared.setStatus('ioStatus', message, false);
             }, function (err) { Shared.setStatus('ioStatus', err.message, true); });
         });
@@ -917,7 +918,7 @@ export default function (view) {
             return confirmDiscard().then(function (ok) { if (ok) importChannels(parsed); });
         }, function (err) {
             var unreadable = err && err.message === 'The file could not be read.';
-            Shared.setStatus('ioStatus', unreadable ? 'Could not read the file.' : 'Could not import. The file is not valid JSON.', true);
+            Shared.setStatus('ioStatus', unreadable ? t.tr('ErrorCouldNotReadFile') : t.tr('ErrorImportNotJson'), true);
         });
     }
 
@@ -944,14 +945,15 @@ export default function (view) {
     function deleteChannel() {
         var ch = channels[currentIndex];
         if (!ch) return;
-        confirmDialog('Delete channel "' + (ch.Name || 'this channel') + '"? This cannot be undone.', { title: 'Delete Channel', confirmText: 'Delete', destructive: true }).then(function (ok) {
+        var question = ch.Name ? t.format('ConfirmDeleteChannel', ch.Name) : t.tr('ConfirmDeleteNewChannel');
+        confirmDialog(question, { title: t.tr('HeaderDeleteChannel'), confirmText: t.tr('Delete'), cancelText: t.tr('ButtonCancel'), destructive: true }).then(function (ok) {
             // Delete the channel that was asked about, even if the list shifted while the dialog was open.
             var index = channels.indexOf(ch);
             if (!ok || index < 0) return;
             var candidate = channels.slice();
             candidate.splice(index, 1);
-            persist(candidate, 'Could not delete the channel.', -1).then(function () {
-                Shared.setStatus('ioStatus', 'Deleted. Refreshing Live TV…', false);
+            persist(candidate, t.tr('ErrorCouldNotDeleteChannel'), -1).then(function () {
+                Shared.setStatus('ioStatus', t.tr('MessageDeletedRefreshing'), false);
             }, function (err) { Shared.setStatus('ioStatus', err.message, true); });
         });
     }
@@ -1021,8 +1023,10 @@ export default function (view) {
 
     function load() {
         Shared.initCollapsibles();
-        Promise.all([loadLibraries(), loadCollections(), loadRatings(), loadLanguages()]).then(function (results) {
+        Promise.all([loadLibraries(), loadCollections(), loadRatings(), loadLanguages(), loadTranslations(TRANSLATIONS_URL)]).then(function (results) {
             ratings = results[2];
+            t = results[4];
+            t.apply(view);
             return Shared.getConfig();
         }).then(function (cfg) {
             serverChannels = JSON.stringify(cfg.Channels || []);
@@ -1035,7 +1039,7 @@ export default function (view) {
             currentIndex = channels.length ? 0 : -1;
             renderSelect();
         }).catch(function () {
-            Shared.setStatus('ioStatus', 'Could not load the channels. Reload the page to try again.', true);
+            Shared.setStatus('ioStatus', t.tr('ErrorCouldNotLoadChannels'), true);
         });
     }
 }

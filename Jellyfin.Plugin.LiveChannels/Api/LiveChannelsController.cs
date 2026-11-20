@@ -2,7 +2,9 @@ using System;
 using System.IO;
 using Jellyfin.Plugin.LiveChannels.Services;
 using Jellyfin.Plugin.LiveChannels.Tasks;
+using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
+using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Model.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -13,9 +15,9 @@ namespace Jellyfin.Plugin.LiveChannels.Api;
 /// <summary>
 /// A small admin-only helper for the configuration page. All channel content (channels, guide, streams,
 /// and logos) is served in-process through Jellyfin's Live TV; this controller exposes no content endpoints,
-/// only what the configuration page uses: the encoder check, the stress test, the schedule reset, and the
-/// active-session list. Every endpoint requires an elevated (administrator) token, so a session can only be
-/// listed or closed from the dashboard.
+/// only what the configuration page uses: the encoder check, the stress test, the schedule reset, the
+/// active-session list, and the page strings. Every endpoint but the page strings requires an elevated
+/// (administrator) token, so a session can only be listed or closed from the dashboard.
 /// </summary>
 [ApiController]
 [Authorize(Policy = "RequiresElevation")]
@@ -27,6 +29,7 @@ public class LiveChannelsController : ControllerBase
     private readonly StressTestService _stress;
     private readonly ITaskManager _taskManager;
     private readonly IApplicationPaths _paths;
+    private readonly IServerConfigurationManager _config;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LiveChannelsController"/> class.
@@ -36,14 +39,29 @@ public class LiveChannelsController : ControllerBase
     /// <param name="stress">The encoder stress test the settings page can run.</param>
     /// <param name="taskManager">The scheduled task manager, which Reset schedule starts the guide and card tasks through.</param>
     /// <param name="paths">The application paths, which locate the schedule cache Reset schedule clears.</param>
-    public LiveChannelsController(EncoderResolver encoders, LiveChannelsTvService tv, StressTestService stress, ITaskManager taskManager, IApplicationPaths paths)
+    /// <param name="config">The server configuration, whose display language the messages use.</param>
+    public LiveChannelsController(EncoderResolver encoders, LiveChannelsTvService tv, StressTestService stress, ITaskManager taskManager, IApplicationPaths paths, IServerConfigurationManager config)
     {
         _encoders = encoders;
         _tv = tv;
         _stress = stress;
         _taskManager = taskManager;
         _paths = paths;
+        _config = config;
     }
+
+    /// <summary>
+    /// Serves the strings the pages show, in one language. The strings are not secret, so the route allows
+    /// anonymous requests, as every page that loads them does.
+    /// </summary>
+    /// <param name="language">The language, such as de or pt-BR. Blank gives US English.</param>
+    /// <returns>The strings by key, or 304 when the page already has them.</returns>
+    [HttpGet("Translations")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status304NotModified)]
+    public IActionResult Translations([FromQuery] string? language)
+        => BaseTranslations.Serve(language, Request, Response);
 
     /// <summary>
     /// Resets every channel from scratch: clears the cached schedules and buffer cards, then starts Jellyfin's
@@ -85,18 +103,22 @@ public class LiveChannelsController : ControllerBase
     {
         if (_tv.GetActiveSessions().Count > 0)
         {
-            return Conflict("Stop the active channel streams first; the test needs the encoder to itself.");
+            return Conflict(BaseTranslations.Get(TranslationKeys.ErrorStopStreamsFirst, Language));
         }
 
         var error = _stress.TryStart(itemId);
-        return error is null ? Accepted() : Conflict(error);
+        return error is null ? Accepted() : Conflict(BaseTranslations.Get(error, Language));
     }
 
     /// <summary>Reports the stress test's progress and, once finished, its recommendation.</summary>
     /// <returns>The current stress test status.</returns>
     [HttpGet("stresstest")]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public ActionResult StressTestStatus() => new JsonResult(_stress.GetStatus());
+    public ActionResult StressTestStatus()
+    {
+        var status = _stress.GetStatus();
+        return new JsonResult(status.Error is null ? status : status with { Error = BaseTranslations.Get(status.Error, Language) });
+    }
 
     /// <summary>Cancels a running stress test.</summary>
     /// <returns>No content.</returns>
@@ -118,7 +140,7 @@ public class LiveChannelsController : ControllerBase
     public ActionResult Encoders()
     {
         var (label, hardware) = _encoders.DescribeAcceleration();
-        return new JsonResult(new { acceleration = label, hardware });
+        return new JsonResult(new { acceleration = hardware ? label : BaseTranslations.Get(label, Language), hardware });
     }
 
     /// <summary>
@@ -202,6 +224,9 @@ public class LiveChannelsController : ControllerBase
 
         return NoContent();
     }
+
+    // The server's display language, which every message this controller returns is in.
+    private string Language => BaseTranslations.ServerLanguage(_config);
 
     private ActiveSession? FindSession(string id)
     {

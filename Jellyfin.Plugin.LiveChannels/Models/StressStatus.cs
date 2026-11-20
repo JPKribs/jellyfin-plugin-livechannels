@@ -9,6 +9,6 @@ namespace Jellyfin.Plugin.LiveChannels.Models;
 /// <param name="CurrentStreams">The round in progress (how many concurrent streams), or zero when idle.</param>
 /// <param name="Rounds">The completed rounds so far.</param>
 /// <param name="Recommended">The recommended maximum concurrent streams once the test finishes, or <c>null</c> while running.</param>
-/// <param name="Error">Why the test stopped early, or <c>null</c>.</param>
+/// <param name="Error">Why the test stopped early, as the text or the translation key of it, or <c>null</c>.</param>
 /// <param name="ItemName">The item the test encodes, for display.</param>
 public sealed record StressStatus(bool Running, int CurrentStreams, IReadOnlyList<StressRound> Rounds, int? Recommended, string? Error, string? ItemName);

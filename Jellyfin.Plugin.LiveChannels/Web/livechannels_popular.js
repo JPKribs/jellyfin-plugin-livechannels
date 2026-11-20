@@ -1,22 +1,18 @@
-import { createConfigPage, createSaveBar } from './configurationpage?name=livechannels_jpkribs_shared.js';
-import { createBlockEditors, loadRatings, migrateRatingBlocks } from './configurationpage?name=livechannels_placeholder.js';
+import { createConfigPage, createSaveBar, createTranslations, loadTranslations } from './configurationpage?name=livechannels_jpkribs_shared.js';
+import { TRANSLATIONS_URL, createBlockEditors, loadRatings, migrateRatingBlocks, readError, saveBarText, tabList, withText } from './configurationpage?name=livechannels_placeholder.js';
 
 export default function (view) {
     'use strict';
 
     var PLUGIN_ID = 'ac6940fb-aac6-4de8-b622-55a662e23658';
-    var TABS = [
-        { href: 'configurationpage?name=livechannels_channels', name: 'Channels' },
-        { href: 'configurationpage?name=livechannels_popular', name: 'Popular' },
-        { href: 'configurationpage?name=livechannels_sessions', name: 'Sessions' },
-        { href: 'configurationpage?name=livechannels_settings', name: 'Settings' }
-    ];
+    // The page's strings, empty until load reads them, so the markup keeps its English until then.
+    var t = createTranslations({});
 
     var page = createConfigPage(view, {
         pluginId: PLUGIN_ID,
         tabsKey: 'livechannels',
         tabIndex: 1,
-        tabs: TABS,
+        tabs: function () { return tabList(t); },
         bind: bind,
         load: load
     });
@@ -27,14 +23,23 @@ export default function (view) {
 
     function el(id) { return view.querySelector('#' + id); }
 
-    // ensureBlockEditors
-    // Creates the rating and placeholder block card lists once, with the server's ratings.
+    // markDirty
+    // Shows the Save Bar's unsaved line.
+    function markDirty() {
+        if (saveBar) saveBar.setDirty(true);
+    }
+
+    // ensureParts
+    // Creates the Save Bar and the rating and placeholder block card lists once, with the server's ratings and the
+    // page's strings.
     //
     // Inputs
     // ratings [object]: { choices, valueOf } from loadRatings.
-    function ensureBlockEditors(ratings) {
+    function ensureParts(ratings) {
         if (blockEditors) return;
-        blockEditors = createBlockEditors({ ratings: ratings, onChange: function () { saveBar.setDirty(true); } });
+        saveBar = createSaveBar(withText({ fill: true, onSave: savePopular }, saveBarText(t)));
+        el('popularSaveBar').appendChild(saveBar.element);
+        blockEditors = createBlockEditors({ ratings: ratings, t: t, onChange: markDirty });
         el('popularRatingBlocks').appendChild(blockEditors.ratingElement);
         el('popularPlaceholderBlocks').appendChild(blockEditors.placeholderElement);
     }
@@ -42,7 +47,7 @@ export default function (view) {
     function loadPopular(config) {
         var pc = config.PopularChannel || {};
         el('popularEnabled').checked = pc.Enabled !== false;
-        el('popularName').value = pc.Name || 'Popular';
+        el('popularName').value = pc.Name || t.tr('TabPopular');
         el('popularIcon').value = pc.LogoSymbol || '';
         el('popularShowName').checked = pc.LogoShowName !== false;
         el('popularSubtitle').value = pc.SubtitleBurnIn || 'Never';
@@ -79,12 +84,12 @@ export default function (view) {
     // Output
     // [Promise]: Settles once the save is done.
     function savePopular() {
-        if (!blockEditors || !blockEditors.isValid()) return Promise.reject(new Error('Fix the fields marked in red.'));
+        if (!blockEditors || !blockEditors.isValid()) return Promise.reject(new Error(t.tr('ErrorFixMarkedFields')));
         // Read the latest config so settings on the other tabs are preserved, then update just the popular channel.
         return Shared.getConfig().then(function (fresh) {
             var pc = fresh.PopularChannel || {};
             pc.Enabled = el('popularEnabled').checked;
-            pc.Name = (el('popularName').value || '').trim() || 'Popular';
+            pc.Name = (el('popularName').value || '').trim() || t.tr('TabPopular');
             // The number and content are fixed; the logo always uses the symbol on this channel.
             pc.Number = 0;
             pc.LogoStyle = 'Symbol';
@@ -113,28 +118,26 @@ export default function (view) {
             refreshGuide();
         }, function (err) {
             // Surface the server's validation message (like the settings page does) instead of a bare failure.
-            var read = (err && err.responseText) ? Promise.resolve(err.responseText) : (err && err.text ? err.text() : Promise.resolve(''));
-            return read.then(function (t) { return t ? t.replace(/^"|"$/g, '') : 'Could not save.'; }, function () { return 'Could not save.'; })
-                .then(function (message) { throw new Error(message); });
+            return readError(err, t.tr('ErrorCouldNotSave')).then(function (message) { throw new Error(message); });
         });
     }
 
     function bind() {
-        saveBar = createSaveBar({ fill: true, savedText: 'Saved. Refreshing Live TV…', onSave: savePopular });
-        el('popularSaveBar').appendChild(saveBar.element);
         // Any edit shows the Save Bar's unsaved line.
-        el('LiveChannelsPopularForm').addEventListener('input', function () { saveBar.setDirty(true); });
-        el('LiveChannelsPopularForm').addEventListener('change', function () { saveBar.setDirty(true); });
+        el('LiveChannelsPopularForm').addEventListener('input', markDirty);
+        el('LiveChannelsPopularForm').addEventListener('change', markDirty);
     }
 
     function load() {
         Shared.initCollapsibles();
         // Populate the rating options before applying the saved values to them.
-        loadRatings().then(function (info) {
-            ensureBlockEditors(info);
+        Promise.all([loadRatings(), loadTranslations(TRANSLATIONS_URL)]).then(function (results) {
+            t = results[1];
+            t.apply(view);
+            ensureParts(results[0]);
             return Shared.getConfig().then(loadPopular);
         }).catch(function () {
-            saveBar.setState('failed', 'Could not load the settings. Reload the page to try again.');
+            if (saveBar) saveBar.setState('failed', t.tr('ErrorCouldNotLoadSettings'));
         });
     }
 }

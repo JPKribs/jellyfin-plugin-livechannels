@@ -7,6 +7,7 @@ using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Services;
 using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
+using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
 using Microsoft.Extensions.Logging;
@@ -23,15 +24,18 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
     /// </summary>
     /// <param name="applicationPaths">The application paths.</param>
     /// <param name="xmlSerializer">The XML serializer.</param>
+    /// <param name="serverConfig">The server configuration, whose display language a refused save is written in.</param>
     /// <param name="logger">The logger.</param>
     public Plugin(
         IApplicationPaths applicationPaths,
         IXmlSerializer xmlSerializer,
+        IServerConfigurationManager serverConfig,
         ILogger<Plugin> logger)
         : base(applicationPaths, xmlSerializer)
     {
         ArgumentNullException.ThrowIfNull(logger);
         _applicationPaths = applicationPaths;
+        _serverConfig = serverConfig;
 
         // Time-of-day schedules chain from the last configuration save. An install upgrading past that feature
         // has no recorded save yet, so stamp one now; without it every build would have to invent an anchor.
@@ -50,6 +54,7 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
     }
 
     private readonly IApplicationPaths _applicationPaths;
+    private readonly IServerConfigurationManager _serverConfig;
 
     /// <inheritdoc />
     public override string Name => "Live Channels";
@@ -69,7 +74,7 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
     /// <param name="stored">The configuration currently in effect.</param>
     protected override void OnConfigurationSaving(PluginConfiguration incoming, PluginConfiguration stored)
     {
-        ConfigurationValidator.Validate(incoming, stored);
+        ConfigurationValidator.Validate(incoming, stored, BaseTranslations.ServerLanguage(_serverConfig));
 
         // A save that changes the channels re-anchors the time-of-day schedule chain (the cache below is dropped
         // anyway, so the reshuffle this causes coincides with the rebuild the user already expects from saving).
