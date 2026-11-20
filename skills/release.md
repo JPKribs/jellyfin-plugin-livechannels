@@ -78,10 +78,10 @@ git push
 
 ## Publish
 
-1. **Draft.** The **Create/Update Release Draft** workflow builds the zip and writes a draft release named `v<version>` with the changelog as its notes. The push above starts it, since it changes files outside the docs and `.github`. Start it from the Actions tab only when the push did not.
-2. **Check.** Open the releases on GitHub once the workflow finishes. A push and a run by hand can each write a draft, so one version can have two drafts, one of them empty. Pick the draft whose notes match `build.yaml` and that has the zip and its `.md5` attached, and delete the other.
-3. **Release.** Publish that draft.
-4. **Manifest.** The **Publish Plugin** workflow takes the attached zip's checksum, adds the version to `manifest.json`, and commits "Update manifest for release v<version>". Check that the commit exists and that its checksum matches the release's `.md5`.
+1. **Draft.** The **Create/Update Release Draft** workflow builds the zip and writes a draft release named `v<version>` with the changelog as its notes. The push above starts it, since it changes files outside the docs and `.github`. Start it from the Actions tab only when the push did not. Draft builds run one at a time, so a push and a manual start that overlap build one after the other.
+2. **Check.** Wait until no draft build is queued or running, since each one replaces the zip. Then open the draft on GitHub. The notes must match `build.yaml`, and the zip and its `.md5` must be attached.
+3. **Release.** Publish the draft. A draft build never replaces the assets of a published release.
+4. **Manifest.** The **Publish Plugin** workflow waits for any draft build still running, hashes the attached zip, checks it against the `.md5`, adds the version to `manifest.json`, and commits "Update manifest for release v<version>". Check that the commit exists and that its checksum matches the release's `.md5`.
 5. **Pull.**
 
     ```bash
@@ -107,6 +107,6 @@ git push
 * [ ] `mkdocs build --strict` passes.
 * [ ] The changelog lists only this release, in the four keys.
 * [ ] The release branch was merged into `master` before the version was set.
-* [ ] The published draft matches `build.yaml` and has the zip and its `.md5`, and no second draft is left.
+* [ ] The published draft matches `build.yaml` and has the zip and its `.md5`.
 * [ ] The manifest commit's checksum matches the release's `.md5`.
 * [ ] The manifest commit is pulled.
