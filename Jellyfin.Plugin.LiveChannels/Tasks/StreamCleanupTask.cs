@@ -2,10 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Plugin.LiveChannels.Services;
 using JPKribs.Jellyfin.Base;
 using MediaBrowser.Model.Tasks;
 
-namespace Jellyfin.Plugin.LiveChannels.Services;
+namespace Jellyfin.Plugin.LiveChannels.Tasks;
 
 /// <summary>
 /// A scheduled task (Dashboard &gt; Scheduled Tasks, Live TV category) that clears leftover Live Channels stream

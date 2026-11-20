@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace Jellyfin.Plugin.LiveChannels.Services;
+namespace Jellyfin.Plugin.LiveChannels.Models;
 
 /// <summary>
 /// A snapshot of the encoder stress test for the settings page.

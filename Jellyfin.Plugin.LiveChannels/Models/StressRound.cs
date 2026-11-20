@@ -1,4 +1,4 @@
-namespace Jellyfin.Plugin.LiveChannels.Services;
+namespace Jellyfin.Plugin.LiveChannels.Models;
 
 /// <summary>
 /// One completed round of the encoder stress test.

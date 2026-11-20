@@ -1,4 +1,5 @@
 using System;
+using Jellyfin.Plugin.LiveChannels.Models;
 using Jellyfin.Plugin.LiveChannels.Services;
 using Xunit;
 

@@ -31,15 +31,15 @@
 
   <ItemGroup>
     <!-- Admin dashboard page -->
-    <EmbeddedResource Include="Configuration\livechannels_channels.html" />
-    <EmbeddedResource Include="Configuration\livechannels_channels.js" />
-    <EmbeddedResource Include="Configuration\livechannels_settings.html" />
-    <EmbeddedResource Include="Configuration\livechannels_settings.js" />
-    <EmbeddedResource Include="Configuration\livechannels_popular.html" />
-    <EmbeddedResource Include="Configuration\livechannels_popular.js" />
-    <EmbeddedResource Include="Configuration\livechannels_sessions.html" />
-    <EmbeddedResource Include="Configuration\livechannels_sessions.js" />
-    <EmbeddedResource Include="Configuration\livechannels_placeholder.js" />
+    <EmbeddedResource Include="Web\livechannels_channels.html" />
+    <EmbeddedResource Include="Web\livechannels_channels.js" />
+    <EmbeddedResource Include="Web\livechannels_settings.html" />
+    <EmbeddedResource Include="Web\livechannels_settings.js" />
+    <EmbeddedResource Include="Web\livechannels_popular.html" />
+    <EmbeddedResource Include="Web\livechannels_popular.js" />
+    <EmbeddedResource Include="Web\livechannels_sessions.html" />
+    <EmbeddedResource Include="Web\livechannels_sessions.js" />
+    <EmbeddedResource Include="Web\livechannels_placeholder.js" />
   </ItemGroup>
 
   <ItemGroup>

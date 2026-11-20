@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Jellyfin.Plugin.LiveChannels.Services;
+using Jellyfin.Plugin.LiveChannels.Tasks;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Model.Tasks;
 using Microsoft.AspNetCore.Authorization;

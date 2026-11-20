@@ -50,9 +50,9 @@ class H(http.server.BaseHTTPRequestHandler):
             elif n == 'livechannels_symbols.ttf':
                 path = os.path.join(REPO, 'Assets', 'MaterialSymbolsOutlined.ttf')
             elif os.path.splitext(n)[1] in ('.js', '.css'):
-                path = os.path.join(REPO, 'Configuration', n)
+                path = os.path.join(REPO, 'Web', n)
             else:
-                path = os.path.join(REPO, 'Configuration', n + '.html')
+                path = os.path.join(REPO, 'Web', n + '.html')
         elif u.path.startswith('/jf/'):
             path = os.path.join(JF, u.path[4:])
         else:

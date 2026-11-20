@@ -1,4 +1,5 @@
 using Jellyfin.Plugin.LiveChannels.Services;
+using Jellyfin.Plugin.LiveChannels.Tasks;
 using JPKribs.Jellyfin.Base;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.LiveTv;

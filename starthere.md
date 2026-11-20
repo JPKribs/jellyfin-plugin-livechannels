@@ -61,15 +61,18 @@ Explain what you would change, why, and what it risks. Wait for an answer before
 | Path | What it holds |
 | :--- | :--- |
 | `Jellyfin.Plugin.LiveChannels/` | The plugin source. |
-| `Jellyfin.Plugin.LiveChannels/Configuration/` | The dashboard pages, as HTML and JS, and `PluginConfiguration`. |
-| `Jellyfin.Plugin.LiveChannels/API/` | `LiveChannelsController`, the `livechannels` routes the pages call. |
-| `Jellyfin.Plugin.LiveChannels/Services/` | The Live TV service, schedules, streams, sessions, cards, recording, and the scheduled tasks. |
+| `Jellyfin.Plugin.LiveChannels/Api/` | `LiveChannelsController`, the `livechannels` routes the pages call. |
+| `Jellyfin.Plugin.LiveChannels/Configuration/` | `PluginConfiguration`. |
+| `Jellyfin.Plugin.LiveChannels/Web/` | The dashboard pages, as HTML and JS. |
+| `Jellyfin.Plugin.LiveChannels/Services/` | The Live TV service, schedules, streams, sessions, cards, and recording. |
+| `Jellyfin.Plugin.LiveChannels/Tasks/` | The scheduled tasks. |
 | `Jellyfin.Plugin.LiveChannels/Utilities/` | Pure helpers, such as ffmpeg arguments, schedule math, and card layout. |
-| `Jellyfin.Plugin.LiveChannels/Models/` | Channel settings and the types they use. |
+| `Jellyfin.Plugin.LiveChannels/Models/` | Channel settings, the types they use, and the stress test results. |
 | `Jellyfin.Plugin.LiveChannels/Assets/` | The fonts, the Material Symbols font, and the logo the plugin embeds. |
 | `Jellyfin.Plugin.LiveChannels.Tests/` | Unit tests and the ffmpeg integration tests. |
 | `.github/scripts/test-in-jellyfin.sh` | Runs the whole suite inside the Jellyfin 12.4 image with its jellyfin-ffmpeg. |
 | `docs/` | The documentation site, built with MkDocs. |
+| `tools/screenshots/` | The screenshot kit for the docs. |
 | `build.yaml` | The version, the artifacts, and the release notes. |
 | `build.sh` | Builds the plugin zip into `dist/`. |
 | `skills/` | The guides. |

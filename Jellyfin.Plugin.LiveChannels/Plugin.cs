@@ -163,7 +163,7 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
         yield return new PluginPageInfo
         {
             Name = "livechannels_channels",
-            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_channels.html",
+            EmbeddedResourcePath = $"{ns}.Web.livechannels_channels.html",
             MenuSection = "server",
             DisplayName = "Live Channels",
             EnableInMainMenu = false,
@@ -173,52 +173,52 @@ public class Plugin : PluginBase<Plugin, PluginConfiguration>
         yield return new PluginPageInfo
         {
             Name = "livechannels_channels.js",
-            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_channels.js"
+            EmbeddedResourcePath = $"{ns}.Web.livechannels_channels.js"
         };
 
         // Tab 2: Popular channel (the built-in channel 0's own settings).
         yield return new PluginPageInfo
         {
             Name = "livechannels_popular",
-            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_popular.html"
+            EmbeddedResourcePath = $"{ns}.Web.livechannels_popular.html"
         };
 
         yield return new PluginPageInfo
         {
             Name = "livechannels_popular.js",
-            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_popular.js"
+            EmbeddedResourcePath = $"{ns}.Web.livechannels_popular.js"
         };
 
         // Tab 3: Settings (plugin-wide configuration).
         yield return new PluginPageInfo
         {
             Name = "livechannels_settings",
-            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_settings.html"
+            EmbeddedResourcePath = $"{ns}.Web.livechannels_settings.html"
         };
 
         yield return new PluginPageInfo
         {
             Name = "livechannels_settings.js",
-            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_settings.js"
+            EmbeddedResourcePath = $"{ns}.Web.livechannels_settings.js"
         };
 
         yield return new PluginPageInfo
         {
             Name = "livechannels_sessions",
-            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_sessions.html"
+            EmbeddedResourcePath = $"{ns}.Web.livechannels_sessions.html"
         };
 
         yield return new PluginPageInfo
         {
             Name = "livechannels_sessions.js",
-            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_sessions.js"
+            EmbeddedResourcePath = $"{ns}.Web.livechannels_sessions.js"
         };
 
         // The placeholder block editor, shared by the Channels and Popular pages.
         yield return new PluginPageInfo
         {
             Name = "livechannels_placeholder.js",
-            EmbeddedResourcePath = $"{ns}.Configuration.livechannels_placeholder.js"
+            EmbeddedResourcePath = $"{ns}.Web.livechannels_placeholder.js"
         };
 
         yield return new PluginPageInfo

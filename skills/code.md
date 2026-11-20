@@ -2,6 +2,23 @@
 
 How to write, comment, and test code in this plugin. It covers C#, JavaScript, HTML, CSS, Python, shell, and YAML.
 
+## Layout
+
+| Path | Holds | Namespace |
+| :--- | :--- | :--- |
+| `Plugin.cs` | The plugin class and its pages. | root |
+| `PluginServiceRegistrator.cs` | DI registration. | root |
+| `Api/` | `LiveChannelsController`. | `.Api` |
+| `Configuration/` | `PluginConfiguration` only. No web files. | `.Configuration` |
+| `Web/` | Every page, script, and style served to the browser, named `livechannels_<page>`. | embedded |
+| `Assets/` | The logo, the fonts in `Assets/Fonts/`, and the Material Symbols font and codepoints. | n/a |
+| `Models/` | Channel settings, enums, and records. | `.Models` |
+| `Services/` | The Live TV service, streams, sessions, cards, recording, and the stress test. | `.Services` |
+| `Tasks/` | The `PluginScheduledTask` classes. | `.Tasks` |
+| `Utilities/` | Pure helpers, such as ffmpeg arguments and schedule math. | `.Utilities` |
+
+Development tools that never ship live in `tools/`. The tests sit flat in `Jellyfin.Plugin.LiveChannels.Tests/`.
+
 ## Base First
 
 [JPKribs.Jellyfin.Base](https://github.com/JPKribs/jellyfin-plugin-base) holds everything two plugins could share. Its README lists every component and helper. Read it before you write anything new.
@@ -140,7 +157,7 @@ export function createBlockEditors(options) {
 * Do not comment the methods inside a returned handle. List them in the Output line instead.
 * Open each file with a header naming the file and saying what it holds in one sentence. Use no `// ====` banners.
 * Each page script imports Base by the relative path `./configurationpage?name=livechannels_jpkribs_shared.js`. `livechannels_placeholder.js` holds the rating and placeholder block Repeaters the Channels and Popular pages share, each card field showing only for the values its Repeater `visible(item)` allows.
-* A new script or page is an `EmbeddedResource` in the csproj and a page in `Plugin.GetPages`.
+* A new script or page goes in `Web/`, is an `EmbeddedResource` in the csproj, and is a page in `Plugin.GetPages`.
 
 ### HTML
 
