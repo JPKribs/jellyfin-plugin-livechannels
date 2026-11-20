@@ -176,10 +176,6 @@ export default function (view) {
             emptyText: t.tr('MessageLoading'),
             height: '55vh',
             label: t.tr('LabelFfmpegLog'),
-            autoScrollText: t.tr('LabelAutoScroll'),
-            clearText: t.tr('ButtonClear'),
-            copyText: t.tr('ButtonCopyAll'),
-            copiedText: t.tr('MessageCopied'),
             failedText: t.tr('ErrorCopyFailed')
         });
         openDialog({

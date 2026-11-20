@@ -1,5 +1,5 @@
 import { createBanner, createChipSelect, createColorPicker, createConfigPage, createDefinitionList, createInheritField, createMediaPicker, createSaveBar, createSliderField, createTranslations, loadTranslations } from './configurationpage?name=livechannels_jpkribs_shared.js';
-import { TRANSLATIONS_URL, pickerText, readError, saveBarText, tabList, withText } from './configurationpage?name=livechannels_placeholder.js';
+import { TRANSLATIONS_URL, readError, saveBarText, tabList, withText } from './configurationpage?name=livechannels_placeholder.js';
 
 export default function (view) {
     'use strict';
@@ -46,7 +46,7 @@ export default function (view) {
     // Output
     // [object]: { element, read(), write(stored) }, where a blank stored value means As Authored.
     function colorField(fallback, label) {
-        var picker = createColorPicker({ value: fallback, label: label, pickLabel: t.tr('LabelPickColor'), invalidText: t.tr('ErrorInvalidColor'), onChange: markDirty });
+        var picker = createColorPicker({ value: fallback, label: label, onChange: markDirty });
         var inherit = createInheritField({
             field: picker,
             inheritedValue: fallback,
@@ -91,7 +91,7 @@ export default function (view) {
     // Creates the language Chip Select once and mounts it in the Playback section, or refreshes its choices.
     function ensureLangSelect() {
         if (!langSelect) {
-            langSelect = createChipSelect(withText({ placeholder: t.tr('PlaceholderSearchLanguages'), options: cultures, single: true, onChange: markDirty }, pickerText(t)));
+            langSelect = createChipSelect({ placeholder: t.tr('PlaceholderSearchLanguages'), options: cultures, single: true, onChange: markDirty });
             el('subLanguageHost').appendChild(langSelect.element);
         } else {
             langSelect.setOptions(cultures);
@@ -117,7 +117,7 @@ export default function (view) {
     }
 
     function renderAcceleration() {
-        ApiClient.getJSON(ApiClient.getUrl('livechannels/encoders')).then(function (info) {
+        ApiClient.getJSON(ApiClient.getUrl('livechannels/encoders', { language: t.language })).then(function (info) {
             accelList.setItems([{ label: t.tr('TitleHardwareAcceleration'), value: (info && info.acceleration) || t.tr('Unknown'), mono: true }]);
         }).catch(function () { accelList.setItems([{ label: t.tr('TitleHardwareAcceleration'), value: t.tr('Unknown'), mono: true }]); });
     }
@@ -228,14 +228,13 @@ export default function (view) {
     // Creates the stress test Media Picker once and mounts it in the Stress Test section.
     function ensureStressPicker() {
         if (stressPicker) { return; }
-        stressPicker = createMediaPicker(withText({
+        stressPicker = createMediaPicker({
             single: true,
             itemTypes: ['Movie', 'Episode'],
             typeLabels: { Movie: t.tr('Movie'), Episode: t.tr('Episode') },
             placeholder: t.tr('PlaceholderSearchMoviesEpisodes'),
-            emptyText: t.tr('EmptyTestItem'),
-            removeText: t.format('LabelRemoveValue', '{value}')
-        }, pickerText(t)));
+            emptyText: t.tr('EmptyTestItem')
+        });
         el('stressItemHost').appendChild(stressPicker.element);
     }
 
@@ -295,7 +294,7 @@ export default function (view) {
     }
 
     function pollStress() {
-        return ApiClient.getJSON(ApiClient.getUrl('livechannels/stresstest')).then(function (s) {
+        return ApiClient.getJSON(ApiClient.getUrl('livechannels/stresstest', { language: t.language })).then(function (s) {
             renderStress(s);
             if (!s.Running) { stopStressPolling(); }
         }).catch(function () { /* transient; keep polling */ });
@@ -320,7 +319,7 @@ export default function (view) {
         stressRounds.setItems([]);
         Shared.setVisible(stressRounds.element, false);
         el('stressSummary').innerHTML = '';
-        ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('livechannels/stresstest/' + encodeURIComponent(id)) }).then(function () {
+        ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('livechannels/stresstest/' + encodeURIComponent(id), { language: t.language }) }).then(function () {
             Shared.setStatus('stressStatus', '', false);
             startStressPolling();
         }).catch(function (err) {

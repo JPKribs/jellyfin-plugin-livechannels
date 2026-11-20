@@ -1,13 +1,13 @@
 """Live Channels screenshot server: serves the plugin pages, Base and jellyfin-web the way Jellyfin does.
 
 Usage: python3 -I server.py 8831
-BASEVER picks the Base package (default 12.4.0), JELLYFIN_WEB the jellyfin-web folder.
+BASEVER picks the Base package (default 12.4.1), JELLYFIN_WEB the jellyfin-web folder.
 """
 import http.server, json, os, re, sys, urllib.parse
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.join(HERE, '..', '..', 'Jellyfin.Plugin.LiveChannels')
 JF = os.environ.get('JELLYFIN_WEB', '/Applications/Jellyfin.app/Contents/Resources/jellyfin-web')
-PACKAGE = os.path.expanduser('~/.nuget/packages/jpkribs.jellyfin.base/%s' % os.environ.get('BASEVER', '12.4.0'))
+PACKAGE = os.path.expanduser('~/.nuget/packages/jpkribs.jellyfin.base/%s' % os.environ.get('BASEVER', '12.4.1'))
 BASE = os.path.join(PACKAGE, 'assets')
 TYPES = {'.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml',
          '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.png': 'image/png'}
@@ -28,19 +28,32 @@ def stylesheets():
     return first + ['themes/dark/theme.css'] + rest
 
 
+def sentence(text):
+    """Jellyfin's English in sentence case, as Case="sentence" writes it."""
+    return text[:1] + text[1:].lower()
+
+
 def translations():
-    """The US English strings the plugin's translations route serves: the local ones and the Jellyfin strings the
-    project declares, from the Base package."""
-    strings = {}
+    """What the plugin's translations route serves in US English, as BaseTranslations.Serve answers: the strings, with
+    Base's own and the Jellyfin strings Base and the project declare, and the local ones, and the casing list."""
+    strings = json.load(open(os.path.join(PACKAGE, 'strings', 'en-us.json'), encoding='utf-8'))
     project = open(os.path.join(REPO, 'Jellyfin.Plugin.LiveChannels.csproj')).read()
     jellyfin = {}
     for source in ('web', 'server'):
         jellyfin[source] = json.load(open(os.path.join(PACKAGE, 'jellyfin', source, 'en-us.json'), encoding='utf-8'))
+    for entry in json.load(open(os.path.join(PACKAGE, 'strings', 'jellyfin.json'), encoding='utf-8'))['strings']:
+        text = jellyfin['web'].get(entry['key'], entry['key'])
+        strings[entry['key']] = sentence(text) if entry.get('case') == 'sentence' else text
     for key, attrs in re.findall(r'<JellyfinString Include="([^"]+)"([^>]*)/>', project):
         source = 'server' if 'Source="server"' in attrs else 'web'
-        strings[key] = jellyfin[source].get(key, key)
+        text = jellyfin[source].get(key, key)
+        strings[key] = sentence(text) if 'Case="sentence"' in attrs else text
     strings.update(json.load(open(os.path.join(REPO, 'Localization', 'en-us.json'), encoding='utf-8')))
-    return strings
+    casing = ['Jellyfin', 'TV', 'ID', 'API', 'URL', 'HTTP', 'HTTPS', 'IP', 'DNS', 'HDR', 'SDR', '4K']
+    plugin_casing = os.path.join(REPO, 'Localization', 'casing.json')
+    if os.path.isfile(plugin_casing):
+        casing += json.load(open(plugin_casing, encoding='utf-8'))
+    return {'language': 'en-us', 'strings': strings, 'casing': casing}
 
 
 class H(http.server.BaseHTTPRequestHandler):

@@ -1,5 +1,5 @@
 import { createChipSelect, createConfigPage, createImagePicker, createMediaPicker, createRepeater, createSaveBar, createSliderField, createTranslations, confirmDialog, downloadJson, loadTranslations, pickJsonFile } from './configurationpage?name=livechannels_jpkribs_shared.js';
-import { TRANSLATIONS_URL, createBlockEditors, loadRatings, migrateRatingBlocks, pickerText, ratingInfo, readError, repeaterText, saveBarText, tabList, withText } from './configurationpage?name=livechannels_placeholder.js';
+import { TRANSLATIONS_URL, createBlockEditors, loadRatings, migrateRatingBlocks, ratingInfo, readError, saveBarText, tabList, withText } from './configurationpage?name=livechannels_placeholder.js';
 
 export default function (view) {
     'use strict';
@@ -383,7 +383,7 @@ export default function (view) {
     // Renders a genre Chip Select for a source card.
     function genreField(key, placeholder) {
         return function (value, change) {
-            var chip = createChipSelect(withText({ placeholder: placeholder, value: value || [], noResultsText: t.tr('MessageNoGenresMatch'), onChange: function () { change(); } }, pickerText(t)));
+            var chip = createChipSelect({ placeholder: placeholder, value: value || [], noResultsText: t.tr('MessageNoGenresMatch'), onChange: function () { change(); } });
             return sourcePart(key, chip,
                 function () { return chip.getValue().map(String); },
                 function (v) { chip.setValue(v || []); });
@@ -394,7 +394,7 @@ export default function (view) {
     // Renders the Media Picker a Whitelist or Blacklist source picks its items with, searching the card's library.
     function itemsField(value, change) {
         var part = null;
-        var picker = createMediaPicker(withText({
+        var picker = createMediaPicker({
             value: value || [],
             itemTypes: ['Series', 'Movie', 'Episode', 'MusicVideo', 'Video'],
             placeholder: t.tr('PlaceholderSearchLibrary'),
@@ -403,7 +403,7 @@ export default function (view) {
             maxHeight: 360,
             searchFn: function (query) { return searchSourceItems(part ? part.entry.library : '', query); },
             onChange: function () { change(); }
-        }, withText({ removeText: t.format('LabelRemoveValue', '{value}') }, pickerText(t))));
+        });
         part = sourcePart('Items', picker,
             function () { return picker.getValue(); },
             function (v) { picker.setValue(v || []); });
@@ -505,11 +505,11 @@ export default function (view) {
     // rating Sliders, the source cards, the block cards, and the Save Bar.
     function ensureEditorParts() {
         if (!studioPicker) {
-            studioPicker = createChipSelect(withText({ placeholder: t.tr('PlaceholderSearchStudios'), searchFn: searchStudios, onChange: markDirty }, pickerText(t)));
+            studioPicker = createChipSelect({ placeholder: t.tr('PlaceholderSearchStudios'), searchFn: searchStudios, onChange: markDirty });
             el('studioHost').appendChild(studioPicker.element);
-            peoplePicker = createChipSelect(withText({ placeholder: t.tr('PlaceholderSearchPeople'), searchFn: searchPeople, onChange: markDirty }, pickerText(t)));
+            peoplePicker = createChipSelect({ placeholder: t.tr('PlaceholderSearchPeople'), searchFn: searchPeople, onChange: markDirty });
             el('peopleHost').appendChild(peoplePicker.element);
-            audioLangPicker = createChipSelect(withText({ placeholder: t.tr('AnyLanguage'), options: cultures, single: true, onChange: markDirty }, pickerText(t)));
+            audioLangPicker = createChipSelect({ placeholder: t.tr('AnyLanguage'), options: cultures, single: true, onChange: markDirty });
             el('audioLanguageHost').appendChild(audioLangPicker.element);
         } else {
             audioLangPicker.setOptions(cultures);
@@ -523,12 +523,6 @@ export default function (view) {
             crop: true,
             maxSize: 512,
             chooseText: t.tr('Upload'),
-            replaceText: t.tr('ButtonReplace'),
-            removeText: t.tr('ButtonRemove'),
-            emptyText: t.tr('EmptyImage'),
-            tooLargeText: t.format('ErrorImageTooLarge', '{value}'),
-            wrongTypeText: t.tr('ErrorNotAnImage'),
-            readErrorText: t.tr('ErrorCouldNotReadFile'),
             onChange: onLogoPicked
         });
         el('logoPickerHost').appendChild(logoPicker.element);
@@ -538,7 +532,7 @@ export default function (view) {
         criticSlider = createSliderField({ min: 0, max: 100, step: 1, label: t.tr('LabelMinCriticRating'), onChange: markDirty });
         el('minCriticRatingHost').appendChild(criticSlider.element);
 
-        sourceList = createRepeater(withText({
+        sourceList = createRepeater({
             layout: 'card',
             titleText: t.tr('TitleKindSource'),
             addText: t.tr('ButtonAddSource'),
@@ -569,7 +563,7 @@ export default function (view) {
                 }
             ],
             onChange: function () { syncSources(); markDirty(); }
-        }, repeaterText(t)));
+        });
         el('librarySources').appendChild(sourceList.element);
 
         blockEditors = createBlockEditors({ ratings: ratings, t: t, onChange: markDirty });
@@ -655,7 +649,7 @@ export default function (view) {
     function confirmDiscard() {
         if (!editorDirty()) return Promise.resolve(true);
         var name = (el('channelName').value || '').trim();
-        return confirmDialog(name ? t.format('ConfirmDiscardChannel', name) : t.tr('ConfirmDiscardNewChannel'), { title: t.tr('HeaderDiscardChanges'), confirmText: t.tr('ButtonDiscard'), cancelText: t.tr('ButtonCancel'), destructive: true });
+        return confirmDialog(name ? t.format('ConfirmDiscardChannel', name) : t.tr('ConfirmDiscardNewChannel'), { title: t.tr('HeaderDiscardChanges'), confirmText: t.tr('ButtonDiscard'), destructive: true });
     }
 
     function loadEditor() {
@@ -946,7 +940,7 @@ export default function (view) {
         var ch = channels[currentIndex];
         if (!ch) return;
         var question = ch.Name ? t.format('ConfirmDeleteChannel', ch.Name) : t.tr('ConfirmDeleteNewChannel');
-        confirmDialog(question, { title: t.tr('HeaderDeleteChannel'), confirmText: t.tr('Delete'), cancelText: t.tr('ButtonCancel'), destructive: true }).then(function (ok) {
+        confirmDialog(question, { title: t.tr('HeaderDeleteChannel'), confirmText: t.tr('Delete'), destructive: true }).then(function (ok) {
             // Delete the channel that was asked about, even if the list shifted while the dialog was open.
             var index = channels.indexOf(ch);
             if (!ok || index < 0) return;

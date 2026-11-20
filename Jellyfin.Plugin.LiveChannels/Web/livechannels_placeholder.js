@@ -42,7 +42,7 @@ export function tabList(t) {
 }
 
 // saveBarText
-// Gives a Save Bar its text in the viewer's language.
+// Gives a Save Bar the line it shows after a save, which says Live TV is refreshing.
 //
 // Inputs
 // t [object]: The translations handle.
@@ -51,29 +51,7 @@ export function tabList(t) {
 // [object]: The Save Bar text options.
 export function saveBarText(t) {
     return {
-        saveText: t.tr('Save'),
-        pendingText: t.tr('MessageUnsavedChanges'),
-        savingText: t.tr('MessageSaving'),
-        savedText: t.tr('MessageSavedRefreshing'),
-        failedText: t.tr('ErrorCouldNotSave'),
-        invalidText: t.tr('ErrorFixMarkedFields')
-    };
-}
-
-// pickerText
-// Gives a Chip Select or Media Picker its search and remove text in the viewer's language.
-//
-// Inputs
-// t [object]: The translations handle.
-//
-// Output
-// [object]: The text options both components take.
-export function pickerText(t) {
-    return {
-        noResultsText: t.tr('MessageNoMatches'),
-        errorText: t.tr('ErrorCouldNotSearch'),
-        clearLabel: t.tr('ButtonClear'),
-        removeText: t.tr('ButtonRemove')
+        savedText: t.tr('MessageSavedRefreshing')
     };
 }
 
@@ -91,22 +69,6 @@ export function withText(options, text) {
     Object.keys(text).forEach(function (k) { out[k] = text[k]; });
     Object.keys(options).forEach(function (k) { out[k] = options[k]; });
     return out;
-}
-
-// repeaterText
-// Gives a Repeater its button labels in the viewer's language.
-//
-// Inputs
-// t [object]: The translations handle.
-//
-// Output
-// [object]: The Repeater text options.
-export function repeaterText(t) {
-    return {
-        removeText: t.format('LabelRemoveValue', '{value}'),
-        upText: t.format('LabelMoveValueUp', '{value}'),
-        downText: t.format('LabelMoveValueDown', '{value}')
-    };
 }
 
 // readError
@@ -253,7 +215,7 @@ export function createBlockEditors(options) {
 
     function customPeriod(item) { return item.Period === 'Custom'; }
 
-    var ratingList = createRepeater(withText({
+    var ratingList = createRepeater({
         layout: 'card',
         titleText: t.format('TitleRatingBlock', '{index}'),
         addText: t.tr('ButtonAddRatingBlock'),
@@ -275,9 +237,9 @@ export function createBlockEditors(options) {
         ],
         newItem: function () { return toRatingItem({}); },
         onChange: changed
-    }, repeaterText(t)));
+    });
 
-    var placeholderList = createRepeater(withText({
+    var placeholderList = createRepeater({
         layout: 'card',
         titleText: t.format('TitlePlaceholderBlock', '{index}'),
         addText: t.tr('ButtonAddPlaceholderBlock'),
@@ -296,7 +258,7 @@ export function createBlockEditors(options) {
         ],
         newItem: function () { return toPlaceholderItem({}); },
         onChange: changed
-    }, repeaterText(t)));
+    });
 
     function toRatingItem(b) {
         return {

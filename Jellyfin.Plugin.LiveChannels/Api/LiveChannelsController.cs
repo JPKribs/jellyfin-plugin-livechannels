@@ -4,7 +4,6 @@ using Jellyfin.Plugin.LiveChannels.Services;
 using Jellyfin.Plugin.LiveChannels.Tasks;
 using JPKribs.Jellyfin.Base;
 using MediaBrowser.Common.Configuration;
-using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Model.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -29,7 +28,6 @@ public class LiveChannelsController : ControllerBase
     private readonly StressTestService _stress;
     private readonly ITaskManager _taskManager;
     private readonly IApplicationPaths _paths;
-    private readonly IServerConfigurationManager _config;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="LiveChannelsController"/> class.
@@ -39,15 +37,13 @@ public class LiveChannelsController : ControllerBase
     /// <param name="stress">The encoder stress test the settings page can run.</param>
     /// <param name="taskManager">The scheduled task manager, which Reset schedule starts the guide and card tasks through.</param>
     /// <param name="paths">The application paths, which locate the schedule cache Reset schedule clears.</param>
-    /// <param name="config">The server configuration, whose display language the messages use.</param>
-    public LiveChannelsController(EncoderResolver encoders, LiveChannelsTvService tv, StressTestService stress, ITaskManager taskManager, IApplicationPaths paths, IServerConfigurationManager config)
+    public LiveChannelsController(EncoderResolver encoders, LiveChannelsTvService tv, StressTestService stress, ITaskManager taskManager, IApplicationPaths paths)
     {
         _encoders = encoders;
         _tv = tv;
         _stress = stress;
         _taskManager = taskManager;
         _paths = paths;
-        _config = config;
     }
 
     /// <summary>
@@ -225,8 +221,8 @@ public class LiveChannelsController : ControllerBase
         return NoContent();
     }
 
-    // The server's display language, which every message this controller returns is in.
-    private string Language => BaseTranslations.ServerLanguage(_config);
+    // The page's language, which every message this controller returns is in.
+    private string Language => BaseTranslations.RequestLanguage(Request);
 
     private ActiveSession? FindSession(string id)
     {

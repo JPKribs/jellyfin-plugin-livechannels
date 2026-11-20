@@ -6,8 +6,8 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 
 /// <summary>
 /// The plugin's activity log entries. Channels starting and stopping, and recordings completing, are summed per
-/// outcome into one entry (such as "3 Channels Started") rather than one per event; an administrator stopping a
-/// stream from the dashboard is a single entry of its own. Each overview is in the server's display language.
+/// outcome into one entry, such as "3 channels started", rather than one per event. An administrator stopping a
+/// stream from the dashboard is a single entry of its own. Every entry is in the server's display language.
 /// </summary>
 public sealed class LiveChannelsActivity : IDisposable
 {
@@ -23,7 +23,7 @@ public sealed class LiveChannelsActivity : IDisposable
     /// <param name="logger">The activity log writer.</param>
     /// <param name="config">The server configuration, whose display language the entries use, or <c>null</c> for US English.</param>
     public LiveChannelsActivity(ActivityLogger logger, IServerConfigurationManager? config = null)
-        : this(logger, new ActivitySummary(logger), config)
+        : this(logger, new ActivitySummary(logger, language: () => config is null ? null : BaseTranslations.ServerLanguage(config)), config)
     {
     }
 
@@ -42,19 +42,19 @@ public sealed class LiveChannelsActivity : IDisposable
         _config = config;
         _channelStarted = new(
             "LiveChannels.ChannelStarted",
-            "Started",
-            t => Counted(t, TranslationKeys.ActivityChannelStartedOne, TranslationKeys.ActivityChannelStartedMany),
-            Noun: "Channel");
+            TranslationKeys.ActivityNameChannelStartedOne,
+            TranslationKeys.ActivityNameChannelStartedMany,
+            (t, language) => Counted(t, language, TranslationKeys.ActivityChannelStartedOne, TranslationKeys.ActivityChannelStartedMany));
         _channelStopped = new(
             "LiveChannels.ChannelStopped",
-            "Stopped",
-            t => Counted(t, TranslationKeys.ActivityChannelStoppedOne, TranslationKeys.ActivityChannelStoppedMany),
-            Noun: "Channel");
+            TranslationKeys.ActivityNameChannelStoppedOne,
+            TranslationKeys.ActivityNameChannelStoppedMany,
+            (t, language) => Counted(t, language, TranslationKeys.ActivityChannelStoppedOne, TranslationKeys.ActivityChannelStoppedMany));
         _recordingCompleted = new(
             "LiveChannels.RecordingCompleted",
-            "Completed",
-            t => Counted(t, TranslationKeys.ActivityRecordingCompletedOne, TranslationKeys.ActivityRecordingCompletedMany),
-            Noun: "Recording");
+            TranslationKeys.ActivityNameRecordingCompletedOne,
+            TranslationKeys.ActivityNameRecordingCompletedMany,
+            (t, language) => Counted(t, language, TranslationKeys.ActivityRecordingCompletedOne, TranslationKeys.ActivityRecordingCompletedMany));
     }
 
     /// <summary>Gets the activity log writer, for single entries.</summary>
@@ -89,11 +89,11 @@ public sealed class LiveChannelsActivity : IDisposable
     private string? Language => _config is null ? null : BaseTranslations.ServerLanguage(_config);
 
     // The overview of a summed entry, with one string for a single event and one for several.
-    private string Counted(ActivityTally tally, string one, string many)
+    private static string Counted(ActivityTally tally, string language, string one, string many)
     {
         var list = ActivityText.CountedList(tally.Sources);
         return tally.Total == 1
-            ? BaseTranslations.Format(one, Language, list)
-            : BaseTranslations.Format(many, Language, tally.Total, list);
+            ? BaseTranslations.Format(one, language, list)
+            : BaseTranslations.Format(many, language, tally.Total, list);
     }
 }

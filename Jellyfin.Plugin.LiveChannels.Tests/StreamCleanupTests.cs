@@ -112,7 +112,7 @@ public sealed class StreamCleanupTests : IDisposable
         var paths = Substitute.For<IApplicationPaths>();
         paths.CachePath.Returns(_cache);
         paths.DataPath.Returns(Path.Combine(_cache, "data"));
-        var controller = new Jellyfin.Plugin.LiveChannels.Api.LiveChannelsController(null!, service, null!, tasks, paths, ServerConfig());
+        var controller = new Jellyfin.Plugin.LiveChannels.Api.LiveChannelsController(null!, service, null!, tasks, paths);
 
         Assert.IsType<Microsoft.AspNetCore.Mvc.NoContentResult>(controller.ResetSchedule());
 

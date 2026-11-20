@@ -42,7 +42,7 @@ public class ActivityWordingTests
         activity.Flush();
 
         var entry = Assert.Single(_written);
-        Assert.Equal("3 Channels Started", entry.Name);
+        Assert.Equal("3 channels started", entry.Name);
         Assert.Equal("3 channels started encoding: News (2), Sports (1)", entry.ShortOverview);
         Assert.Equal("LiveChannels.ChannelStarted", entry.Type);
         Assert.Equal(LogLevel.Information, entry.LogSeverity);
@@ -56,7 +56,7 @@ public class ActivityWordingTests
         activity.Flush();
 
         var entry = Assert.Single(_written);
-        Assert.Equal("1 Channel Stopped", entry.Name);
+        Assert.Equal("1 channel stopped", entry.Name);
         Assert.Equal("1 channel stopped encoding with no viewers left: News (1)", entry.ShortOverview);
         Assert.Equal("LiveChannels.ChannelStopped", entry.Type);
     }
@@ -70,7 +70,7 @@ public class ActivityWordingTests
         activity.Flush();
 
         var entry = Assert.Single(_written);
-        Assert.Equal("2 Recordings Completed", entry.Name);
+        Assert.Equal("2 recordings completed", entry.Name);
         Assert.Equal("2 recordings were completed: Evening News (2)", entry.ShortOverview);
         Assert.Equal("LiveChannels.RecordingCompleted", entry.Type);
     }
@@ -85,7 +85,7 @@ public class ActivityWordingTests
         activity.Flush();
 
         Assert.Equal(
-            new[] { "1 Channel Started", "1 Channel Stopped", "1 Recording Completed" },
+            new[] { "1 channel started", "1 channel stopped", "1 recording completed" },
             _written.Select(e => e.Name).OrderBy(n => n, System.StringComparer.Ordinal).ToArray());
     }
 
@@ -96,7 +96,7 @@ public class ActivityWordingTests
         activity.StreamKilled("News");
 
         var entry = Assert.Single(_written);
-        Assert.Equal("Channel Stopped for News", entry.Name);
+        Assert.Equal("Channel stopped for News", entry.Name);
         Assert.Equal("The stream for News was stopped from the dashboard", entry.ShortOverview);
         Assert.Equal("LiveChannels.ChannelStopped", entry.Type);
     }
@@ -108,6 +108,6 @@ public class ActivityWordingTests
         activity.ChannelStart("News");
         activity.Dispose();
 
-        Assert.Equal("1 Channel Started", Assert.Single(_written).Name);
+        Assert.Equal("1 channel started", Assert.Single(_written).Name);
     }
 }

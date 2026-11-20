@@ -70,7 +70,7 @@ public class TranslationKeysTests
     public void UnknownLanguage_FallsBackToUsEnglish()
     {
         Assert.Equal("Generate Buffer Cards", BaseTranslations.Get(TranslationKeys.TaskGenerateBufferCards, "xx"));
-        Assert.Equal("Save", BaseTranslations.Get(TranslationKeys.Save, "xx"));
+        Assert.Equal("Settings", BaseTranslations.Get(TranslationKeys.Settings, "xx"));
     }
 
     private static HashSet<string> LocalKeys(string project)
