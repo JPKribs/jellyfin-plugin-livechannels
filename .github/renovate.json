@@ -38,6 +38,11 @@
             "description": "Microsoft.Data.Sqlite 10 runs on SQLitePCLRaw 2",
             "matchPackageNames": ["SQLitePCLRaw.**"],
             "allowedVersions": "<3"
+        },
+        {
+            "description": "Base releases are <jellyfin>.<X>, such as 12.4.0. The dated releases before them sort higher, so they are never offered",
+            "matchPackageNames": ["JPKribs.Jellyfin.Base"],
+            "allowedVersions": "<1000"
         }
     ]
 }
