@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   update-manifest:
@@ -23,6 +24,24 @@ jobs:
         with:
           ref: master
           fetch-depth: 0
+
+      # A draft build that started before the release was published must finish first. It then finds the
+      # release published and leaves its assets alone, so the zip hashed below is the one that stays.
+      - name: Wait for Draft Builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            BUSY=$(gh run list --workflow changelog.yaml --limit 50 --json status --jq '[.[] | select(.status != "completed")] | length')
+            if [ "$BUSY" = "0" ]; then
+              exit 0
+            fi
+            echo "Waiting for ${BUSY} draft build(s) to finish (${attempt}/60)"
+            sleep 20
+          done
+          echo "Draft builds were still running after 20 minutes; refusing to touch the manifest." >&2
+          exit 1
 
       # Release text and tag names reach the script only through the environment, never pasted into it, so
       # quotes, backticks or $(...) in release notes are data, not shell.
@@ -65,7 +84,7 @@ jobs:
           curl -fsSL -o "${RUNNER_TEMP}/${ZIP}" "${BASE}/${ZIP}"
           CHECKSUM=$(md5sum "${RUNNER_TEMP}/${ZIP}" | cut -d' ' -f1)
           if PUBLISHED=$(curl -fsSL "${BASE}/${ZIP}.md5" 2>/dev/null); then
-            PUBLISHED=$(echo "${PUBLISHED}" | awk '{print $1}')
+            PUBLISHED=$(echo "${PUBLISHED}" | awk '{print $1}' | tr 'A-F' 'a-f')
             if [ "${PUBLISHED}" != "${CHECKSUM}" ]; then
               echo "::error::${ZIP}.md5 (${PUBLISHED}) does not match the zip (${CHECKSUM})"
               exit 1
