@@ -63,7 +63,7 @@ Then edit `build.yaml`.
 
 1. Set `version` to the new version.
 2. Replace the whole `changelog` with this release's entries. Each release lists only its own changes. See [documentation.md](documentation.md#release-notes) for how to write them.
-3. Name the Base version in `developer` when it changed, such as "Uses JPKribs.Jellyfin.Base 12.4.1", with what it replaced locally.
+3. Name the Base version in `developer` when it changed, such as "Uses JPKribs.Jellyfin.Base 12.4.2", with what it replaced locally.
 4. Keep `description` and `overview` true for this release. `manifest.json` takes its own description, so update both together.
 
 Commit it on its own.
