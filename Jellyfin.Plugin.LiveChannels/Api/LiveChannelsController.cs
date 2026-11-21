@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Security.Claims;
 using Jellyfin.Plugin.LiveChannels.Services;
 using Jellyfin.Plugin.LiveChannels.Tasks;
 using JPKribs.Jellyfin.Base;
@@ -23,6 +24,9 @@ namespace Jellyfin.Plugin.LiveChannels.Api;
 [Route("livechannels")]
 public class LiveChannelsController : ControllerBase
 {
+    // The claim Jellyfin's authentication puts the user's id in.
+    private const string UserIdClaim = "Jellyfin-UserId";
+
     private readonly EncoderResolver _encoders;
     private readonly LiveChannelsTvService _tv;
     private readonly StressTestService _stress;
@@ -215,7 +219,7 @@ public class LiveChannelsController : ControllerBase
         var match = FindSession(id);
         if (match is not null)
         {
-            _tv.KillSession(match.Id);
+            _tv.KillSession(match.Id, User.FindFirst(ClaimTypes.Name)?.Value, UserIdOf(User));
         }
 
         return NoContent();
@@ -223,6 +227,10 @@ public class LiveChannelsController : ControllerBase
 
     // The page's language, which every message this controller returns is in.
     private string Language => BaseTranslations.RequestLanguage(Request);
+
+    // The id of the signed-in user, or empty for a request with no user, such as one made with an API key.
+    private static Guid UserIdOf(ClaimsPrincipal? user)
+        => Guid.TryParse(user?.FindFirst(UserIdClaim)?.Value, out var id) ? id : Guid.Empty;
 
     private ActiveSession? FindSession(string id)
     {

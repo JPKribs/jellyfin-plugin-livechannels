@@ -285,7 +285,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             result.Add(info);
         }
 
-        _logger.LogInformation("Live Channels: provided {Count} channel(s) to Live TV", result.Count);
+        _logger.LogDebug("Live Channels: provided {Count} channel(s) to Live TV", result.Count);
         return result;
     }
 
@@ -415,7 +415,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             session.MarkData);
         Hand(liveStreamId, live);
 
-        _logger.LogInformation(
+        _logger.LogDebug(
             "Live Channels: {Name}: handed to Jellyfin as {Path} (session {Session}, live id {Id})",
             session.ChannelName,
             live.MediaSource.Path,
@@ -432,7 +432,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         var channel = _channels.FindChannel(channelId)
             ?? throw new InvalidOperationException("No enabled channel matches id " + channelId);
 
-        _logger.LogInformation("Live Channels: opening live stream for {Name}", channel.Name);
+        _logger.LogDebug("Live Channels: opening live stream for {Name}", channel.Name);
 
         // A real viewer beats a synthetic benchmark: the stress test deliberately saturates the encoder, which
         // would both stutter this stream and skew the test's own measurement, so tuning in cancels it.
@@ -470,7 +470,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             try
             {
                 await WaitForPlaylistAsync(warmPlaylist, adopted.Worker, cancellationToken).ConfigureAwait(false);
-                _logger.LogInformation("Live Channels: adopted the warm session for {Name}", channel.Name);
+                _logger.LogDebug("Live Channels: adopted the warm session for {Name}", channel.Name);
                 return (adopted, liveStreamId);
             }
             catch (OperationCanceledException)
@@ -632,7 +632,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         catch (OutputClosedException ex)
         {
             // The segmenter went away under the producer; the session's recovery restarts both if anyone watches.
-            _logger.LogWarning("Live channel {Name}: the stream output closed ({Reason}); the producer stopped", channelName, ex.InnerException?.Message ?? ex.Message);
+            _logger.LogWarning(ex, "Live channel {Name}: the stream output closed; the producer stopped", channelName);
         }
         catch (Exception ex)
         {
@@ -662,7 +662,9 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
     /// viewers are still attached.
     /// </summary>
     /// <param name="id">The session id (or any of its live stream ids) to kill.</param>
-    public void KillSession(string id)
+    /// <param name="userName">The name of the administrator who stopped it, or <c>null</c> when the request named no user.</param>
+    /// <param name="userId">The administrator's id, or empty when the request named no user.</param>
+    public void KillSession(string id, string? userName = null, Guid userId = default)
     {
         var session = Lookup(id);
         if (session is null || !TeardownSession(session, force: true))
@@ -670,7 +672,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             return;
         }
 
-        _activity.StreamKilled(session.ChannelName);
+        _activity.StreamKilled(session.ChannelName, userName, userId);
 
         _logger.LogInformation("Live Channels: session {Id} ({Name}) killed from the dashboard", session.Id, session.ChannelName);
     }
@@ -700,7 +702,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
             {
                 _activity.ChannelIdleStop(session.ChannelName);
 
-                _logger.LogInformation("Live Channels: closing session {Id} ({Name}) after the linger grace", session.Id, session.ChannelName);
+                _logger.LogDebug("Live Channels: closing session {Id} ({Name}) after the linger grace", session.Id, session.ChannelName);
                 return;
             }
 
@@ -1597,7 +1599,7 @@ public sealed class LiveChannelsTvService : ILiveTvService, ISupportsNewTimerIds
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Live Channels: {What} failed; it will run again on the next tick", what);
+            logger.LogWarning(ex, "Live Channels: {What} failed; it will run again on the next tick", what);
             return false;
         }
     }

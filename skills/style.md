@@ -46,7 +46,7 @@ Every string is in sentence case, mirroring Jellyfin, such as "Allow media playb
 | Dialog title | Delete channel |
 | Badge and status chip | Keeping up |
 | Column header | Started |
-| Activity log name | Channel stopped for News |
+| Activity log name | Channel stopped |
 | Description, message, placeholder sentence | Plays a 10 second card before each item. |
 
 * Write product names, features with a proper name, formats, and acronyms as they are written, such as "Live TV", "Popular Channel", "Up Next", "ffmpeg", "GIF", and "kbps". Each one is in `Localization/casing.json`. See [translations.md](translations.md#casing).
@@ -176,8 +176,7 @@ Use `shared.emptySection(text)` for a region and `shared.emptySection(text, { in
 
 Write entries through `LiveChannelsActivity`, which uses `ActivityLogger`, `ActivitySummary`, and `ActivityText` from Base.
 
-* The name is short and in sentence case.
-* The overview is one sentence with no closing period, as Base writes it.
+* Follow [logging.md](logging.md#activity-log) for the name and the overview.
 * Use the same verb the UI uses for the action.
 
 ### Messages From C#

@@ -83,7 +83,7 @@ public class AdoptTeardownRaceTests
         var ran = LiveChannelsTvService.RunGuarded(() => throw new InvalidOperationException("boom"), logger, "the test sweep");
 
         Assert.False(ran);
-        logger.ReceivedWithAnyArgs(1).Log(LogLevel.Error, default, default(object)!, null, null!);
+        logger.ReceivedWithAnyArgs(1).Log(LogLevel.Warning, default, default(object)!, null, null!);
         Assert.True(LiveChannelsTvService.RunGuarded(() => { }, logger, "the test sweep"));
     }
 }

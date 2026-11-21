@@ -305,7 +305,7 @@ public sealed class PlaceholderService : IDisposable
 
             File.Move(temp, output, overwrite: true);
             await File.WriteAllTextAsync(SidecarPath(output), JsonSerializer.Serialize(new SceneSidecar(style, MediaStamp(block, style)))).ConfigureAwait(false);
-            _logger.LogInformation("Live Channels: rendered the {Style} placeholder card for {Name}", style, channel.Name);
+            _logger.LogDebug("Live Channels: rendered the {Style} placeholder card for {Name}", style, channel.Name);
             return true;
         }
         finally

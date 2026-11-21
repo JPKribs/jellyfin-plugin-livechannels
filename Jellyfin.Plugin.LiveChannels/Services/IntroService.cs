@@ -288,7 +288,7 @@ public sealed class IntroService : IDisposable
             await File.WriteAllTextAsync(sidecarTmp, JsonSerializer.Serialize(sidecar)).ConfigureAwait(false);
             File.Move(sidecarTmp, SidecarPath(channel.Number), overwrite: true);
 
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Live Channels: rendered the tune-in card for {Name} ({Encoder}, ends at {End:F3}s) in {Seconds:F1}s",
                 channel.Name,
                 profile.Video.Name,

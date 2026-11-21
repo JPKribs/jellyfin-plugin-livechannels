@@ -632,7 +632,7 @@ public partial class ChannelService
         if (IsDolbyVisionProfile5(video))
         {
             _logger.LogWarning(
-                "Live Channels: excluding \"{Title}\": Dolby Vision Profile 5 has no HDR10-compatible base layer, so every tone mapper renders it with wrong (green/purple) colours. A Profile 8 or HDR10 version of it will play correctly.",
+                "Live Channels: excluding \"{Title}\": Dolby Vision Profile 5 has no HDR10-compatible base layer, so every tone mapper renders it with wrong (green/purple) colours, and a Profile 8 or HDR10 version of it plays correctly",
                 title);
             return null;
         }

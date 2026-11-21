@@ -95,7 +95,7 @@ public partial class ChannelService
         }
 
         _observedDurations[itemId] = new ObservedDuration(seconds, metadataSeconds);
-        _logger.LogInformation(
+        _logger.LogDebug(
             "Live Channels: \"{Title}\" actually plays for {Observed:F1}s (schedule had used {Scheduled:F1}s, metadata says {Metadata:F1}s); schedules use the observed length from the next guide refresh",
             title,
             seconds,

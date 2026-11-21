@@ -57,7 +57,7 @@ public partial class ChannelService
             if (stale.Count > 0)
             {
                 _libraryManager.DeleteItemsUnsafeFast(stale, false);
-                _logger.LogInformation("Live Channels: removed {Count} stale guide program(s) from channel {Name}", stale.Count, channel.Name);
+                _logger.LogDebug("Live Channels: removed {Count} stale guide program(s) from channel {Name}", stale.Count, channel.Name);
             }
         }
         catch (Exception ex)

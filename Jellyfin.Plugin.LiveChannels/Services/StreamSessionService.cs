@@ -123,12 +123,12 @@ public class StreamSessionService
         var card = timelineBase == TimeSpan.Zero && !duringBumper ? _intros.TryGetCached(channel) : null;
         if (duringBumper)
         {
-            _logger.LogInformation("Live Channels: {Name}: tuned in during an Up Next bumper; showing black until the item starts", channel.Name);
+            _logger.LogDebug("Live Channels: {Name}: tuned in during an Up Next bumper; showing black until the item starts", channel.Name);
             stats?.AppendLog("Tune-in during an Up Next bumper: no card, black until the item starts");
         }
         else if (timelineBase == TimeSpan.Zero && card is null)
         {
-            _logger.LogInformation("Live Channels: {Name}: no tune-in card is rendered for the current output settings yet; opening straight on content", channel.Name);
+            _logger.LogDebug("Live Channels: {Name}: no tune-in card is rendered for the current output settings yet; opening straight on content", channel.Name);
         }
 
         if (card is { } intro)
@@ -144,7 +144,7 @@ public class StreamSessionService
                 await output.FlushAsync(cancellationToken).ConfigureAwait(false);
                 timelineBase = NextTimeline(TimeSpan.Zero, intro.Duration, intro.EndSeconds);
                 lead = intro.Duration;
-                _logger.LogInformation("Live Channels: {Name}: opened on the tune-in card ({Seconds:F1}s, content chains at {Timeline:F3}s)", channel.Name, intro.Duration.TotalSeconds, timelineBase.TotalSeconds);
+                _logger.LogDebug("Live Channels: {Name}: opened on the tune-in card ({Seconds:F1}s, content chains at {Timeline:F3}s)", channel.Name, intro.Duration.TotalSeconds, timelineBase.TotalSeconds);
                 stats?.AppendLog("Tune-in card: " + intro.Duration.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture) + "s from " + intro.Path + ", content chains at " + timelineBase.TotalSeconds.ToString("F3", CultureInfo.InvariantCulture) + "s");
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -338,7 +338,7 @@ public class StreamSessionService
         var mixedFormats = !alreadyPerItem && !hasHdr && !hasVideoOnly && !timeOfDay && !ConcatCompatible(programs);
         if (mixedFormats)
         {
-            _logger.LogInformation("Live Channels: {Name}: its items differ in video codec, audio codec, audio channels, default audio track, or colour matrix (or were scanned before these were recorded), so it streams item by item", channel.Name);
+            _logger.LogDebug("Live Channels: {Name}: its items differ in video codec, audio codec, audio channels, default audio track, or colour matrix (or were scanned before these were recorded), so it streams item by item", channel.Name);
         }
 
         // A channel that shows Up Next bumpers plays every slot as bumper then item, which the one continuous concat
@@ -507,7 +507,7 @@ public class StreamSessionService
             startInfo.ArgumentList.Add(arg);
         }
 
-        _logger.LogInformation("Live Channels: HLS segmenter [{Name}]: {Ffmpeg} {Args}", channel.Name, ffmpeg, string.Join(' ', args));
+        _logger.LogDebug("Live Channels: HLS segmenter [{Name}]: {Ffmpeg} {Args}", channel.Name, ffmpeg, string.Join(' ', args));
         stats?.AppendLog("HLS segmenter\n$ ffmpeg " + string.Join(' ', args));
 
         using var segmenter = new Process { StartInfo = startInfo };
@@ -607,7 +607,7 @@ public class StreamSessionService
                     // back to the planner, which picks the path again from here.
                     if (!ConcatSuits(programs) || _channels.IsTimeOfDayChannel(follower.Channel))
                     {
-                        _logger.LogInformation("Live Channels: {Name}: the rebuilt schedule cannot stream continuously; switching to item by item", channel.Name);
+                        _logger.LogDebug("Live Channels: {Name}: the rebuilt schedule cannot stream continuously; switching to item by item", channel.Name);
                         return new StandbyRequest(timeline, null);
                     }
 
@@ -713,7 +713,7 @@ public class StreamSessionService
                 timeline = NextTimeline(timeline, ranFor, lastOut);
                 if (rebuiltMidRun)
                 {
-                    _logger.LogInformation("Channel {Name}: the schedule was rebuilt; continuing on the new schedule", channel.Name);
+                    _logger.LogDebug("Channel {Name}: the schedule was rebuilt; continuing on the new schedule", channel.Name);
                     continue;
                 }
 
@@ -918,7 +918,7 @@ public class StreamSessionService
             var resuming = resume.HasValue;
             if (!resuming && itemsPlayed > 0 && replan?.Invoke() == true)
             {
-                _logger.LogInformation("Live Channels: {Name}: the channel now has a time-of-day window; planning again", channel.Name);
+                _logger.LogDebug("Live Channels: {Name}: the channel now has a time-of-day window; planning again", channel.Name);
                 return new StandbyRequest(timeline, null);
             }
 
@@ -950,7 +950,7 @@ public class StreamSessionService
                 {
                     // A save changed the window while it aired: pick the schedule up from where playback reached, on
                     // the channel as saved (a channel disabled or deleted meanwhile ends the stream).
-                    _logger.LogInformation("Live Channels: {Name}: the placeholder \"{Title}\" was changed while it aired; rejoining the schedule", channel.Name, program.Title);
+                    _logger.LogDebug("Live Channels: {Name}: the placeholder \"{Title}\" was changed while it aired; rejoining the schedule", channel.Name, program.Title);
                     if (CurrentChannel(channel) is not { } saved)
                     {
                         return null;
@@ -1569,7 +1569,7 @@ public class StreamSessionService
             decode = hwDecode ? profile.DecodeHwaccel! : "software";
         }
 
-        _logger.LogInformation(
+        _logger.LogDebug(
             "Live Channels: streaming {Name} ({Items} items) at {Width}x{Height} via {Encoder} ({Mode} encode, {Decode} decode, {Pipeline}), audio {Audio}, from item {Index}/{Items}",
             channel.Name,
             itemCount,

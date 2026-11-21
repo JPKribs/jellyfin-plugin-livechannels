@@ -34,7 +34,7 @@ How this plugin shows its text in the viewer's language. Base builds the strings
 4. Use it.
     * Markup, with the key on the element whose own text is the English: `data-str="Key"`, `data-str-title`, `data-str-label`, or `data-str-placeholder`, with the English as the element's own text.
     * Script: `t.tr('Key')` or `t.format('Key', value)` on the handle from `loadTranslations('livechannels/Translations')`.
-    * C#: `BaseTranslations.Get(TranslationKeys.Key, language)` or `BaseTranslations.Format(...)`. Text for everyone, such as an activity log entry, uses `BaseTranslations.ServerLanguage(config)`. A summed activity entry is an `ActivityOutcome` built with a key for one and a key for many, each with `{0}` for the count.
+    * C#: `BaseTranslations.Get(TranslationKeys.Key, language)` or `BaseTranslations.Format(...)`. Text for everyone, such as an activity log entry, uses `BaseTranslations.ServerLanguage(config)`. A summed activity entry is an `ActivityOutcome` built with a name key for one and a name key for many, with no count, per [logging.md](logging.md).
 5. Build. Fix every `JPKT` error and warning.
 6. Run `TranslationKeysTests`, which checks every key the pages use has a string.
 

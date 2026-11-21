@@ -109,7 +109,7 @@ public sealed class DirectLiveStream : ILiveStream, IDirectStreamProvider
     /// <inheritdoc />
     public Task Close()
     {
-        _logger.LogInformation("Live Channels: {Channel}: Jellyfin closed the live stream (live id {Id})", _channelName, MediaSource.Id);
+        _logger.LogDebug("Live Channels: {Channel}: Jellyfin closed the live stream (live id {Id})", _channelName, MediaSource.Id);
         return _close();
     }
 
@@ -132,10 +132,10 @@ public sealed class DirectLiveStream : ILiveStream, IDirectStreamProvider
         var fresh = DateTime.UtcNow - _sessionStartedUtc < TimeSpan.FromSeconds(StreamArguments.InitialBurstSeconds + 60);
         var startBehind = fresh ? FreshStartBehind : HoldBehind + 1;
 
-        _logger.LogInformation("Live Channels: {Channel}: endpoint reader {Reader} connected (live id {Id})", _channelName, reader, MediaSource.Id);
+        _logger.LogDebug("Live Channels: {Channel}: endpoint reader {Reader} connected (live id {Id})", _channelName, reader, MediaSource.Id);
         return new SegmentConcatStream(
             _sessionDir,
-            message => _logger.LogInformation("Live Channels: {Channel}: endpoint reader {Reader} {Message}", _channelName, reader, message),
+            message => _logger.LogDebug("Live Channels: {Channel}: endpoint reader {Reader} {Message}", _channelName, reader, message),
             startBehind,
             () => HoldBehindFor(DateTime.UtcNow - _sessionStartedUtc),
             _onData);

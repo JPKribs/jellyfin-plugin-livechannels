@@ -356,7 +356,7 @@ public sealed partial class RecordingService : IDisposable
                 {
                     var delay = RetryDelay(attempts);
                     _retryAfter[timer.Id] = now + delay;
-                    _logger.LogWarning(ex, "Live Channels: could not produce the recording for \"{Name}\" (attempt {Attempt}); retrying in {Minutes} minute(s)", timer.Name, attempts, (int)delay.TotalMinutes);
+                    _logger.LogDebug(ex, "Live Channels: could not produce the recording for \"{Name}\" (attempt {Attempt}); retrying in {Minutes} minute(s)", timer.Name, attempts, (int)delay.TotalMinutes);
                 }
             }
         }

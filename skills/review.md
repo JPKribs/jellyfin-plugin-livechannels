@@ -57,6 +57,7 @@ The check to run on your own changes before you call them done. People and AI as
 * [ ] The [security](code.md#security) rules hold.
 * [ ] `dotnet build` shows no warnings.
 * [ ] `git grep -n "jpk-"` finds nothing but the `livechannels_jpkribs_shared` file names.
+* [ ] Every activity entry and server log line passes the [logging checklist](logging.md#checklist).
 
 ## Tests
 

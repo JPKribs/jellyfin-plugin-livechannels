@@ -243,7 +243,7 @@ public sealed class StressTestService : IDisposable
 
                 var (minFps, allCompleted) = await RunRoundAsync(ffmpeg, path, height, isHdr, runtime, streams, token).ConfigureAwait(false);
                 var round = new StressRound(streams, Math.Round(minFps, 1), allCompleted && minFps >= PassFps);
-                _logger.LogInformation("Live Channels: stress round {Streams} stream(s) -> slowest {Fps:F1} fps ({Verdict})", streams, minFps, round.Passed ? "pass" : "fail");
+                _logger.LogDebug("Live Channels: stress round {Streams} stream(s) -> slowest {Fps:F1} fps ({Verdict})", streams, minFps, round.Passed ? "pass" : "fail");
 
                 lock (_lock)
                 {

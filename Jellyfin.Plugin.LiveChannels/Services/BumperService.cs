@@ -363,7 +363,7 @@ public sealed class BumperService : IDisposable
 
             await File.WriteAllTextAsync(ShapePath(output), shape.ToString()).ConfigureAwait(false);
             File.Move(temp, output, overwrite: true);
-            _logger.LogInformation("Live Channels: rendered the Up Next bumper for \"{Title}\" on {Name} in {Seconds:F1}s", program.Title, channel.Name, stopwatch.Elapsed.TotalSeconds);
+            _logger.LogDebug("Live Channels: rendered the Up Next bumper for \"{Title}\" on {Name} in {Seconds:F1}s", program.Title, channel.Name, stopwatch.Elapsed.TotalSeconds);
             return true;
         }
         finally
