@@ -9,6 +9,14 @@
     "category": "LiveTV",
     "versions": [
       {
+        "version": "12.4.5.0",
+        "changelog": "\n## Developer\n- Uses JPKribs.Jellyfin.Base 12.4.3, which writes the labels it fills into its own text in sentence case, such as a screen reader name\n- Sync Branches also runs when the release draft or publish workflow finishes, so the commits they push to master reach unstable at once",
+        "targetAbi": "12.4.0.0",
+        "sourceUrl": "https://github.com/JPKribs/jellyfin-plugin-livechannels/releases/download/v12.4.5.0/jellyfin-plugin-livechannels-12.4.5.0.zip",
+        "checksum": "0bfb59ddaa3f59ac7c963956150a3e03",
+        "timestamp": "2026-11-21T02:21:49Z"
+      },
+      {
         "version": "12.4.4.0",
         "changelog": "\n## Added\n- Translations. Every page, message, activity log entry and scheduled task shows its text in the viewer's language wherever Jellyfin has the words, and in US English elsewhere\n\n## Changed\n- Every label, button, heading and option is in sentence case, as Jellyfin writes its own, such as Episodes per block and Show Up Next cards\n- Messages the Settings tab gets back from the server, such as a stress test refusal, are in the page's language\n- Activity log entries and scheduled task names are in the server's display language\n\n## Developer\n- Uses JPKribs.Jellyfin.Base 12.4.1, after 12.4.0. Base's components translate their own text, so the pages pass only text that differs from Base's\n- The project is organized into Api, Configuration, Web, Assets, Models, Services, Tasks, Utilities and tools\n- Strings live in Localization/en-us.json and Jellyfin strings declared in the csproj, served by GET livechannels/Translations with BaseTranslations.Serve\n- Localization/casing.json lists the words the plugin keeps as written\n- The livechannels routes read the page's language with BaseTranslations.RequestLanguage",
         "targetAbi": "12.4.0.0",
