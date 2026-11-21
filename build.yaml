@@ -1,7 +1,7 @@
 ---
 name: "Live Channels"
 guid: "ac6940fb-aac6-4de8-b622-55a662e23658"
-version: "12.4.5.0"
+version: "12.4.5.1"
 targetAbi: "12.4.0.0"
 framework: "net10.0"
 overview: "Build looping TV channels from your library."
@@ -15,6 +15,6 @@ artifacts:
 changelog:
   changed:
   - Activity log entries have a generic name, such as Channel started, and an overview that names each channel or recording once and the administrator who stopped a stream
+  - The server log stays quieter, with per stream steps such as tuning in and opening a stream written at Debug
   developer:
-  - Uses JPKribs.Jellyfin.Base 12.4.3, which writes the labels it fills into its own text in sentence case, such as a screen reader name
-  - Sync Branches also runs when the release draft or publish workflow finishes, so the commits they push to master reach unstable at once
+  - skills/logging.md sets how activity entries and server log lines are written
